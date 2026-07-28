@@ -1,0 +1,12 @@
+[package]
+name = "ethereum-desktop-wallet"
+version = "0.0.1"
+edition = "2024"
+
+[[bin]]
+name = "ethereum-desktop-wallet"
+peth = "src/main.rs"
+
+[dependencies]
+tracing = "0.1"
+thiserror = "2"
