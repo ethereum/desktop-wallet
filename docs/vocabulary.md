@@ -1,7 +1,6 @@
-# Ethereum Wallet
+# Vocabulary
 
-This document aims to provide a baseline for expectations and requirements.
-It also includes an outline of used vocabulary, and its definitions.
+This document aims to outline used vocabulary, and its definitions.
 
 ## Account
 
