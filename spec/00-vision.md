@@ -59,16 +59,16 @@ This is the north star for every scope call. It is deliberately narrow.
 1. **User Namespace Convention.** The user manages **Profiles** (aka "account bundles"). **Most users have exactly one**, but many can attach to a single seed. The
    user interacts and thinks at the **Profile level**; exact address-level information is
    abstracted away as "low level."
-2. **Network Level Privacy: Limit HTTP outside RPC** Maximally limit network egress the app makes outside of Ethereum RPC Calls. Policy that any data which _could_ come directly from Ethereum RPC rather than alternative sources (indexers, websites) _should_. Policy that anything which _could_ be locally stored and built rather than fetched over http, _should_ be. Use of Tor by default for any egress. Stringent analysis of privacy implications of all network traffic. User funds and financial activity should not be deanonymized by outside observer, even with subpoena power over third party servers. Promote use of local full node or other companion software to the wallet that makes Ethereum RPC local and not a deanonymization vector.
+2. **Network Level Privacy: Limit HTTP outside RPC** Maximally limit network egress the app makes outside of Ethereum RPC Calls. Policy that any data which _could_ come directly from Ethereum RPC rather than alternative sources (indexers, price feeds etc) _should_. Policy that anything which _could_ be locally stored and built rather than fetched over http, _should_ be. Use of Tor by default for any egress. Stringent analysis of privacy implications of all network traffic. Critically: user funds and financial activity should not be deanonymized by outside observer, even with subpoena power over third party servers.
 3. **Stealth addresses as the standard for direct transfers.** ERC-5564 stealth is an
    embedded, common default for person-to-person transfers, not an exotic opt-in.
 4. **Private writes for dapp interactions.** By default you connect to a dapp with a **fresh
    address** and spend **mixed funds**: funds come out of the mixer to do the interaction
    wherever possible.
-6. **Funds return to the mixer.** Unmixed funds go back into the mixer wherever possible.
+5. **Funds return to the mixer.** Unmixed funds go back into the mixer wherever possible.
    consider **auto-mixing / background mixing** so this is not a manual chore.
-7. **Simple, legible, clean, convenient-enough UX.**
-8. **Help the user avoid address-linking footguns.**
+6. **Simple, legible, clean, convenient-enough UX.**
+7. **Help the user avoid address-linking footguns.**
 
 **What we are NOT focused on:**
 
