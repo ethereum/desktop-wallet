@@ -4,7 +4,7 @@ This directory is the source of truth for **what we are building and how work is
 organized**. It exists so the **EF Account Interface team** can build, in parallel and
 without any one author becoming a bottleneck, the **Ethereum Desktop Wallet**: a
 privacy-focused Ethereum L1 wallet that serves as the ecosystem's **reference
-implementation**, the spec _and_ the working example other wallets conform to.
+implementation**, the spec _and_ the working example other wallets can conform to.
 
 > **Status:** `00-vision.md` and `01-architecture.md` are **drafts circulating for team
 > review**. `02-backlog.md` is intentionally deferred until those are agreed. Nothing here is
