@@ -145,7 +145,6 @@ Signers are how the program signs messages. A signer is associated with and can 
 ```rust
 trait Signer {
     fn id(&self) -> SignerId;
-    fn address(&self) -> Address;
     fn public_key(&self) -> PublicKey;
     async fn sign_message(&self, msg: &[u8]) -> Result<Signature>;
     async fn personal_sign(&self, msg: &[u8]) -> Result<Signature>;
@@ -196,6 +195,9 @@ trait Vault {
 
     /// Returns a list of asset constraints that the vault supports.
     fn supported_assets(&self) -> Result<AssetConstraint>;
+
+    // Returns an ordered list of operations.
+    async fn history(&self) -> Result<Vec<VaultOperation>>;
 }
 
 /// An asset constraint defines a set of assets that a vault supports.
