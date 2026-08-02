@@ -98,107 +98,173 @@ The **facade crate** matters: the UI imports only `wallet-core`, so internal res
 never breaks the view layer as long as the facade's public API is stable. This is the
 contract; as a reference implementation, it is also the API other wallets study.
 
-## The core public API contract
+## Core API
 
-The surface the UI is allowed to call. Suggested workflow: define or extend this surface
-first for any feature, and review changes to it at the highest bar (`interface` label).
-Signatures are the _shape_ of the contract, not final code.
+The following section describes the core API for the program. The API is designed to be minimal and generic across different implementations.
 
-### Session & lifecycle
+Different trait impls are assumed to have different constructors, which are not part of the trait. Once initialized, the trait impls are expected to be used generically and should never be disambiguated by their concrete type.
+
+### Ethereum Provider
+
+Ethereum JSON-RPC interface. Used by the wallet to query chain state and submit transactions, and by dapps to interact with the wallet.
+
+Based on alloy's [`Provider`](https://docs.rs/alloy/latest/alloy/providers/trait.Provider.html) trait. Consider directly using alloy, but it may be better to define a minimal interface to avoid a hard dependency on alloy which can be quite large. Trait implementations may include:
+    - Remote JSON-RPC providers (e.g. Infura, Alchemy)
+    - Self-hosted nodes (e.g. Reth, Geth, Erigon)
+    - Light clients (e.g. Helios)
+    - Local VMs (e.g. Anvil, revm)
 
 ```rust
-/// The unlocked wallet. Holds the seed in a Zeroizing buffer. Never Clone/Debug/Serialize.
-pub struct Wallet { /* private: seed material */ }
-
-impl Wallet {
-    pub fn generate(words: WordCount) -> Result<Wallet>;
-    pub fn from_phrase(phrase: &str) -> Result<Wallet>;
-    pub fn validate_phrase(phrase: &str) -> PhraseStatus; // live checksum/word-count feedback
-    pub fn expose_phrase(&self) -> Zeroizing<String>; // gated reveal only; caller must not persist
-    // NOTE: no getter returns raw private keys across the boundary. By design.
+trait EthereumProvider {
+    // ...
 }
 ```
 
-### Profiles & derivation (the User Namespace Convention)
+#### Dapp Sessions
 
-A **Profile** is the user-facing unit ("identity" / "wallet"); most users have one. Each
-Profile is one BIP-44 `account'` leaf (`x'`) and anchors a whole credential bundle. The UI
-talks in Profiles; addresses are an invisible default underneath.
+Dapp sessions are how dapps interact with the wallet. When connecting, the wallet and dapp establish a secure transport over which the wallet exposes an EthereumProvider impl. Dapps can then query this EthereumProvider for network data or to submit requests. Trait implementations may include:
+    - OpenLV
+    - WalletConnect
+
+### Profile
+
+Profiles are how the program manages user-facing identity and state. A profile is a collection of collectively-managed wallets, signers, and vaults. Users may use profiles to logically organize their assets and identities (e.g. manage assets, sign messages, interact with dapps, and send transactions).
+
+Profiles are primarily a UI-level abstraction, used to collectively expose many lower-level objects. They defer to:
+    - Signers for signing messages
+    - Wallets for sending transactions
+    - Vaults for storing assets
+
+### Signer
+
+Signers are how the program signs messages. A signer is associated with and can sign messages for a specific address. Trait implementations may include:
+    - Local signers (e.g. derived from a seed phrase or private key)
+    - Hardware signers (e.g. Ledger, Trezor)
+    - Remote signers (e.g. OpenLV, WalletConnect)
 
 ```rust
-/// One Profile = one BIP-44 account' leaf (x'). The namespace anchor.
-pub struct AccountBundle { /* ... */ }
-
-impl Wallet {
-    pub fn profile(&self, x: u32) -> Result<AccountBundle>; // derive bundle for account' = x
-    pub fn address(&self, profile: u32, index: u32) -> Result<Address>; // m/44'/60'/x'/0/i
-}
-
-impl AccountBundle {
-    pub fn identity_anchor(&self) -> Address; // x'/0/0 - DELIBERATELY public
-    pub fn public_address(&self, i: u32) -> Address; // x'/0/i - meant to stay delinked
-    pub fn stealth_meta_address(&self) -> StealthMetaAddress; // ERC-5564 "st:eth:0x…"
-    pub fn smart_account(&self) -> SmartAccountInfo; // signer + CREATE2 salt (+ deployed addr)
-    pub fn shielded(&self, pool: PoolId) -> Result<ShieldedKeys>; // registry-driven (BabyJubJub, …)
+trait Signer {
+    fn id(&self) -> SignerId;
+    fn address(&self) -> Address;
+    fn public_key(&self) -> PublicKey;
+    async fn sign_message(&self, msg: &[u8]) -> Result<Signature>;
+    async fn personal_sign(&self, msg: &[u8]) -> Result<Signature>;
+    async fn sign_typed_data(&self, domain: &EIP712Domain, types: &EIP712Types, value: &EIP712Value) -> Result<Signature>;
 }
 ```
 
-> **Conformance obligation lives here.** As the reference implementation, the derivation tree
-> is meant to become a standard: once its details are settled, any conforming wallet should
-> reproduce it bit-for-bit from the same seed. The plan is to cover every path with a
-> committed **known-answer test vector** (M0) and to write the full derivation/namespace
-> convention into a public convention doc (M1), so the spec stays self-contained.
->
-> **Open sub-decision to resolve in M0:** hardened vs non-hardened stealth leaf. The two
-> descriptions we inherited disagree; the reference implementation must pick one, document
-> it, and lock it with a test vector.
+### Wallet
 
-### Signing
+Wallets are how the program sends transactions. A wallet is associated with and can send transactions for a specific address. The wallet trait is based on [EIP-5792](https://eips.ethereum.org/EIPS/eip-5792). Trait implementations may include:
+    - EOAs (e.g. derived from a seed phrase or private key)
+    - Hardware wallets (e.g. Ledger, Trezor)
+    - Remote accounts (e.g. OpenLV, WalletConnect)
+    - Smart accounts (e.g. ERC-4337, ERC-7702)
 
 ```rust
-impl Wallet {
-    pub fn sign_message(&self, profile: u32, index: u32, msg: &[u8]) -> Result<Signature>;
-    pub fn sign_eth_transfer(&self, profile: u32, index: u32, to: Address, value: U256,
-                             nonce: u64, fees: FeeSettings, chain_id: u64,
-                             gas_limit: u64) -> Result<Bytes>; // returns signed raw bytes
-    pub fn sign_tx(&self, profile: u32, index: u32, req: TxRequest) -> Result<Bytes>; // contract calls (M0)
-    pub fn sign_user_op(&self, profile: u32, req: UserOpRequest) -> Result<SignedUserOp>; // 4337 (M3)
+trait Wallet {
+    fn id(&self) -> WalletId;
+    fn address(&self) -> Address;
+    fn public_key(&self) -> PublicKey;
+    async fn send_calls(&self, calls: &[Call]) -> Result<CallsId>;
+    async fn get_calls_status(&self, calls_id: CallsId) -> Result<CallsStatus>;
 }
 ```
 
-A key technique to consider: sign with alloy 2.x and hand the light client only raw
-bytes (`ChainClient::send_raw`), so the alloy 1.x / 2.x type boundary between our code and
-Helios is never crossed. This property should hold for every new signed-object type.
+### Vault
 
-### Chain access: trust-minimized and private reads
+Vaults are how the program stores assets. A vault is an abstract collection of assets that can be deposited into and withdrawn from. Trait implementations may include:
+    - Local vaults (e.g. derived from a seed phrase or private key)
+    - Hardware vaults (e.g. Ledger, Trezor)
+    - Remote vaults (e.g. OpenLV, WalletConnect)
+    - [Stealth Addresses](https://eips.ethereum.org/EIPS/eip-5564)
+    - Privacy Protocols (e.g. Tornado Cash, Railgun)
 
 ```rust
-pub trait ChainClient {
-    fn balance(&self, addr: Address) -> Result<U256>;
-    fn nonce(&self, addr: Address) -> Result<u64>;
-    fn suggested_fees(&self) -> Result<FeeSettings>; // TODO M0: from verified base fee
-    fn chain_id(&self) -> Result<u64>;
-    fn send_raw(&self, raw: &[u8]) -> Result<B256>;
-    fn confirm_inclusion(&self, tx: B256) -> Result<InclusionStatus>; // TODO M0
-    fn history(&self, addr: Address) -> Result<Vec<TxSummary>>; // TODO M0
-    fn logs(&self, filter: LogFilter) -> Result<Vec<Log>>; // stealth scanning (M2)
+trait Vault {
+    fn id(&self) -> VaultId;
+    async fn balance(&self) -> Result<HashMap<AssetId, U256>>;
+    async fn balance_of(&self, asset_id: AssetId) -> Result<U256>;
+
+    /// Returns a Call that, when executed from any address, will withdraw the specified `amount` of 
+    /// the given `asset_id` from the vault to the `to` address.
+    async fn withdraw(&self, to: AccountId, asset_id: AssetId, amount: U256) -> Result<Call>;
+
+    /// Returns a Call that, when executed from the `from` address, will deposit 
+    /// the specified `amount` of the given `asset_id` into the vault.
+    async fn deposit(&self, from: Address, asset_id: AssetId, amount: U256) -> Result<Call>;
+
+    /// Returns a list of asset constraints that the vault supports.
+    fn supported_assets(&self) -> Result<AssetConstraint>;
+}
+
+/// An asset constraint defines a set of assets that a vault supports.
+///
+/// Examples:
+/// - A vault that supports any ERC-20 token with any amount.
+/// - A vault that only supports a subset of ERC-20 tokens with any amount.
+/// - A vault that only supports a specific ERC-20 token with a specific amount.
+struct AssetConstraint {
+    pub constraints: Vec<AssetTypeConstraint>,
+}
+
+struct AssetTypeConstraint {
+    pub asset_type: AssetType,
+    pub token_id: TokenIdConstraint,
+    pub amount: AmountConstraint,
+}
+
+enum TokenIdConstraint {
+    /// Supports any token ID.
+    Any,
+    /// Supports any token ID in the specified set.
+    Include(BTreeSet<Bytes>),
+    /// Supports any token ID excluding those in the specified set.
+    Exclude(BTreeSet<Bytes>),
+}
+
+enum AmountConstraint {
+    Any,
+    Range { min: U256, max: U256 },
+    Discrete(BTreeSet<U256>),
 }
 ```
 
-The proposed implementation, `LightClient` (in-process Helios), is trust-minimized; the
-_only_ network egress is RPC (principle 2). **Private reads (principle 3)** are a property of _how_ this
-trait is used, and a design task in its own right (M1): the RPC provider must not be able to
-trivially correlate a user's addresses. Candidate mechanisms (decide via spike): per-address
-request isolation, batching/decoy queries, endpoint rotation, or routing reads for different
-Profiles/addresses over separate connections. The trait boundary is what lets us swap in a
-more private read layer without touching the UI. A known gotcha (if Helios is used):
-depend on `helios-ethereum` rather than the umbrella `helios` crate, which pulls a yanked
-transitive dep. `alloy-primitives` unifies across the boundary; `alloy-eips` does not.
+Vaults are a significant abstraction over regular asset management. Rather than having the program reason about how different storage media manage assets (e.g. an EOA may call `transfer` / `transferFrom`, while a privacy protocol may `deposit` / `withdraw`), the vault trait provides a simple unified interface.
+
+**Benefits**
+- Singular interface for asset management across different storage media.
+- Supports several exotic asset management protocols as first-class citizens.
+- Offloads asset-specific logic to the vault implementations, including:
+  - Balance tracking
+  - Deposit and withdrawal logic
+  - Compatibility constraints
+- Improved security by storing at-rest assets in a vault, which will interact with fewer external contracts and may have specialized properties (e.g. improved privacy, limits, timelocks, stricter signing requirements).
+
+**Drawbacks**
+- Implementation details leak through the abstraction. Namely:
+  - Some vault impls may support more efficient asset transfers for supported recipients.
+  - Some vault impls may only support a subset of asset types, a subset of assets within a type, or even a subset of asset amounts. For example, a Tornado Cash vault will only support depositing and withdrawing a single asset type in a single denomination.
+
+#### Asset Management
+
+Vaults are the encouraged way to manage assets in the program. The program will still support asset management through Wallet impls (e.g. for Dapp Sessions), but the program will encourage users to return assets to vaults for long-term storage.
+
+#### Inter-Vault Transfers
+
+The program must be able to easily transfer assets between arbitrary vault implementations. This is challenging because we don't want to force each vault to know about every other impl. To solve this, we take a two-step approach. When transferring between vaults, the program will:
+1. Attempt to `withdraw` from the source vault into the destination vault. If the source vault supports this recipient, it will return a `Call` that can be executed to perform the transfer.
+2. If the source vault does not support the destination vault, the program will `withdraw` from the source vault into a temporary ephemeral account, and then `deposit` into the destination address. The two calls can be executed atomically to perform the transfer.
+
+This way each vault only needs to know how to transfer to / from an ethereum address, but can still support specialized transfer logic for specific recipients. For example:
+- `Address`<->`Address` transfers can be done with a single `withdraw` call, since all vaults support Addresses.
+- `Tornado Cash`<->`PPV2` transfers can be done with two calls, one to withdraw from Tornado Cash and a second to deposit into PPV2.
+- `PPV2`<->`PPV2` transfers can be done with a single `withdraw` call, since the PPV2 vault supports transferring to itself.
 
 ### At-rest storage
 
 ```rust
-impl Vault {
+impl Database {
     pub fn save(path, phrase: &Zeroizing<String>, password: &str) -> Result<()>;
     pub fn load(path, password: &str) -> Result<Zeroizing<String>>; // wrong pw fails via AEAD tag
     pub fn exists(path) -> bool;
@@ -213,68 +279,6 @@ pub trait SecretStore {
     fn clear(&self) -> Result<()>;
 }
 ```
-
-### Privacy state & fund classification
-
-```rust
-pub enum FundClass { IdentityLinked, Delinked, Mixed } // principle 7: first-class
-
-pub struct PrivacyState { // principle 6: honest signaling
-    pub class: FundClass,
-    pub linked_to_identity: bool,
-    pub anonymity_set: Option<AnonymitySetEstimate>, // current pool set size
-}
-
-pub trait FundClassifier {
-    fn classify(&self, addr: Address) -> FundClass;
-    fn privacy_state(&self, addr: Address) -> PrivacyState;
-    /// Correlation guard: would this action link a private branch to the identity anchor?
-    fn correlation_risk(&self, from: Address, to: Address) -> CorrelationRisk;
-}
-```
-
-The intent (principle 8): the UI consults `correlation_risk` before any send and surfaces
-the result at signing time. This is where the footgun guards live.
-
-### Mixer: deposit, withdraw, and auto-mix-back
-
-```rust
-pub trait Mixer {
-    fn deposit(&self, from: Address, pool: PoolId) -> Result<DepositTicket>;
-    fn withdraw(&self, note: ShieldedNote, to: Address, gas: GasStrategy) -> Result<B256>;
-    fn shielded_balance(&self, profile: u32) -> Result<U256>;
-    fn anonymity_set(&self, pool: PoolId) -> Result<AnonymitySetEstimate>;
-    /// Background/auto mix-back: unmixed funds return to the pool wherever possible.
-    fn plan_mix_back(&self, profile: u32) -> Result<Vec<MixBackAction>>;
-}
-
-pub enum GasStrategy { // see the private-gas design (M3)
-    SelfRelayGasTank, // Option 1 - today-deployable, no new infra
-    PermissionlessFeeMarket, // Option 2 - trust-minimized generalization
-}
-```
-
-`plan_mix_back` powers principle 7's nudge and any background-mixing behavior. Timing/dust
-fingerprints are a real leak; the plan must vary timing and let the gas tank age (a
-documented footgun).
-
-### Dapp session: private by default
-
-```rust
-/// Minimal, "good enough" dapp connection. Default: FRESH address + MIXED funds.
-pub trait DappSession {
-    /// Connect to a dapp using a fresh, delinked address for this Profile.
-    fn connect(&self, profile: u32, origin: DappOrigin) -> Result<SessionHandle>;
-    /// Approve a dapp-requested transaction, funded from mixed funds where possible.
-    fn approve(&self, session: SessionHandle, req: TxRequest) -> Result<Bytes>;
-    fn disconnect(&self, session: SessionHandle);
-}
-```
-
-Scope is deliberately minimal (vision doc): the smallest flow that demonstrates "private by
-default _and_ generalistic," not a dapp browser. Which transport (injected provider,
-WalletConnect-style (openlv), or a local bridge) is an M4 spike; whatever it is, it must respect the
-only-RPC-egress principle.
 
 ## Registries as data
 
