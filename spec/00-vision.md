@@ -178,6 +178,9 @@ here. Detailed backlog forthcoming.
   mixed funds (the smallest flow that demonstrates "private by default _and_ generalistic").
 - **Safety basics** that "not focused on recovery" must not drop: seed-backup flow at
   creation, encrypted-at-rest storage, lock/unlock (ideally auto-lock).
+- **Cross-platform compatibility:** The backend api supports planned future cross-platform builds:
+  - `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`, `aarch64-apple-ios`, `aarch64-linux-android`, `wasm32-unknown-unknown`.  
+  - If possible support `wasm32-wasip1`, `wasm32-wasip1-threads`, `aarch64-unknown-linux-gnu`, `i686-unknown-linux-gnu`, `aarch64-pc-windows-msvc`
 
 ## Out of scope for v1 (explicit non-goals)
 
@@ -187,7 +190,7 @@ here. Detailed backlog forthcoming.
   recovery" must never read as "you can lose everything" (the basics above still ship).
 - **A polished dapp browser.** Dapp UX is "good enough," minimal by design.
 - **Solving Tornado's dust problem.** Deferred; assume a small fixed pool (~0.01 ETH).
-- **Mobile / web / browser-extension targets.** Desktop only.
+- **Frontends targeting mobile / web / browser-extension.** V1 is desktop-only.
 - **A webview-free native UI renderer.** A possible future upgrade; not a v1 concern.
 - **DEX/swap/bridge, NFT galleries, fiat on-ramp.** Not this product.
 - **EIP-8141 (Frame Transactions) dependence.** Forward-looking only; nothing in v1 relies
