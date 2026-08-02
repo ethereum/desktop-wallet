@@ -195,24 +195,36 @@ more private read layer without touching the UI. A known gotcha (if Helios is us
 depend on `helios-ethereum` rather than the umbrella `helios` crate, which pulls a yanked
 transitive dep. `alloy-primitives` unifies across the boundary; `alloy-eips` does not.
 
-### At-rest storage
+### Database
+
+The Database is how the program manages persistent state. The database is broken into two parts layers:
+1. The repository trait impls, which handles data serialization & encryption and provides a high-level public interface.
+2. The base sql pool, which is an internal connection to the underlying database and handles sql queries.
 
 ```rust
-impl Vault {
-    pub fn save(path, phrase: &Zeroizing<String>, password: &str) -> Result<()>;
-    pub fn load(path, password: &str) -> Result<Zeroizing<String>>; // wrong pw fails via AEAD tag
-    pub fn exists(path) -> bool;
-    pub fn delete(path) -> Result<()>;
+/// Example methods, not exhaustive or necessarily correct.
+trait Repository {
+    async fn get_profile(&self, profile_id: u32) -> Result<Profile>;
+    async fn save_profile(&self, profile: &Profile) -> Result<()>;
+    async fn get_transactions(&self, profile_id: u32) -> Result<Vec<Transaction>>;
+    async fn get_wallet_transactions(&self, wallet_id: u32) -> Result<Vec<Transaction>>;
+    async fn save_transaction(&self, transaction: &Transaction) -> Result<()>;
+    // ...
 }
 
-/// Convenience layer, M0. Stores the DERIVED KEY (never the mnemonic). Absence degrades
-/// gracefully to password prompt - never a hard dependency.
-pub trait SecretStore {
-    fn seal(&self, key: &DerivedKey) -> Result<()>;
-    fn unseal(&self) -> Result<Option<DerivedKey>>;
-    fn clear(&self) -> Result<()>;
+/// Consider using https://docs.rs/sqlx/latest/sqlx/trait.Database.html.
+trait Connection {
+    async fn query(&self, ...) -> Result<Row>;
+    async fn execute(&self, ...) -> Result<()>;
+    // ...
 }
 ```
+
+#### Encryption & Security
+
+The connection trait should not be assumed to encrypt or secure any data. The repository trait impl should handle encryption and decryption of sensitive data before saving to the database.
+
+For some targets, different underlying storage connections may be required for sensitive data. For example mobile platforms may use the OS keychain or secure enclaves. This is considered out-of-scope for the initial implementation.
 
 ### Privacy state & fund classification
 
