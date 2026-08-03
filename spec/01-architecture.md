@@ -263,32 +263,36 @@ This way each vault only needs to know how to transfer to / from an ethereum add
 - `Tornado Cash`<->`PPV2` transfers can be done with two calls, one to withdraw from Tornado Cash and a second to deposit into PPV2.
 - `PPV2`<->`PPV2` transfers can be done with a single `withdraw` call, since the PPV2 vault supports transferring to itself.
 
-### At-rest storage
+### Database
+
+The Database is how the program manages persistent state. The database is broken into two parts layers:
+1. The repository trait impls, which handles data serialization & encryption and provides a high-level public interface.
+2. The base sql pool, which is an internal connection to the underlying database and handles sql queries.
 
 ```rust
-impl Database {
-    pub fn save(path, phrase: &Zeroizing<String>, password: &str) -> Result<()>;
-    pub fn load(path, password: &str) -> Result<Zeroizing<String>>; // wrong pw fails via AEAD tag
-    pub fn exists(path) -> bool;
-    pub fn delete(path) -> Result<()>;
+/// Example methods, not exhaustive or necessarily correct.
+trait Repository {
+    async fn get_profile(&self, profile_id: u32) -> Result<Profile>;
+    async fn save_profile(&self, profile: &Profile) -> Result<()>;
+    async fn get_transactions(&self, profile_id: u32) -> Result<Vec<Transaction>>;
+    async fn get_wallet_transactions(&self, wallet_id: u32) -> Result<Vec<Transaction>>;
+    async fn save_transaction(&self, transaction: &Transaction) -> Result<()>;
+    // ...
 }
 
-/// Convenience layer, M0. Stores the DERIVED KEY (never the mnemonic). Absence degrades
-/// gracefully to password prompt - never a hard dependency.
-pub trait SecretStore {
-    fn seal(&self, key: &DerivedKey) -> Result<()>;
-    fn unseal(&self) -> Result<Option<DerivedKey>>;
-    fn clear(&self) -> Result<()>;
+/// Consider using https://docs.rs/sqlx/latest/sqlx/trait.Database.html.
+trait Connection {
+    async fn query(&self, ...) -> Result<Row>;
+    async fn execute(&self, ...) -> Result<()>;
+    // ...
 }
 ```
 
-## Registries as data
+#### Encryption & Security
 
-Derivation and address-computation schemes (mixer pools, smart-account implementations) are
-**registry entries the core reads**, not hardcoded branches. Supporting a new shielded pool
-or smart-account type should be a registry entry + test vectors, not a core rewrite. Build
-the pluggable table in `wallet-registry`; keep registries versioned and committed so
-conformance is verifiable.
+The connection trait should not be assumed to secure any data at rest. The repository trait impl should handle encryption and decryption of sensitive data before saving.
+
+For some targets, different underlying storage connections may be required for sensitive data. For example mobile platforms may use the OS keychain or secure enclaves. This is considered out-of-scope for the initial implementation.
 
 ## Stack (proposed, open for review)
 
