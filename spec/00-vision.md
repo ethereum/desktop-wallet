@@ -18,7 +18,7 @@ the working code that proves those conventions out and stands as the canonical e
 The goal is not just to ship a wallet: it is to be a **wallet of last resort**, in two
 senses at once. It never _compromises_ the user: whatever the rest of the ecosystem does,
 there is always a wallet that upholds self-sovereignty and private-by-default. And it never
-_abandons_ the user: with only-RPC egress and no company or server in the trust path, it
+_abandons_ the user: with maximally limited dependencies (e.g. an Ethereum RPC) and no company or server in the trust path, it
 keeps working even if the surrounding services disappear, the wallet you can always fall
 back to. From that follows the mission to be **the reference implementation other wallets
 conform to**, demonstrating that "private by default" _and_ generalistic is possible, and
@@ -56,29 +56,24 @@ This is the north star for every scope call. It is deliberately narrow.
 
 **What we ARE focused on:**
 
-1. **Only RPC HTTP calls.** The _only_ network egress the app makes is RPC calls. No
-   telemetry, analytics, crash reporting, or any other host. This is a hard invariant.
-2. **Private reads.** RPC reads must not _trivially_ link and deanonymize a user's accounts
-   to a known third party (the RPC provider). Chain access is trust-minimized (light client)
-   _and_ structured so one provider can't casually correlate all of a user's addresses.
-3. **User Namespace Convention.** The user manages **Profiles** (aka "identities" /
-   "wallets"). **Most users have exactly one**, but many can attach to a single seed. The
+1. **User Namespace Convention.** The user manages **Profiles** (aka "account bundles"). **Most users have exactly one**, but many can attach to a single seed. The
    user interacts and thinks at the **Profile level**; exact address-level information is
    abstracted away as "low level."
-4. **Stealth addresses as the standard for direct transfers.** ERC-5564 stealth is an
+2. **Network Level Privacy: Limit HTTP outside RPC** Maximally limit network egress the app makes outside of Ethereum RPC Calls. Policy that any data which _could_ come directly from Ethereum RPC rather than alternative sources (indexers, price feeds etc) _should_. Policy that anything which _could_ be locally stored and built rather than fetched over http, _should_ be. Use of Tor by default for any egress. Stringent analysis of privacy implications of all network traffic. Critically: user funds and financial activity should not be deanonymized by outside observer, even with subpoena power over third party servers.
+3. **Stealth addresses as the standard for direct transfers.** ERC-5564 stealth is an
    embedded, common default for person-to-person transfers, not an exotic opt-in.
-5. **Private writes for dapp interactions.** By default you connect to a dapp with a **fresh
+4. **Private writes for dapp interactions.** By default you connect to a dapp with a **fresh
    address** and spend **mixed funds**: funds come out of the mixer to do the interaction
    wherever possible.
-6. **Funds return to the mixer.** Unmixed funds go back into the mixer wherever possible;
+5. **Funds return to the mixer.** Unmixed funds go back into the mixer wherever possible.
    consider **auto-mixing / background mixing** so this is not a manual chore.
-7. **Simple, legible, clean, convenient-enough UX.**
-8. **Help the user avoid address-linking footguns.**
+6. **Simple, legible, clean, convenient-enough UX.**
+7. **Help the user avoid address-linking footguns.**
 
 **What we are NOT focused on:**
 
 - **No networks outside L1.** Zero chain interop, zero other networks. Not a concern _at
-  all_.
+  all_. (Only support to build a `test` version of the app to use against testnets/devnets)
 - **No hardware wallets** yet.
 - **No recovery mechanism** yet, and **no multisig / multi-factor smart accounts** yet.
 - **Dapp interaction UX only "good enough."** A generalistic dapp flow exists in its
@@ -94,10 +89,9 @@ Every privacy and security claim is judged against this. We defend against:
 - **Chain-analysis / de-anonymization:** an adversary correlating on-chain activity to link
   a user's delinked branches back to their public identity. _The core threat the privacy
   model exists to counter._
-- **The RPC / chain-data provider:** must not be trusted for correctness (hence the light
-  client) and must not be able to _trivially_ correlate a user's addresses (private reads).
+- **The RPC / chain-data provider:** must not be trusted for correctness and _should_ not be trusted to escrow user privacy (though RPC privacy in MVP is technically out-of-scope of the wallet itself, instead companion software like a full node or other solutions are simply available and work seamlessly with the wallet)
 - **A passive network observer:** should not be able to trivially map wallet traffic to
-  identities.
+  identities. This includes a passive network observer with power to subpoena third party services for logs and network metadata.
 - **Local malware reading disk at rest:** no plaintext secrets on disk; strong KDF + AEAD;
   minimize secret lifetime in memory.
 - **Supply-chain compromise:** minimized by keeping the dependency set small and auditable;
@@ -122,8 +116,7 @@ Violating one is a blocking review comment.
 
 1. **Secret material never leaves the core.** Keys, seed, and derived private material live
    in `wallet-core`; the UI requests operations and receives _results_, never raw secrets.
-2. **Only RPC egress.** The app's only outbound network calls are RPC. No exceptions:
-   telemetry/analytics/crash-reporting are principle violations, not features.
+2. **Limit egress.** The app's only outbound network calls are RPC and any _wholly necessary_ or _wholly privacy beningn_ endpoints. Telemetry/analytics/crash-reporting are principle violations, not features.
 3. **Private reads.** Chain reads are trust-minimized _and_ structured so the RPC provider
    cannot trivially correlate a user's addresses.
 4. **Self-sovereign supply chain.** Keep the dependency set minimal and auditable. Root of
@@ -178,16 +171,20 @@ here. Detailed backlog forthcoming.
   mixed funds (the smallest flow that demonstrates "private by default _and_ generalistic").
 - **Safety basics** that "not focused on recovery" must not drop: seed-backup flow at
   creation, encrypted-at-rest storage, lock/unlock (ideally auto-lock).
+- **Network abstraction:** the wallet can switch between different RPC providers and networks (mainnet, testnets, local dev) without recompiling the app.
+- **Cross-platform compatibility:** The backend api supports planned future cross-platform builds:
+  - `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`, `aarch64-apple-ios`, `aarch64-linux-android`, `wasm32-unknown-unknown`.  
+  - If possible support `wasm32-wasip1`, `wasm32-wasip1-threads`, `aarch64-unknown-linux-gnu`, `i686-unknown-linux-gnu`, `aarch64-pc-windows-msvc`
 
 ## Out of scope for v1 (explicit non-goals)
 
-- **Any network beyond Ethereum L1.** No chain interop, no L2s, no other chains, _at all_.
+- **Any network beyond Ethereum L1.** No multi-chain interop or l2-specific support. Assume the wallet is connected to a single L1-like network at a time.
 - **Hardware-signer integration.** Architecturally provided for (the signer seam), not built.
 - **Recovery: social recovery / multisig / multi-factor smart accounts.** Deferred, but "no
   recovery" must never read as "you can lose everything" (the basics above still ship).
 - **A polished dapp browser.** Dapp UX is "good enough," minimal by design.
 - **Solving Tornado's dust problem.** Deferred; assume a small fixed pool (~0.01 ETH).
-- **Mobile / web / browser-extension targets.** Desktop only.
+- **Frontends targeting mobile / web / browser-extension.** V1 is desktop-only.
 - **A webview-free native UI renderer.** A possible future upgrade; not a v1 concern.
 - **DEX/swap/bridge, NFT galleries, fiat on-ramp.** Not this product.
 - **EIP-8141 (Frame Transactions) dependence.** Forward-looking only; nothing in v1 relies
@@ -202,7 +199,7 @@ v1 is successful when:
   with a fresh address spending **mixed funds**, and has unmixed funds flow **back into the
   mixer**, all **without accidentally linking private branches to their identity**, because
   the UI made the boundary visible and guarded the footguns.
-- The app makes **only RPC network calls**, never writes a plaintext secret to disk, never
+- The app makes **highly limited network calls that do not risk user fund and activity privacy**, never writes a plaintext secret to disk, never
   hands a secret to the view layer, and never overstates the privacy actually achieved.
 - An **independent implementation reconstructs the identical bundle** from a test seed
   (conformance), proving the convention is a real standard.
