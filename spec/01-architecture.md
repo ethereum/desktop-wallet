@@ -288,6 +288,12 @@ trait Connection {
 }
 ```
 
+#### Encryption & Security
+
+The connection trait should not be assumed to encrypt or secure any data. The repository trait impl should handle encryption and decryption of sensitive data before saving to the database.
+
+For some targets, different underlying storage connections may be required for sensitive data. For example mobile platforms may use the OS keychain or secure enclaves. This is considered out-of-scope for the initial implementation.
+
 ## Stack (proposed, open for review)
 
 The **core** stack below is a proposal that looks low-risk to keep; the
