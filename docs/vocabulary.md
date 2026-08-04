@@ -38,3 +38,11 @@ Networks are configured wallet-wide.
 A **network endpoint** is a given RPC or mechanism for connecting to the network.
 Each endpoint instance is a single RPC either http, ws, or ipc.
 For each Network one Network Endpoint is active at a time to provide a stable source of data.
+
+## Flashcall
+
+The atomic execution of a set of calls that (1) fund an address, (2) interact with a contract, and (3) defund the address, all in a single transaction.
+
+Examples:
+
+- Flashcall uniswap by withdrawing USDC from tint, swapping USDC to ETH, and depositing ETH into Tornadocash. 
