@@ -109,10 +109,11 @@ Different trait impls are assumed to have different constructors, which are not 
 Ethereum JSON-RPC interface. Used by the wallet to query chain state and submit transactions, and by dapps to interact with the wallet.
 
 Based on alloy's [`Provider`](https://docs.rs/alloy/latest/alloy/providers/trait.Provider.html) trait. Consider directly using alloy, but it may be better to define a minimal interface to avoid a hard dependency on alloy which can be quite large. Trait implementations may include:
-    - Remote JSON-RPC providers (e.g. Infura, Alchemy)
-    - Self-hosted nodes (e.g. Reth, Geth, Erigon)
-    - Light clients (e.g. Helios)
-    - Local VMs (e.g. Anvil, revm)
+
+- Remote JSON-RPC providers (e.g. Infura, Alchemy)
+- Self-hosted nodes (e.g. Reth, Geth, Erigon)
+- Light clients (e.g. Helios)
+- Local VMs (e.g. Anvil, revm)
 
 ```rust
 trait EthereumProvider {
@@ -123,24 +124,27 @@ trait EthereumProvider {
 #### Dapp Sessions
 
 Dapp sessions are how dapps interact with the wallet. When connecting, the wallet and dapp establish a secure transport over which the wallet exposes an EthereumProvider impl. Dapps can then query this EthereumProvider for network data or to submit requests. Trait implementations may include:
-    - OpenLV
-    - WalletConnect
+    
+- OpenLV
+- WalletConnect
 
 ### Profile
 
 Profiles are how the program manages user-facing identity and state. A profile is a collection of collectively-managed wallets, signers, and vaults. Users may use profiles to logically organize their assets and identities (e.g. manage assets, sign messages, interact with dapps, and send transactions).
 
 Profiles are primarily a UI-level abstraction, used to collectively expose many lower-level objects. They defer to:
-    - Signers for signing messages
-    - Wallets for sending transactions
-    - Vaults for storing assets
+  
+- Signers for signing messages
+- Wallets for sending transactions
+- Vaults for storing assets
 
 ### Signer
 
 Signers are how the program signs messages. A signer is associated with and can sign messages for a specific address. Trait implementations may include:
-    - Local signers (e.g. derived from a seed phrase or private key)
-    - Hardware signers (e.g. Ledger, Trezor)
-    - Remote signers (e.g. OpenLV, WalletConnect)
+
+- Local signers (e.g. derived from a seed phrase or private key)
+- Hardware signers (e.g. Ledger, Trezor)
+- Remote signers (e.g. OpenLV, WalletConnect)
 
 ```rust
 trait Signer {
@@ -155,10 +159,11 @@ trait Signer {
 ### Wallet
 
 Wallets are how the program sends transactions. A wallet is associated with and can send transactions for a specific address. The wallet trait is based on [EIP-5792](https://eips.ethereum.org/EIPS/eip-5792). Trait implementations may include:
-    - EOAs (e.g. derived from a seed phrase or private key)
-    - Hardware wallets (e.g. Ledger, Trezor)
-    - Remote accounts (e.g. OpenLV, WalletConnect)
-    - Smart accounts (e.g. ERC-4337, ERC-7702)
+    
+- EOAs (e.g. derived from a seed phrase or private key)
+- Hardware wallets (e.g. Ledger, Trezor)
+- Remote accounts (e.g. OpenLV, WalletConnect)
+- Smart accounts (e.g. ERC-4337, ERC-7702)
 
 ```rust
 trait Wallet {
@@ -173,11 +178,12 @@ trait Wallet {
 ### Vault
 
 Vaults are how the program stores assets. A vault is an abstract collection of assets that can be deposited into and withdrawn from. Trait implementations may include:
-    - Local vaults (e.g. derived from a seed phrase or private key)
-    - Hardware vaults (e.g. Ledger, Trezor)
-    - Remote vaults (e.g. OpenLV, WalletConnect)
-    - [Stealth Addresses](https://eips.ethereum.org/EIPS/eip-5564)
-    - Privacy Protocols (e.g. Tornado Cash, Railgun)
+    
+- Local vaults (e.g. derived from a seed phrase or private key)
+- Hardware vaults (e.g. Ledger, Trezor)
+- Remote vaults (e.g. OpenLV, WalletConnect)
+- [Stealth Addresses](https://eips.ethereum.org/EIPS/eip-5564)
+- Privacy Protocols (e.g. Tornado Cash, Railgun)
 
 ```rust
 trait Vault {
@@ -235,6 +241,7 @@ enum AmountConstraint {
 Vaults are a significant abstraction over regular asset management. Rather than having the program reason about how different storage media manage assets (e.g. an EOA may call `transfer` / `transferFrom`, while a privacy protocol may `deposit` / `withdraw`), the vault trait provides a simple unified interface.
 
 **Benefits**
+
 - Singular interface for asset management across different storage media.
 - Supports several exotic asset management protocols as first-class citizens.
 - Offloads asset-specific logic to the vault implementations, including:
@@ -244,6 +251,7 @@ Vaults are a significant abstraction over regular asset management. Rather than 
 - Improved security by storing at-rest assets in a vault, which will interact with fewer external contracts and may have specialized properties (e.g. improved privacy, limits, timelocks, stricter signing requirements).
 
 **Drawbacks**
+
 - Implementation details leak through the abstraction. Namely:
   - Some vault impls may support more efficient asset transfers for supported recipients.
   - Some vault impls may only support a subset of asset types, a subset of assets within a type, or even a subset of asset amounts. For example, a Tornado Cash vault will only support depositing and withdrawing a single asset type in a single denomination.
@@ -255,10 +263,12 @@ Vaults are the encouraged way to manage assets in the program. The program will 
 #### Inter-Vault Transfers
 
 The program must be able to easily transfer assets between arbitrary vault implementations. This is challenging because we don't want to force each vault to know about every other impl. To solve this, we take a two-step approach. When transferring between vaults, the program will:
+
 1. Attempt to `withdraw` from the source vault into the destination vault. If the source vault supports this recipient, it will return a `Call` that can be executed to perform the transfer.
 2. If the source vault does not support the destination vault, the program will `withdraw` from the source vault into a temporary ephemeral account, and then `deposit` into the destination address. The two calls can be executed atomically to perform the transfer.
 
 This way each vault only needs to know how to transfer to / from an ethereum address, but can still support specialized transfer logic for specific recipients. For example:
+
 - `Address`<->`Address` transfers can be done with a single `withdraw` call, since all vaults support Addresses.
 - `Tornado Cash`<->`PPV2` transfers can be done with two calls, one to withdraw from Tornado Cash and a second to deposit into PPV2.
 - `PPV2`<->`PPV2` transfers can be done with a single `withdraw` call, since the PPV2 vault supports transferring to itself.
