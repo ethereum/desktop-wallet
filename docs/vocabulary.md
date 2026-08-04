@@ -2,9 +2,41 @@
 
 This document aims to outline used vocabulary, and its definitions.
 
-## Account
+## Profile
 
-An arbitrary construct that could mean "an ethereum wallet" but also "a collection of ethereum wallets" or "a set of notes held in a protocol".
+A user-facing collection of **signers**, **wallets**, and **vaults**. Used to manage and group balances, transactions, history, and other related data.
+
+Example:
+
+- A user has a profile that contains a **signer** and **wallet** for their EOA address, a **vault** for their hardware wallet, and a **vault** for their meta stealth address.
+
+## Signer
+
+An abstract object associated with a public key that can sign messages.
+
+Example:
+
+- A user has a **signer** for a private key stored on-device.
+- A user has a **signer** on a remote signing service (e.g. turnkey).
+
+## Wallet
+
+An abstract object associated with an on-chain address and can sign transactions for that address.
+
+Example:
+
+- A user has a **wallet** for their EOA address.
+- A user has a **wallet** for a 4337 smart account.
+
+## Vault
+
+An abstract object that has some balance of assets, can be deposited into (increasing the balance), and withdrawn from (decreasing the balance).
+
+Example:
+
+- A user has a **vault** for their EOA address.
+- A user has a **vault** for their multisig smart account.
+- A user has a **vault** for their tornadocash shielded balance.
 
 ## Asset
 
@@ -17,7 +49,7 @@ Asset information such as **decimals**, **symbol**, and **name** are fetched whe
 
 ### Balance
 
-The **balance** is the amount of an **asset** an **account** holds.
+The amount of an **asset** held by some object (e.g. a **vault** or **profile**).
 
 ### Value
 
