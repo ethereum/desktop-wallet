@@ -29,7 +29,8 @@ We intend to raise the bar in two concrete ways:
 
 - **Conformance is a product, not a side effect.** The derivation conventions, namespace
   model, and privacy behaviors are specified precisely enough that a _different_ team can
-  build a conforming wallet and reconstruct the identical account bundle from the same seed.
+  build a conforming wallet and reconstruct the identical set of seed-derived objects from the
+  same seed.
 - **Legibility and neutrality matter.** Other wallets will read this code and this spec as
   the canonical example. It must be clean, documented, and free of choices that only make
   sense for us.
@@ -56,9 +57,12 @@ This is the north star for every scope call. It is deliberately narrow.
 
 **What we ARE focused on:**
 
-1. **User Namespace Convention.** The user manages **Profiles** (aka "account bundles"). **Most users have exactly one**, but many can attach to a single seed. The
-   user interacts and thinks at the **Profile level**; exact address-level information is
-   abstracted away as "low level."
+1. **User Namespace Convention.** The user manages **Profiles**: a user-facing collection of
+   **signers**, **executors**, and **vaults** (see `vocabulary.md`). **Most users have exactly
+   one**, but many can attach to a single seed. The user interacts and thinks at the **Profile
+   level**; the individual objects and their addresses are abstracted away as "low level." The
+   seed-derived objects in a Profile follow a standardized derivation convention so the set is
+   portable and reproducible; externally-sourced objects (hardware, remote) are simply added.
 2. **Network Level Privacy: Limit HTTP outside RPC** Maximally limit network egress the app makes outside of Ethereum RPC Calls. Policy that any data which _could_ come directly from Ethereum RPC rather than alternative sources (indexers, price feeds etc) _should_. Policy that anything which _could_ be locally stored and built rather than fetched over http, _should_ be. Use of Tor by default for any egress. Stringent analysis of privacy implications of all network traffic. Critically: user funds and financial activity should not be deanonymized by outside observer, even with subpoena power over third party servers.
 3. **Stealth addresses as the standard for direct transfers.** ERC-5564 stealth is an
    embedded, common default for person-to-person transfers, not an exotic opt-in.
@@ -138,12 +142,14 @@ Violating one is a blocking review comment.
    of action and guard the known footguns (funding a stealth/fresh address from the identity
    anchor; withdrawing a mixer note to a public address in the same Profile; reusing a
    "fresh" address).
-9. **Think in Profiles, not addresses.** The user operates at the Profile level; address
-   derivation is an invisible default. Fresh addresses and stealth are machinery the user
-   should rarely have to see.
+9. **Think in Profiles, not addresses.** The user operates at the Profile level; the signers,
+   executors, and vaults it aggregates, and their address derivation, are an invisible default.
+   Fresh addresses and stealth are machinery the user should rarely have to see.
 10. **Interop / conformance obligation.** Another conforming wallet must reconstruct the
-    **identical** bundle from the same seed. As the reference implementation, our derivation
-    conventions are a _standard_; bit-for-bit correctness is a hard requirement.
+    **identical seed-derived objects** from the same seed. The convention covers the
+    seed-derived subset of a Profile (not externally-sourced objects). As the reference
+    implementation, our derivation conventions are a _standard_; bit-for-bit correctness is a
+    hard requirement.
 11. **Data minimization.** No telemetry, no analytics, no server-side crash reporting, no
     secrets in logs. Ever.
 12. **Open, documented, and canonical.** Public source plus a written spec of the
@@ -201,8 +207,8 @@ v1 is successful when:
   the UI made the boundary visible and guarded the footguns.
 - The app makes **highly limited network calls that do not risk user fund and activity privacy**, never writes a plaintext secret to disk, never
   hands a secret to the view layer, and never overstates the privacy actually achieved.
-- An **independent implementation reconstructs the identical bundle** from a test seed
-  (conformance), proving the convention is a real standard.
+- An **independent implementation reconstructs the identical seed-derived objects** from a
+  test seed (conformance), proving the convention is a real standard.
 - The project is public, documented, and legible enough to serve as the ecosystem's
   reference implementation.
 - A security review of the core (keys, vault, derivation, signing, trust boundary) is

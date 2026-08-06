@@ -35,15 +35,32 @@
 │                   │     narrow public API      │                   │
 │                   └────────────────────────────┘                   │
 │                                                                    │
-│    - Profile                     - Vault                           │
-│    - Signer                      - EthereumProvider                │
-│    - Wallet                      - Dapp Sessions                   │
-│    - Database                                                      │
+│   Profile: user-facing aggregation of identity, assets, state.     │
+│   Holds many of each object below and defers to them:              │
+│                                                                    │
+│     ┌────────────────┬────────────────────┬────────────────────┐   │
+│     │     Signer     │      Executor      │       Vault        │   │
+│     │                │                    │                    │   │
+│     │ signs messages │ sends transactions │ holds/moves assets │   │
+│     │ for an address │   for an address   │                    │   │
+│     │                │     (EIP-5792)     │                    │   │
+│     │                │                    │     balance()      │   │
+│     │ sign_message() │     address()      │     deposit()      │   │
+│     │  public_key()  │    send_calls()    │     withdraw()     │   │
+│     └────────────────┴────────────────────┴────────────────────┘   │
+│                                                                    │
+│   each object sourced independently: seed-derived / hardware /     │
+│   remote (+ stealth / privacy protocols for vaults)                │
+│                                                                    │
+│   Also in wallet-core:                                             │
+│   - EthereumProvider  -> chain access; executors submit here       │
+│   - Dapp Sessions     -> expose a provider to connected dapps      │
+│   - Database          -> repository over a SQL pool                │
 └──────────────────────────────────┬─────────────────────────────────┘
                                    │
-                                   │  Signer / Wallet  -> secret storage
-                                   │  EthereumProvider -> chain access
-                                   │  Database         -> persistent store
+                                   │  Signer / Executor -> secret storage
+                                   │  EthereumProvider  -> chain access
+                                   │  Database          -> persistent store
                                    ↓
 ┌──────────────────────────────────┴─────────────────────────────────┐
 │   external to wallet-core                                          │
@@ -60,6 +77,11 @@ give for free), so we **enforce it by module structure and discipline**: `wallet
 exposes a deliberately narrow public API and keeps all secret-touching types private. Treat
 the view layer as untrusted from the key material's perspective.
 
+Inside the core, a **Profile** is a user-facing aggregation that defers to the objects it
+holds: **Signers** (sign messages), **Executors** (send transactions), and **Vaults** (hold
+and move assets), alongside the **EthereumProvider**, **Dapp Sessions**, and **Database**.
+Each object is defined in [Core API](#core-api).
+
 ## Repository / crate layout
 
 This repo (official):
@@ -74,7 +96,7 @@ desktop-wallet/
 ```
 
 A **proposed** shape for the security-critical core in `crates/`: a `wallet-core` crate
-covering the profile / signer / wallet / vault objects, the `EthereumProvider` seam (over
+covering the profile / signer / executor / vault objects, the `EthereumProvider` seam (over
 RPC, a light client, or a local VM), and an encrypted `Database`, behind a shared `error`
 type.
 However the internals land, `wallet-core` should keep **zero UI dependencies**: the property
@@ -123,18 +145,18 @@ trait EthereumProvider {
 #### Dapp Sessions
 
 Dapp sessions are how dapps interact with the wallet. When connecting, the wallet and dapp establish a secure transport over which the wallet exposes an EthereumProvider impl. Dapps can then query this EthereumProvider for network data or to submit requests. Trait implementations may include:
-    
+
 - OpenLV
 - WalletConnect
 
 ### Profile
 
-Profiles are how the program manages user-facing identity and state. A profile is a collection of collectively-managed wallets, signers, and vaults. Users may use profiles to logically organize their assets and identities (e.g. manage assets, sign messages, interact with dapps, and send transactions).
+Profiles are how the program manages user-facing identity and state. A profile is a collection of collectively-managed executors, signers, and vaults. Users may use profiles to logically organize their assets and identities (e.g. manage assets, sign messages, interact with dapps, and send transactions).
 
 Profiles are primarily a UI-level abstraction, used to collectively expose many lower-level objects. They defer to:
-  
+
 - Signers for signing messages
-- Wallets for sending transactions
+- Executors for sending transactions
 - Vaults for storing assets
 
 ### Signer
@@ -155,18 +177,18 @@ trait Signer {
 }
 ```
 
-### Wallet
+### Executor
 
-Wallets are how the program sends transactions. A wallet is associated with and can send transactions for a specific address. The wallet trait is based on [EIP-5792](https://eips.ethereum.org/EIPS/eip-5792). Trait implementations may include:
-    
+Executors are how the program sends transactions. An executor is associated with and can send transactions for a specific address. The executor trait is based on [EIP-5792](https://eips.ethereum.org/EIPS/eip-5792). Trait implementations may include:
+
 - EOAs (e.g. derived from a seed phrase or private key)
 - Hardware wallets (e.g. Ledger, Trezor)
 - Remote accounts (e.g. OpenLV, WalletConnect)
 - Smart accounts (e.g. ERC-4337, ERC-7702)
 
 ```rust
-trait Wallet {
-    fn id(&self) -> WalletId;
+trait Executor {
+    fn id(&self) -> ExecutorId;
     fn address(&self) -> Address;
     fn public_key(&self) -> PublicKey;
     async fn send_calls(&self, calls: &[Call]) -> Result<CallsId>;
@@ -177,7 +199,7 @@ trait Wallet {
 ### Vault
 
 Vaults are how the program stores assets. A vault is an abstract collection of assets that can be deposited into and withdrawn from. Trait implementations may include:
-    
+
 - Local vaults (e.g. derived from a seed phrase or private key)
 - Hardware vaults (e.g. Ledger, Trezor)
 - Remote vaults (e.g. OpenLV, WalletConnect)
@@ -190,11 +212,11 @@ trait Vault {
     async fn balance(&self) -> Result<HashMap<AssetId, U256>>;
     async fn balance_of(&self, asset_id: AssetId) -> Result<U256>;
 
-    /// Returns a Call that, when executed from any address, will withdraw the specified `amount` of 
+    /// Returns a Call that, when executed from any address, will withdraw the specified `amount` of
     /// the given `asset_id` from the vault to the `to` address.
     async fn withdraw(&self, to: AccountId, asset_id: AssetId, amount: U256) -> Result<Call>;
 
-    /// Returns a Call that, when executed from the `from` address, will deposit 
+    /// Returns a Call that, when executed from the `from` address, will deposit
     /// the specified `amount` of the given `asset_id` into the vault.
     async fn deposit(&self, from: Address, asset_id: AssetId, amount: U256) -> Result<Call>;
 
@@ -257,7 +279,7 @@ Vaults are a significant abstraction over regular asset management. Rather than 
 
 #### Asset Management
 
-Vaults are the encouraged way to manage assets in the program. The program will still support asset management through Wallet impls (e.g. for Dapp Sessions), but the program will encourage users to return assets to vaults for long-term storage.
+Vaults are the encouraged way to manage assets in the program. The program will still support asset management through Executor impls (e.g. for Dapp Sessions), but the program will encourage users to return assets to vaults for long-term storage.
 
 #### Inter-Vault Transfers
 
@@ -275,6 +297,7 @@ This way each vault only needs to know how to transfer to / from an ethereum add
 ### Database
 
 The Database is how the program manages persistent state. The database is broken into two parts layers:
+
 1. The repository trait impls, which handles data serialization & encryption and provides a high-level public interface.
 2. The base sql pool, which is an internal connection to the underlying database and handles sql queries.
 
@@ -284,7 +307,7 @@ trait Repository {
     async fn get_profile(&self, profile_id: u32) -> Result<Profile>;
     async fn save_profile(&self, profile: &Profile) -> Result<()>;
     async fn get_transactions(&self, profile_id: u32) -> Result<Vec<Transaction>>;
-    async fn get_wallet_transactions(&self, wallet_id: u32) -> Result<Vec<Transaction>>;
+    async fn get_executor_transactions(&self, executor_id: u32) -> Result<Vec<Transaction>>;
     async fn save_transaction(&self, transaction: &Transaction) -> Result<()>;
     // ...
 }

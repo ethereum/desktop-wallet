@@ -4,11 +4,11 @@ This document aims to outline used vocabulary, and its definitions.
 
 ## Profile
 
-A user-facing collection of **signers**, **wallets**, and **vaults**. Used to manage and group balances, transactions, history, and other related data.
+A user-facing collection of **signers**, **executors**, and **vaults**. Used to manage and group balances, transactions, history, and other related data.
 
 Example:
 
-- A user has a profile that contains a **signer** and **wallet** for their EOA address, a **vault** for their hardware wallet, and a **vault** for their meta stealth address.
+- A user has a profile that contains a **signer** and **executor** for their EOA address, a **vault** for their hardware wallet, and a **vault** for their meta stealth address.
 
 ## Signer
 
@@ -19,14 +19,14 @@ Example:
 - A user has a **signer** for a private key stored on-device.
 - A user has a **signer** on a remote signing service (e.g. turnkey).
 
-## Wallet
+## Executor
 
-An abstract object associated with an on-chain address and can sign transactions for that address.
+An abstract object associated with an on-chain address that can send transactions for that address.
 
 Example:
 
-- A user has a **wallet** for their EOA address.
-- A user has a **wallet** for a 4337 smart account.
+- A user has an **executor** for their EOA address.
+- A user has an **executor** for a 4337 smart account.
 
 ## Vault
 
