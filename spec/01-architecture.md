@@ -25,7 +25,7 @@
 │                    holds NO raw secret material                    │
 └──────────────────────────────────┬─────────────────────────────────┘
                                    ↑
-                                   │  request  (UI -> core): derive / sign / classify / mix
+                                   │  request  (UI -> core): sign / send / query / move assets
                                    │  response (core -> UI): result only, never raw keys
                                    ↓
 ┌──────────────────────────────────┴─────────────────────────────────┐
@@ -35,23 +35,22 @@
 │                   │     narrow public API      │                   │
 │                   └────────────────────────────┘                   │
 │                                                                    │
-│    - Vault                       - FundClassifier / PrivacyState   │
-│    - ChainClient                 - Mixer                           │
-│    - Derivation engine           - DappSession                     │
-│    - Profile / AccountBundle                                       │
-│    - Signer ops                                                    │
+│    - Profile                     - Vault                           │
+│    - Signer                      - EthereumProvider                │
+│    - Wallet                      - Dapp Sessions                   │
+│    - Database                                                      │
 └──────────────────────────────────┬─────────────────────────────────┘
                                    │
-                                   │  Vault       -> secret storage
-                                   │  ChainClient -> chain access
-                                   │  Derivation  -> registries
+                                   │  Signer / Wallet  -> secret storage
+                                   │  EthereumProvider -> chain access
+                                   │  Database         -> persistent store
                                    ↓
 ┌──────────────────────────────────┴─────────────────────────────────┐
 │   external to wallet-core                                          │
 │                                                                    │
-│   - secret storage: keychain, hardware signer                      │
-│   - chain access: Helios light client + private reads              │
-│   - registries as DATA: derivation / address schemes               │
+│   - secret storage: keychain, hardware signer, secure enclave      │
+│   - chain access: RPC / light client / local VM                    │
+│   - persistent store: encrypted repository over a SQL pool         │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -75,9 +74,9 @@ desktop-wallet/
 ```
 
 A **proposed** shape for the security-critical core in `crates/`: a `wallet-core` crate
-covering a seed holder (`wallet`), per-Profile derivation (`account`), the `ChainClient` /
-Helios / Kohaku seam (`provider`), an in-process light client (`helios_client`), and an
-at-rest vault (`vault`, e.g. Argon2id + XChaCha20-Poly1305), behind a shared `error` type.
+covering the profile / signer / wallet / vault objects, the `EthereumProvider` seam (over
+RPC, a light client, or a local VM), and an encrypted `Database`, behind a shared `error`
+type.
 However the internals land, `wallet-core` should keep **zero UI dependencies**: the property
 to preserve regardless of the UI-stack decision.
 
@@ -88,10 +87,10 @@ boundaries stay crisp and compile times stay low:
 crates/
 ├── wallet-core/     # facade: re-exports the stable public API the UI depends on
 ├── wallet-keys/     # seed, derivation engine, signers, zeroize discipline  (highest audit bar)
-├── wallet-vault/    # at-rest encryption + OS-keychain convenience layer
-├── wallet-chain/    # ChainClient trait, Helios light client, PRIVATE-read layer
-├── wallet-registry/ # derivation/address registries as DATA (mixer, smart-account)
-└── wallet-privacy/  # stealth (ERC-5564), shielded pools (Kohaku), gas + mix-back, dapp session
+├── wallet-store/    # encrypted Database: repository trait + SQL pool
+├── wallet-chain/    # EthereumProvider (alloy-based); RPC / light-client / local-VM backends; private reads
+├── wallet-registry/ # derivation / address-computation schemes as DATA
+└── wallet-privacy/  # privacy vault impls: stealth (ERC-5564), shielded pools (Kohaku)
 ```
 
 The **facade crate** matters: the UI imports only `wallet-core`, so internal restructuring
