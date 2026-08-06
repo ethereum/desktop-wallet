@@ -15,88 +15,63 @@
 > tags) is a starting point for discussion, not a settled decision. Items flagged
 > _(open for review)_ are the least settled of all.
 
-## The one invariant
+## Architecture Overview
 
-```text
-┌────────────────────────────────────────────────────────────────────┐
-│                          UI / view layer                           │
-│                        (stack under review)                        │
-│            profiles, balances, actions, boundary flags             │
-│                    holds NO raw secret material                    │
-└──────────────────────────────────┬─────────────────────────────────┘
-                                   ↑
-                                   │  request  (UI -> core): derive / sign / classify / mix
-                                   │  response (core -> UI): result only, never raw keys
-                                   ↓
-┌──────────────────────────────────┴─────────────────────────────────┐
-│   wallet-core  (trusted, ZERO ui deps): secrets live only here     │
-│                                                                    │
-│                   ┌────────────────────────────┐                   │
-│                   │     narrow public API      │                   │
-│                   └────────────────────────────┘                   │
-│                                                                    │
-│    - Vault                       - FundClassifier / PrivacyState   │
-│    - ChainClient                 - Mixer                           │
-│    - Derivation engine           - DappSession                     │
-│    - Profile / AccountBundle                                       │
-│    - Signer ops                                                    │
-└──────────────────────────────────┬─────────────────────────────────┘
-                                   │
-                                   │  Vault       -> secret storage
-                                   │  ChainClient -> chain access
-                                   │  Derivation  -> registries
-                                   ↓
-┌──────────────────────────────────┴─────────────────────────────────┐
-│   external to wallet-core                                          │
-│                                                                    │
-│   - secret storage: keychain, hardware signer                      │
-│   - chain access: Helios light client + private reads              │
-│   - registries as DATA: derivation / address schemes               │
-└────────────────────────────────────────────────────────────────────┘
+Repository is organized as a monorepo with separate frontend and backends.
+
+```mermaid
+flowchart LR
+
+    subgraph backend
+        Provider
+        Repository
+
+        subgraph profile
+            Profile
+            Signer
+            Wallet
+            Vault
+        end
+    end
+
+    UI -->|connects to| backend
+    DappSession -->|exposes| backend
+
+    Profile -->|delegates signing| Signer
+    Profile -->|delegates sending| Wallet
+    Profile -->|delegates storage| Vault
+    Profile -->|persisted as| Repository
+
+    Wallet -->|submits calls| Provider
+
+    Vault -->|transfers to| Vault
+    Vault -->|transfer to|Wallet
 ```
 
-The presentation layer requests operations and receives results; it never holds raw secret
-material. This boundary is **Rust-to-Rust** (not the process/language boundary Tauri would
-give for free), so we **enforce it by module structure and discipline**: `wallet-core`
-exposes a deliberately narrow public API and keeps all secret-touching types private. Treat
-the view layer as untrusted from the key material's perspective.
+### Component Responsibilities
 
-## Repository / crate layout
+The frontend and backend are separated by a well-defined JSON-RPC interface. Frontends should be lightweight and handle minimal data processing, so different frontends targeting different platforms can be built without duplicating logic.
 
-This repo (official):
+**Frontend**: 
 
-```
-desktop-wallet/
-├── crates/        # Rust crates - the secure core and its focused sub-crates (see split below)
-├── ui/            # the view layer (stack under review - see Stack)
-├── nix/ flake.nix # reproducible dev shell (Rust toolchain + tooling)
-├── spec/          # this specification
-└── .github/       # CODEOWNERS, CI
-```
+Displaying & compiling data from the backend for the user. This includes:
 
-A **proposed** shape for the security-critical core in `crates/`: a `wallet-core` crate
-covering a seed holder (`wallet`), per-Profile derivation (`account`), the `ChainClient` /
-Helios / Kohaku seam (`provider`), an in-process light client (`helios_client`), and an
-at-rest vault (`vault`, e.g. Argon2id + XChaCha20-Poly1305), behind a shared `error` type.
-However the internals land, `wallet-core` should keep **zero UI dependencies**: the property
-to preserve regardless of the UI-stack decision.
+- Managing the user interface
+- Acquiring user consent for operations
+- Exposing balance and asset management
+- Exposing transaction history
+- Displaying notifications and warnings (e.g. privacy, security) 
+- Exposing permission and setting management
 
-A possible later step (proposed): split `wallet-core` into focused crates, so audit
-boundaries stay crisp and compile times stay low:
+**Backend**:
 
-```
-crates/
-├── wallet-core/     # facade: re-exports the stable public API the UI depends on
-├── wallet-keys/     # seed, derivation engine, signers, zeroize discipline  (highest audit bar)
-├── wallet-vault/    # at-rest encryption + OS-keychain convenience layer
-├── wallet-chain/    # ChainClient trait, Helios light client, PRIVATE-read layer
-├── wallet-registry/ # derivation/address registries as DATA (mixer, smart-account)
-└── wallet-privacy/  # stealth (ERC-5564), shielded pools (Kohaku), gas + mix-back, dapp session
-```
+Handling core logic, interactions with the blockchain, and database saturation. This includes:
 
-The **facade crate** matters: the UI imports only `wallet-core`, so internal restructuring
-never breaks the view layer as long as the facade's public API is stable. This is the
-contract; as a reference implementation, it is also the API other wallets study.
+- Managing node connections
+- Managing dapp connections
+- Managing profiles, wallets, signers, and vaults
+- Persisting state
+- Indexing historical data
 
 ## Core API
 
@@ -134,6 +109,53 @@ Profiles are primarily a UI-level abstraction, used to collectively expose many 
     - Signers for signing messages
     - Wallets for sending transactions
     - Vaults for storing assets
+
+#### Example API flows
+
+```mermaid
+sequenceDiagram
+    participant p as Program
+    participant vx as VaultX
+    participant w as Wallet
+    Note over p,w: Transfer 100 USDC from vaultX to address
+    p->>vx: balance(USDC)
+    vx-->>p: 500 USDC
+    p->>vx: withdraw(address, usdc, 100)
+    vx-->>p: Ok(withdraw_call)
+    p->>w: send_calls([withdraw_call])
+    w-->>p: Ok(receipt)
+```
+
+```mermaid
+sequenceDiagram
+    participant p as Program
+    participant vx as VaultX
+    participant vy as VaultY
+    participant w as Wallet
+
+    Note over p,w: Transfer 5 ETH from vaultX to vaultY
+    p->>vx: balance(ETH)
+    vx-->>p: 10 ETH
+    
+    critical Transfer directly from vaultX to vaultY
+    p->>vx: withdraw(VaultY, eth, 5)
+    
+    option Ok
+    vx-->>p: Ok(transfer_call)
+    p->>w: send_calls([transfer_call])
+
+    option Err(Transfer indirectly via ephemeral address)
+    vx-->>p: Err()
+    p->>vx: withdraw(ephemeral_address, eth, 5)
+    vx-->>p: Ok(withdraw_call)
+    p->>vy: deposit(ephemeral_address, eth, 5)
+    vy-->>p: Ok(deposit_call)
+    p->>w: send_calls([withdraw_call, deposit_call])
+
+    end
+
+    w-->>p: Ok(receipt)
+```
 
 ### Signer
 
