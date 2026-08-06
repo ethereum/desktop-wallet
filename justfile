@@ -1,3 +1,8 @@
-# Default recipe — no-op until real recipes land
 default:
-    @true
+    just --list
+
+build:
+    cd crates/bin && cargo build --release
+
+run:
+    cd crates/bin && cargo run
