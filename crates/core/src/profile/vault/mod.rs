@@ -14,16 +14,16 @@ pub enum VaultError {
 }
 
 #[async_trait::async_trait]
-pub trait Vault {
+pub trait Vault: Send + Sync {
     fn id(&self) -> VaultId;
-    async fn balance(&self, asset: AssetId) -> Result<U256, VaultError>;
+    async fn balance(&self, asset: &AssetId) -> Result<U256, VaultError>;
 
     /// Returns a list of [`Call`]s that, when executed from the `from` address, will deposit
     /// the specified `amount` of the given `asset_id` into the vault.
     async fn deposit(
         &self,
         from: Address,
-        asset: AssetId,
+        asset: &AssetId,
         amount: U256,
     ) -> Result<Vec<Call>, VaultError>;
 
@@ -31,8 +31,8 @@ pub trait Vault {
     /// the given `asset_id` to the given `to` location.
     async fn withdraw(
         &self,
-        to: VaultId,
-        asset: AssetId,
+        to: &VaultId,
+        asset: &AssetId,
         amount: U256,
     ) -> Result<Vec<Call>, VaultError>;
 }

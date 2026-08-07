@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1"
 alloy = { version = "=2.2.0", features = ["eip712"] }
+futures = "0.3"
 thiserror = "2"
 tracing = "0.1"
 

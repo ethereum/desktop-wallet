@@ -2283,6 +2283,7 @@ version = "0.0.1"
 dependencies = [
  "alloy",
  "async-trait",
+ "futures",
  "thiserror 2.0.19",
  "tokio",
  "tracing",

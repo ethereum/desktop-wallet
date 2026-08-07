@@ -12,7 +12,7 @@ pub enum ExecutorError {
 }
 
 #[async_trait::async_trait]
-pub trait Executor {
+pub trait Executor: Send + Sync {
     fn id(&self) -> ExecutorId;
     fn address(&self) -> Address;
     async fn send_calls(&self, calls: &[Call]) -> Result<(), ExecutorError>;

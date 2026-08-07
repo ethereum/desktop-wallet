@@ -96,40 +96,40 @@ impl<P: Provider> Vault for SimpleVault<P> {
         VaultId::Address(self.address())
     }
 
-    async fn balance(&self, asset: AssetId) -> Result<U256, VaultError> {
+    async fn balance(&self, asset: &AssetId) -> Result<U256, VaultError> {
         match asset {
             AssetId::Native => Ok(self.balance_native().await?),
-            AssetId::Erc20(token) => Ok(self.balance_erc20(token).await?),
+            AssetId::Erc20(token) => Ok(self.balance_erc20(*token).await?),
         }
     }
 
     async fn deposit(
         &self,
         _from: Address,
-        asset: AssetId,
+        asset: &AssetId,
         amount: U256,
     ) -> Result<Vec<Call>, VaultError> {
         let calls = match asset {
             AssetId::Native => self.deposit_native(amount)?,
-            AssetId::Erc20(token) => self.deposit_erc20(token, amount)?,
+            AssetId::Erc20(token) => self.deposit_erc20(*token, amount)?,
         };
         Ok(calls)
     }
 
     async fn withdraw(
         &self,
-        to: VaultId,
-        asset: AssetId,
+        to: &VaultId,
+        asset: &AssetId,
         amount: U256,
     ) -> Result<Vec<Call>, VaultError> {
         #[allow(irrefutable_let_patterns)]
         let VaultId::Address(address) = to else {
-            return Err(VaultError::UnsupportedVaultId(to));
+            return Err(VaultError::UnsupportedVaultId(to.clone()));
         };
 
         let calls = match asset {
-            AssetId::Native => self.withdraw_native(address, amount).await?,
-            AssetId::Erc20(token) => self.withdraw_erc20(address, token, amount).await?,
+            AssetId::Native => self.withdraw_native(*address, amount).await?,
+            AssetId::Erc20(token) => self.withdraw_erc20(*address, *token, amount).await?,
         };
         Ok(calls)
     }

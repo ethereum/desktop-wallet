@@ -74,7 +74,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let deposit_asset = AssetId::Native;
     let deposit_amount = U256::from(10000);
     let deposit_calls = vault
-        .deposit(signer.address(), deposit_asset.clone(), deposit_amount)
+        .deposit(signer.address(), &deposit_asset, deposit_amount)
         .await?;
 
     executor.send_calls(&deposit_calls).await?;
@@ -82,7 +82,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
 
     //? Verify balance
     info!("Verifying balance after deposit...");
-    let balance = vault.balance(deposit_asset.clone()).await?;
+    let balance = vault.balance(&deposit_asset).await?;
     assert_eq!(balance, deposit_amount);
 
     //? Withdraw
@@ -93,8 +93,8 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
 
     let withdraw_calls = vault
         .withdraw(
-            VaultId::Address(withdraw_target),
-            deposit_asset.clone(),
+            &VaultId::Address(withdraw_target),
+            &deposit_asset,
             withdraw_amount,
         )
         .await?;
@@ -104,7 +104,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
 
     //? Verify balance after withdrawal
     info!("Verifying balance after withdrawal...");
-    let balance_after_withdrawal = vault.balance(deposit_asset.clone()).await?;
+    let balance_after_withdrawal = vault.balance(&deposit_asset).await?;
     assert_eq!(balance_after_withdrawal, deposit_amount - withdraw_amount);
 
     //? Verify that the withdraw target received the funds
