@@ -20,7 +20,7 @@ pub enum SimpleDelegateError {
     #[error("address not authorized")]
     NotAuthorized,
     #[error("RPC error: {0}")]
-    RPC(#[from] alloy::transports::RpcError<alloy::transports::TransportErrorKind>),
+    Rpc(#[from] alloy::transports::RpcError<alloy::transports::TransportErrorKind>),
     #[error("signer error: {0}")]
     Signer(#[from] alloy::signers::Error),
     #[error("sol error: {0}")]
