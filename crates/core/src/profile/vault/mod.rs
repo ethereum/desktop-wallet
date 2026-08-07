@@ -1,6 +1,9 @@
 use alloy::primitives::{Address, U256};
 
-use crate::profile::{AssetId, Call, VaultId};
+use crate::{
+    call::Call,
+    profile::{AssetId, VaultId},
+};
 
 pub mod simple;
 

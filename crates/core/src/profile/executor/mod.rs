@@ -1,6 +1,6 @@
 use alloy::primitives::Address;
 
-use crate::profile::{Call, ExecutorId};
+use crate::{call::Call, profile::ExecutorId};
 
 pub mod simple;
 

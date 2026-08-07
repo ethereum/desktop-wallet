@@ -5,9 +5,9 @@ use alloy::{
     signers::local::PrivateKeySigner,
     sol,
 };
-use ethereum_desktop_wallet_core::profile::{
-    Call,
-    executor::{Executor, simple::SimpleExecutor},
+use ethereum_desktop_wallet_core::{
+    call::Call,
+    profile::executor::{Executor, simple::SimpleExecutor},
 };
 use tracing::info;
 

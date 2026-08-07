@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1"
+# Alloy pinned since 2.3.0 has some dependency fetching issues rn. Update once resolved
 alloy = { version = "=2.2.0", features = ["eip712"] }
 futures = "0.3"
 thiserror = "2"

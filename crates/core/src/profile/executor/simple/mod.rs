@@ -11,8 +11,9 @@ use alloy::{
 use tracing::info;
 
 use crate::{
+    call::Call,
     profile::{
-        Call, ExecutorId,
+        ExecutorId,
         executor::{Executor, ExecutorError},
     },
     simple_delegate::{SimpleDelegate, SimpleDelegateError},

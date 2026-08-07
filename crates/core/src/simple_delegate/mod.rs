@@ -7,7 +7,7 @@ use alloy::{
     sol_types::{SolCall, eip712_domain},
 };
 
-use crate::profile::Call;
+use crate::call::Call;
 
 pub struct SimpleDelegate<P: Provider> {
     chain_id: u64,

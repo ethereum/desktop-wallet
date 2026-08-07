@@ -7,8 +7,9 @@ use alloy::{
 };
 
 use crate::{
+    call::Call,
     profile::{
-        AssetId, Call, VaultId,
+        AssetId, VaultId,
         vault::{Vault, VaultError},
     },
     simple_delegate::{SimpleDelegate, SimpleDelegateError},
