@@ -161,22 +161,14 @@ impl<P: Provider> SimpleVault<P> {
     }
 
     fn deposit_native(&self, amount: U256) -> Result<Vec<Call>, SimpleVaultError> {
-        Ok(vec![Call {
-            target: self.address(),
-            data: Bytes::new(),
-            value: amount,
-        }])
+        Ok(vec![Call::new(self.address(), Bytes::new(), amount)])
     }
 
     fn deposit_erc20(&self, token: Address, amount: U256) -> Result<Vec<Call>, SimpleVaultError> {
         let data = sol::Erc20::transferCall::new((self.address(), amount))
             .abi_encode()
             .into();
-        Ok(vec![Call {
-            target: token,
-            data,
-            value: U256::ZERO,
-        }])
+        Ok(vec![Call::new(token, data, U256::ZERO)])
     }
 
     async fn withdraw_native(
@@ -184,12 +176,7 @@ impl<P: Provider> SimpleVault<P> {
         to: Address,
         amount: U256,
     ) -> Result<Vec<Call>, SimpleVaultError> {
-        let call = Call {
-            target: to,
-            value: amount,
-            data: Bytes::new(),
-        };
-
+        let call = Call::new(to, Bytes::new(), amount);
         let c = self.delegate.batch_calls(&[call]).await?;
         Ok(vec![c])
     }
@@ -203,12 +190,8 @@ impl<P: Provider> SimpleVault<P> {
         let data = sol::Erc20::transferCall::new((to, amount))
             .abi_encode()
             .into();
-        let call = Call {
-            target: token,
-            value: U256::ZERO,
-            data,
-        };
 
+        let call = Call::new(token, data, U256::ZERO);
         let c = self.delegate.batch_calls(&[call]).await?;
         Ok(vec![c])
     }

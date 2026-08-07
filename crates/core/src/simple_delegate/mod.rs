@@ -153,11 +153,7 @@ impl<P: Provider> SimpleDelegate<P> {
         .abi_encode()
         .into();
 
-        Ok(Call {
-            target: self.address(),
-            data,
-            value: U256::ZERO,
-        })
+        Ok(Call::new(self.address(), data, U256::ZERO))
     }
 
     async fn nonce(&self) -> Result<U256, SimpleDelegateError> {

@@ -23,9 +23,19 @@ pub enum AssetId {
     Erc20(Address),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Call {
     pub target: Address,
     pub data: Bytes,
     pub value: U256,
+}
+
+impl Call {
+    pub fn new(target: Address, data: Bytes, value: U256) -> Self {
+        Self {
+            target,
+            data,
+            value,
+        }
+    }
 }

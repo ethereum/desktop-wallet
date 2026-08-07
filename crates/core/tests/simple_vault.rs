@@ -26,7 +26,10 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_test_writer()
+        .init();
 
     let anvil = Anvil::new().spawn();
     let rpc_url = anvil.endpoint();
@@ -83,7 +86,10 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     //? Verify balance
     info!("Verifying balance after deposit...");
     let balance = vault.balance(&deposit_asset).await?;
-    assert_eq!(balance, deposit_amount);
+    assert_eq!(
+        balance, deposit_amount,
+        "Expected vault balance to match deposited amount"
+    );
 
     //? Withdraw
     info!("Withdrawing from the vault...");
@@ -105,13 +111,19 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     //? Verify balance after withdrawal
     info!("Verifying balance after withdrawal...");
     let balance_after_withdrawal = vault.balance(&deposit_asset).await?;
-    assert_eq!(balance_after_withdrawal, deposit_amount - withdraw_amount);
+    assert_eq!(
+        balance_after_withdrawal,
+        deposit_amount - withdraw_amount,
+        "Expected vault balance to match after withdrawal"
+    );
 
     //? Verify that the withdraw target received the funds
     let target_balance = provider.get_balance(withdraw_target).await?;
-    assert_eq!(target_balance, target_balance_before + withdraw_amount);
-
-    info!("All tests passed successfully.");
+    assert_eq!(
+        target_balance,
+        target_balance_before + withdraw_amount,
+        "Expected withdraw target to receive the funds"
+    );
 
     Ok(())
 }
