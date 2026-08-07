@@ -4,6 +4,12 @@ version = "0.0.1"
 edition = "2024"
 
 [dependencies]
-tracing = "0.1"
+async-trait = "0.1"
+alloy = { version = "=2.2.0", features = ["eip712"] }
 thiserror = "2"
-alloy = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+alloy = { version = "=2.2.0", features = ["node-bindings"] }
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

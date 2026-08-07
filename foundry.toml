@@ -3,12 +3,7 @@ src = "src"
 out = "out"
 libs = ["dependencies"]
 
-# Disable metadata hash for deterministic bytecode
-bytecode_hash = "none"
-cbor_metadata = false
-
 [dependencies]
-forge-std = "1.16.2"
 "@openzeppelin-contracts" = "5.7.0"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
