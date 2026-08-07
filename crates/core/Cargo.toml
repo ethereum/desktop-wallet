@@ -1,0 +1,9 @@
+[package]
+name = "ethereum-desktop-wallet-core"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+tracing = "0.1"
+thiserror = "2"
+alloy = "2"
