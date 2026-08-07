@@ -16,7 +16,7 @@ use crate::{
         ExecutorId,
         executor::{Executor, ExecutorError},
     },
-    simple_delegate::{SimpleDelegate, SimpleDelegateError},
+    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
 };
 
 pub struct SimpleExecutor<P: Provider> {
@@ -40,15 +40,19 @@ pub enum SimpleExecutorError {
 }
 
 impl<P: Provider + Clone> SimpleExecutor<P> {
+    pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleExecutorError> {
+        Self::new_with_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
+    }
+
     pub async fn new_with_delegate(
-        delegate: Address,
         signer: PrivateKeySigner,
         provider: P,
+        delegate: Address,
     ) -> Result<Self, SimpleExecutorError> {
         Self::authorize_if_missing(delegate, &signer, &provider).await?;
 
         let delegate =
-            SimpleDelegate::new_with_delegate(delegate, signer.clone(), provider.clone()).await?;
+            SimpleDelegate::new_with_delegate(signer.clone(), provider.clone(), delegate).await?;
         let wallet = EthereumWallet::new(signer);
         Ok(Self {
             delegate,
@@ -57,6 +61,8 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
         })
     }
 
+    /// Submits the 7702 authorization transaction on-chain if the delegate is not already authorized
+    /// for the signer's address.
     async fn authorize_if_missing(
         delegate: Address,
         signer: &PrivateKeySigner,
@@ -73,7 +79,7 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
 
         //? nonce + 1 to account for the authorization transaction itself
         let nonce = provider.get_transaction_count(signer.address()).await? + 1;
-        let auth = SimpleDelegate::authorize_delegate(delegate, signer, nonce, provider).await?;
+        let auth = SimpleDelegate::authorize_delegate(signer, nonce, provider, delegate).await?;
 
         let tx = TransactionRequest::default()
             .to(Address::ZERO)
@@ -96,7 +102,7 @@ impl<P: Provider> Executor for SimpleExecutor<P> {
         self.delegate.address()
     }
 
-    async fn send_calls(&self, calls: &[Call]) -> Result<(), ExecutorError> {
+    async fn execute(&self, calls: &[Call]) -> Result<(), ExecutorError> {
         self.send(calls).await?;
         Ok(())
     }

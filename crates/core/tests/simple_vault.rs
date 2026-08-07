@@ -52,9 +52,9 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
 
     //? Create SimpleExecutor
     let executor = SimpleExecutor::new_with_delegate(
-        delegate_address,
         executor_signer.clone(),
         provider.clone(),
+        delegate_address,
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());
@@ -80,7 +80,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
         .deposit(signer.address(), &deposit_asset, deposit_amount)
         .await?;
 
-    executor.send_calls(&deposit_calls).await?;
+    executor.execute(&deposit_calls).await?;
     info!("Deposit completed successfully.");
 
     //? Verify balance
@@ -105,7 +105,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    executor.send_calls(&withdraw_calls).await?;
+    executor.execute(&withdraw_calls).await?;
     info!("Withdrawal completed successfully.");
 
     //? Verify balance after withdrawal

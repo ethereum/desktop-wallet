@@ -15,5 +15,7 @@ pub enum ExecutorError {
 pub trait Executor: Send + Sync {
     fn id(&self) -> ExecutorId;
     fn address(&self) -> Address;
-    async fn send_calls(&self, calls: &[Call]) -> Result<(), ExecutorError>;
+
+    /// Executes a list of [`Call`]s from the executor's address.
+    async fn execute(&self, calls: &[Call]) -> Result<(), ExecutorError>;
 }

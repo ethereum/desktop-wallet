@@ -27,6 +27,7 @@ impl Wallet {
         Self { executor, vaults }
     }
 
+    /// Returns the total balance of the given asset across all vaults.
     pub async fn balance(&self, asset: AssetId) -> Result<U256, WalletError> {
         let balances = try_join_all(self.vaults.iter().map(|v| v.balance(&asset))).await?;
         let balance = balances.into_iter().fold(U256::ZERO, |a, b| a + b);

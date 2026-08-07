@@ -54,34 +54,17 @@ mod sol {
     );
 }
 
-const SIMPLE_DELEGATE_ADDRESS: Address = address!("0xACAe14c5d84EA4a1ddb84bFbDc1a62796677ACcA");
+pub const SIMPLE_DELEGATE_ADDRESS: Address = address!("0xACAe14c5d84EA4a1ddb84bFbDc1a62796677ACcA");
 
 impl<P: Provider> SimpleDelegate<P> {
     /// Creates a new `SimpleDelegate` instance.
     ///
     /// # Errors
     /// Returns an error if the signer is not authorized to act as a delegate for the given address.
-    pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleDelegateError> {
-        Self::new_with_delegate(SIMPLE_DELEGATE_ADDRESS, signer, provider).await
-    }
-
-    /// Returns a signed 7702 authorization for the given delegate address.
-    ///
-    /// # Errors
-    /// Returns an error if an RPC error occurs or if the signer fails to sign
-    /// the authorization.
-    pub async fn authorization(
-        signer: &PrivateKeySigner,
-        nonce: u64,
-        provider: &P,
-    ) -> Result<SignedAuthorization, SimpleDelegateError> {
-        Self::authorize_delegate(SIMPLE_DELEGATE_ADDRESS, signer, nonce, provider).await
-    }
-
     pub async fn new_with_delegate(
-        delegate: Address,
         signer: PrivateKeySigner,
         provider: P,
+        delegate: Address,
     ) -> Result<Self, SimpleDelegateError> {
         if !Self::authorized(signer.address(), delegate, &provider).await? {
             return Err(SimpleDelegateError::NotAuthorized);
@@ -95,11 +78,16 @@ impl<P: Provider> SimpleDelegate<P> {
         })
     }
 
+    /// Returns a signed 7702 authorization for the given delegate address.
+    ///
+    /// # Errors
+    /// Returns an error if an RPC error occurs or if the signer fails to sign
+    /// the authorization.
     pub async fn authorize_delegate(
-        delegate: Address,
         signer: &PrivateKeySigner,
         nonce: u64,
         provider: &P,
+        delegate: Address,
     ) -> Result<SignedAuthorization, SimpleDelegateError> {
         let chain_id = provider.get_chain_id().await?;
 

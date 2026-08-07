@@ -19,6 +19,7 @@ pub enum VaultError {
 #[async_trait::async_trait]
 pub trait Vault: Send + Sync {
     fn id(&self) -> VaultId;
+    /// Returns the total balance of the given asset in the vault.
     async fn balance(&self, asset: &AssetId) -> Result<U256, VaultError>;
 
     /// Returns a list of [`Call`]s that, when executed from the `from` address, will deposit

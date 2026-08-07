@@ -48,9 +48,9 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
 
     //? Create SimpleExecutor
     let executor = SimpleExecutor::new_with_delegate(
-        delegate_address,
         executor_signer.clone(),
         provider.clone(),
+        delegate_address,
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());
@@ -64,7 +64,7 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     let value_1 = U256::from(1234);
     let value_2 = U256::from(5678);
     executor
-        .send_calls(&[
+        .execute(&[
             Call::new(target_1, Bytes::new(), value_1),
             Call::new(target_2, Bytes::new(), value_2),
         ])

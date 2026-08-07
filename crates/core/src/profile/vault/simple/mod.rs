@@ -12,7 +12,7 @@ use crate::{
         AssetId, VaultId,
         vault::{Vault, VaultError},
     },
-    simple_delegate::{SimpleDelegate, SimpleDelegateError},
+    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
 };
 
 pub struct SimpleVault<P: Provider> {
@@ -51,8 +51,7 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// Returns an error if the signer's address is not delegated to the SimpleVault
     /// implementation contract on the given chain.
     pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleVaultError> {
-        let delegate = SimpleDelegate::new(signer, provider.clone()).await?;
-        Ok(Self { delegate, provider })
+        Self::new_with_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
     }
 
     /// Returns a 7702 delegation authorization for the SimpleVault contract. If the
@@ -64,10 +63,7 @@ impl<P: Provider + Clone> SimpleVault<P> {
         signer: &PrivateKeySigner,
         provider: &P,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
-        let nonce = provider.get_transaction_count(signer.address()).await?;
-        SimpleDelegate::authorization(signer, nonce, provider)
-            .await
-            .map_err(SimpleVaultError::Delegate)
+        Self::authorize_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
     }
 
     pub async fn new_with_delegate(
@@ -76,7 +72,7 @@ impl<P: Provider + Clone> SimpleVault<P> {
         delegate: Address,
     ) -> Result<Self, SimpleVaultError> {
         let delegate =
-            SimpleDelegate::new_with_delegate(delegate, signer, provider.clone()).await?;
+            SimpleDelegate::new_with_delegate(signer, provider.clone(), delegate).await?;
         Ok(Self { delegate, provider })
     }
 
@@ -86,7 +82,7 @@ impl<P: Provider + Clone> SimpleVault<P> {
         delegate: Address,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         let nonce = provider.get_transaction_count(signer.address()).await?;
-        let auth = SimpleDelegate::authorize_delegate(delegate, signer, nonce, provider).await?;
+        let auth = SimpleDelegate::authorize_delegate(signer, nonce, provider, delegate).await?;
         Ok(auth)
     }
 }
