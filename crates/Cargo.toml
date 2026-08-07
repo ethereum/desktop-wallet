@@ -1,3 +1,14 @@
 [workspace]
 members = ["bin", "core"]
 resolver = "2"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+panic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+todo = "warn"
+missing_errors_doc = "allow"
+cast_possible_truncation = "allow"

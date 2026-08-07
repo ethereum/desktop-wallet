@@ -41,16 +41,21 @@ pub enum SimpleExecutorError {
 
 impl<P: Provider + Clone> SimpleExecutor<P> {
     /// Creates a new `SimpleExecutor` instance with the given signer and provider. If the signer
-    /// has not already delegated to the SimpleExecutor implementation contract, this method
+    /// has not already delegated to the `SimpleExecutor` implementation contract, this method
     /// will submit the 7702 authorization.
     ///
     /// # Errors
-    /// Returns an error if the signer is not authorized to delegate to the SimpleExecutor
+    /// Returns an error if the signer is not authorized to delegate to the `SimpleExecutor`
     /// implementation contract, or if there is an RPC error.
     pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleExecutorError> {
         Self::new_with_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
     }
 
+    /// Creates a new `SimpleExecutor` instance with the given signer, provider, and delegate address.
+    ///
+    /// # Errors
+    /// Returns an error if the signer is not authorized to delegate to the given delegate address,
+    /// or if there is an RPC error.
     pub async fn new_with_delegate(
         signer: PrivateKeySigner,
         provider: P,

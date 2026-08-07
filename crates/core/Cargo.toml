@@ -15,3 +15,6 @@ tracing = "0.1"
 alloy = { version = "=2.2.0", features = ["node-bindings"] }
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true

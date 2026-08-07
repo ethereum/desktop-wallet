@@ -115,7 +115,7 @@ impl<P: Provider> SimpleDelegate<P> {
         self.signer.address()
     }
 
-    /// Signs a batch of calls to be executed by the SimpleVault contract.
+    /// Signs a batch of calls to be executed by the `SimpleVault` contract.
     pub async fn batch_calls(&self, calls: &[Call]) -> Result<Call, SimpleDelegateError> {
         let calls: Vec<_> = calls
             .iter()
@@ -134,7 +134,7 @@ impl<P: Provider> SimpleDelegate<P> {
         let signature = self.signer.sign_typed_data(&batch, &self.domain()).await?;
         let data = sol::SimpleDelegate::executeBatchCall {
             calls,
-            v: signature.v() as u8 + 27,
+            v: u8::from(signature.v()) + 27,
             r: signature.r().into(),
             s: signature.s().into(),
         }

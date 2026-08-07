@@ -48,13 +48,13 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// Creates a new `SimpleVault` instance with the given signer and provider.
     ///
     /// # Errors
-    /// Returns an error if the signer's address is not delegated to the SimpleVault
-    /// implementation contract on the given chain.
+    /// Returns an error if the signer's address is not delegated to the `SimpleVault`
+    /// implementation contract.
     pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleVaultError> {
         Self::new_with_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
     }
 
-    /// Returns a 7702 delegation authorization for the SimpleVault contract. If the
+    /// Returns a 7702 delegation authorization for the `SimpleVault` contract. If the
     /// address is already authorized, returns `None`.
     ///
     /// # Errors
@@ -66,6 +66,10 @@ impl<P: Provider + Clone> SimpleVault<P> {
         Self::authorize_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
     }
 
+    /// Creates a new `SimpleVault` instance with the given signer, provider, and delegate address.
+    ///
+    /// # Errors
+    /// Returns an error if the signer's address is not delegated to the given delegate address.
     pub async fn new_with_delegate(
         signer: PrivateKeySigner,
         provider: P,
@@ -76,6 +80,11 @@ impl<P: Provider + Clone> SimpleVault<P> {
         Ok(Self { delegate, provider })
     }
 
+    /// Submits the 7702 authorization transaction on-chain if the delegate is not already authorized
+    /// for the signer's address.
+    ///
+    /// # Errors
+    /// Returns an error if the authorization transaction fails or if there is an RPC error.
     pub async fn authorize_delegate(
         signer: &PrivateKeySigner,
         provider: &P,
@@ -107,8 +116,8 @@ impl<P: Provider> Vault for SimpleVault<P> {
         amount: U256,
     ) -> Result<Vec<Call>, VaultError> {
         let calls = match asset {
-            AssetId::Native => self.deposit_native(amount)?,
-            AssetId::Erc20(token) => self.deposit_erc20(*token, amount)?,
+            AssetId::Native => self.deposit_native(amount),
+            AssetId::Erc20(token) => self.deposit_erc20(*token, amount),
         };
         Ok(calls)
     }
@@ -157,15 +166,15 @@ impl<P: Provider> SimpleVault<P> {
         Ok(balance)
     }
 
-    fn deposit_native(&self, amount: U256) -> Result<Vec<Call>, SimpleVaultError> {
-        Ok(vec![Call::new(self.address(), Bytes::new(), amount)])
+    fn deposit_native(&self, amount: U256) -> Vec<Call> {
+        vec![Call::new(self.address(), Bytes::new(), amount)]
     }
 
-    fn deposit_erc20(&self, token: Address, amount: U256) -> Result<Vec<Call>, SimpleVaultError> {
+    fn deposit_erc20(&self, token: Address, amount: U256) -> Vec<Call> {
         let data = sol::Erc20::transferCall::new((self.address(), amount))
             .abi_encode()
             .into();
-        Ok(vec![Call::new(token, data, U256::ZERO)])
+        vec![Call::new(token, data, U256::ZERO)]
     }
 
     async fn withdraw_native(
