@@ -16,6 +16,8 @@ use crate::simple_delegate::{
     SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated,
 };
 
+/// `SimpleExecutor` is a basic [`Executor`] implementation that uses an signer-based
+/// wallet to execute calls through the `SimpleDelegate` contract.
 pub struct SimpleExecutor<P: Provider> {
     delegate: SimpleDelegate<P>,
     wallet: EthereumWallet,

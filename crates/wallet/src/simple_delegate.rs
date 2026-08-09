@@ -113,7 +113,8 @@ impl<P: Provider> SimpleDelegate<P> {
         self.signer.address()
     }
 
-    /// Signs a batch of calls to be executed by the `SimpleVault` contract.
+    /// Signs a batch of calls to be executed by the `SimpleVault` contract. Returns
+    /// a [`Call`] that can be submitted to this address to execute the batch.
     pub async fn batch_calls(&self, calls: &[Call]) -> Result<Call, SimpleDelegateError> {
         let calls: Vec<_> = calls
             .iter()

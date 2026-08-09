@@ -11,6 +11,9 @@ use ethereum_desktop_wallet_core::{
 
 use crate::simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError};
 
+/// `SimpleVault` is a basic [`Vault`] implementation that uses a signer-based wallet
+/// to store and transfer assets through its address. It uses the`SimpleDelegate`
+/// contract to allow the signer to authorize vault transactions for withdrawals.
 pub struct SimpleVault<P: Provider> {
     delegate: SimpleDelegate<P>,
     provider: P,
@@ -180,6 +183,10 @@ impl<P: Provider> SimpleVault<P> {
         vec![Call::new(token, data, U256::ZERO)]
     }
 
+    /// Withdraws native tokens from the vault to the specific address.
+    ///
+    /// The vault's signer authorizes the withdrawal by returning a signed
+    /// `executeBatch` call to the `SimpleDelegate` contract.
     async fn withdraw_native(
         &self,
         to: Address,
@@ -190,6 +197,10 @@ impl<P: Provider> SimpleVault<P> {
         Ok(vec![c])
     }
 
+    /// Withdraws ERC20 tokens from the vault to the specific address.
+    ///
+    /// The vault's signer authorizes the withdrawal by returning a signed
+    /// `executeBatch` call to the `SimpleDelegate` contract.
     async fn withdraw_erc20(
         &self,
         to: Address,
