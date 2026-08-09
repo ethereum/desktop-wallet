@@ -1,11 +1,13 @@
-use alloy::{
-    eips::eip7702::constants::EIP7702_DELEGATION_DESIGNATOR,
-    primitives::{Address, Bytes, U256, address},
-    providers::Provider,
-    rpc::types::{Authorization, SignedAuthorization, TransactionRequest},
-    signers::{Signer, local::PrivateKeySigner},
-    sol_types::{SolCall, eip712_domain},
+use std::sync::Arc;
+
+use alloy_eips::eip7702::{
+    Authorization, SignedAuthorization, constants::EIP7702_DELEGATION_DESIGNATOR,
 };
+use alloy_primitives::{Address, Bytes, U256, address};
+use alloy_provider::Provider;
+use alloy_rpc_types_eth::TransactionRequest;
+use alloy_signer::Signer;
+use alloy_sol_types::{Eip712Domain, SolCall, SolStruct, eip712_domain};
 use ethereum_desktop_wallet_core::call::Call;
 
 /// `SimpleDelegate` is a 7702-compatible delegate contract loosely based on Safe's
@@ -15,7 +17,7 @@ use ethereum_desktop_wallet_core::call::Call;
 /// execution of multiple calls and gasless execution for the signer.
 pub struct SimpleDelegate<P: Provider> {
     chain_id: u64,
-    signer: PrivateKeySigner,
+    signer: Arc<dyn Signer + Send + Sync>,
     provider: P,
 }
 
@@ -24,15 +26,15 @@ pub enum SimpleDelegateError {
     #[error("address not authorized")]
     NotAuthorized,
     #[error("RPC error: {0}")]
-    Rpc(#[from] alloy::transports::RpcError<alloy::transports::TransportErrorKind>),
+    Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
     #[error("signer error: {0}")]
-    Signer(#[from] alloy::signers::Error),
+    Signer(#[from] alloy_signer::Error),
     #[error("sol error: {0}")]
-    Sol(#[from] alloy::sol_types::Error),
+    Sol(#[from] alloy_sol_types::Error),
 }
 
 mod sol {
-    use alloy::sol;
+    use alloy_sol_types::sol;
 
     sol!(
         struct Call {
@@ -67,7 +69,7 @@ impl<P: Provider> SimpleDelegate<P> {
     /// Returns an error if the signer's code is not delegated to the implementation
     /// address or if there is an RPC error.
     pub async fn new_with_implementation(
-        signer: PrivateKeySigner,
+        signer: impl Signer + Send + Sync + 'static,
         implementation: Address,
         provider: P,
     ) -> Result<Self, SimpleDelegateError> {
@@ -76,6 +78,7 @@ impl<P: Provider> SimpleDelegate<P> {
         }
 
         let chain_id = provider.get_chain_id().await?;
+        let signer = Arc::new(signer);
         Ok(Self {
             chain_id,
             signer,
@@ -89,7 +92,7 @@ impl<P: Provider> SimpleDelegate<P> {
     /// Returns an error if an RPC error occurs or if the signer fails to sign
     /// the authorization.
     pub async fn authorize_implementation(
-        signer: &PrivateKeySigner,
+        signer: &impl Signer,
         nonce: u64,
         provider: &P,
         implementation: Address,
@@ -126,7 +129,8 @@ impl<P: Provider> SimpleDelegate<P> {
             nonce: self.nonce().await?,
         };
 
-        let signature = self.signer.sign_typed_data(&batch, &self.domain()).await?;
+        let digest = batch.eip712_signing_hash(&self.domain());
+        let signature = self.signer.sign_hash(&digest).await?;
         let data = sol::SimpleDelegate::executeBatchCall {
             calls,
             v: u8::from(signature.v()) + 27,
@@ -154,7 +158,7 @@ impl<P: Provider> SimpleDelegate<P> {
         Ok(nonce)
     }
 
-    fn domain(&self) -> alloy::dyn_abi::Eip712Domain {
+    fn domain(&self) -> Eip712Domain {
         eip712_domain! {
             name: "SimpleDelegate",
             version: "1",

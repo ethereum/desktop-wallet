@@ -1,13 +1,11 @@
-use alloy::{
-    consensus::TxEnvelope,
-    network::{
-        EthereumWallet, NetworkTransactionBuilder, TransactionBuilder, TransactionBuilder7702,
-    },
-    primitives::{Address, B256},
-    providers::Provider,
-    rpc::types::TransactionRequest,
-    signers::local::PrivateKeySigner,
+use alloy_consensus::TxEnvelope;
+use alloy_network::{
+    NetworkTransactionBuilder, TransactionBuilder, TransactionBuilder7702, TxSigner,
 };
+use alloy_primitives::{Address, B256, Signature};
+use alloy_provider::{Provider, network::EthereumWallet};
+use alloy_rpc_types_eth::TransactionRequest;
+use alloy_signer::Signer;
 use ethereum_desktop_wallet_core::{
     call::Call,
     executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},
@@ -29,11 +27,11 @@ pub enum SimpleExecutorError {
     #[error(transparent)]
     Delegate(#[from] SimpleDelegateError),
     #[error("RPC error: {0}")]
-    Rpc(#[from] alloy::transports::RpcError<alloy::transports::TransportErrorKind>),
+    Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
     #[error("transaction builder error: {0}")]
-    Builder(#[from] alloy::network::TransactionBuilderError<alloy::network::Ethereum>),
+    Builder(#[from] alloy_network::TransactionBuilderError<alloy_network::Ethereum>),
     #[error("pending transaction error: {0}")]
-    Pending(#[from] alloy::providers::PendingTransactionError),
+    Pending(#[from] alloy_provider::PendingTransactionError),
     #[error("transaction failed with status code")]
     TransactionFailed,
 }
@@ -45,7 +43,10 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
     ///
     /// # Errors
     /// Returns an error if there is a RPC error.
-    pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleExecutorError> {
+    pub async fn new<S: TxSigner<Signature> + Signer + Send + Sync + Clone + 'static>(
+        signer: S,
+        provider: P,
+    ) -> Result<Self, SimpleExecutorError> {
         Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
     }
 
@@ -53,8 +54,10 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
     ///
     /// # Errors
     /// Returns an error if there is a RPC error.
-    pub async fn new_with_implementation(
-        signer: PrivateKeySigner,
+    pub async fn new_with_implementation<
+        S: TxSigner<Signature> + Signer + Send + Sync + Clone + 'static,
+    >(
+        signer: S,
         implementation: Address,
         provider: P,
     ) -> Result<Self, SimpleExecutorError> {
@@ -77,12 +80,14 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
 
     /// Submits the 7702 authorization transaction on-chain if the delegate is not already authorized
     /// for the signer's address.
-    async fn authorize_if_missing(
+    async fn authorize_if_missing<
+        S: TxSigner<Signature> + Signer + Send + Sync + Clone + 'static,
+    >(
         implementation: Address,
-        signer: &PrivateKeySigner,
+        signer: &S,
         provider: &P,
     ) -> Result<(), SimpleExecutorError> {
-        let delegator = signer.address();
+        let delegator = TxSigner::address(&signer);
         if is_delegated(delegator, implementation, provider).await? {
             return Ok(());
         }
@@ -92,7 +97,7 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
         );
 
         //? nonce + 1 to account for the authorization transaction
-        let nonce = provider.get_transaction_count(signer.address()).await? + 1;
+        let nonce = provider.get_transaction_count(delegator).await? + 1;
         let auth =
             SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
                 .await?;

@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 async-trait = { workspace = true }
-alloy = { workspace = true }
 thiserror = { workspace = true }
+alloy-primitives = "1.6.1"
 
 [lints]
 workspace = true

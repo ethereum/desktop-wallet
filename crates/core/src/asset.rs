@@ -1,4 +1,4 @@
-use alloy::primitives::Address;
+use alloy_primitives::Address;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AssetId {

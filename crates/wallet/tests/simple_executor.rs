@@ -1,10 +1,8 @@
-use alloy::{
-    node_bindings::Anvil,
-    primitives::{Address, Bytes, U256},
-    providers::{Provider, ProviderBuilder},
-    signers::local::PrivateKeySigner,
-    sol,
-};
+use alloy_node_bindings::Anvil;
+use alloy_primitives::{Address, Bytes, U256};
+use alloy_provider::{Provider, ProviderBuilder};
+use alloy_signer_local::PrivateKeySigner;
+use alloy_sol_types::sol;
 use ethereum_desktop_wallet_core::{call::Call, executor::Executor};
 use ethereum_desktop_wallet_wallet::simple_executor::SimpleExecutor;
 use tracing::info;

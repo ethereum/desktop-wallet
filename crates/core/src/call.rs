@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, Bytes, U256};
+use alloy_primitives::{Address, Bytes, U256};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Call {

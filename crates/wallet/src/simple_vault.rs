@@ -1,10 +1,8 @@
-use alloy::{
-    primitives::{Address, Bytes, U256},
-    providers::Provider,
-    rpc::types::{SignedAuthorization, TransactionRequest},
-    signers::local::PrivateKeySigner,
-    sol_types::SolCall,
-};
+use alloy_primitives::{Address, Bytes, U256};
+use alloy_provider::Provider;
+use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
+use alloy_signer::Signer;
+use alloy_sol_types::SolCall;
 use ethereum_desktop_wallet_core::{
     asset::AssetId,
     call::Call,
@@ -25,13 +23,13 @@ pub enum SimpleVaultError {
     #[error("address not authorized")]
     NotAuthorized,
     #[error("RPC error: {0}")]
-    Rpc(#[from] alloy::transports::RpcError<alloy::transports::TransportErrorKind>),
+    Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
     #[error("sol error: {0}")]
-    Sol(#[from] alloy::sol_types::Error),
+    Sol(#[from] alloy_sol_types::Error),
 }
 
 mod sol {
-    use alloy::sol;
+    use alloy_sol_types::sol;
 
     sol!(
         contract Erc20 {
@@ -48,7 +46,10 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// # Errors
     /// Returns an error if the signer's address is not delegated to the `SimpleVault`
     /// implementation contract.
-    pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleVaultError> {
+    pub async fn new(
+        signer: impl Signer + Send + Sync + 'static,
+        provider: P,
+    ) -> Result<Self, SimpleVaultError> {
         Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
     }
 
@@ -58,7 +59,7 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// # Errors
     /// Returns an error if an RPC call fails or if the authorization cannot be signed.
     pub async fn authorization(
-        signer: &PrivateKeySigner,
+        signer: &impl Signer,
         provider: &P,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         Self::authorize_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
@@ -70,7 +71,7 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// Returns an error if the signer's code is not delegated to the implementation
     /// address or if there is an RPC error.
     pub async fn new_with_implementation(
-        signer: PrivateKeySigner,
+        signer: impl Signer + Send + Sync + 'static,
         implementation: Address,
         provider: P,
     ) -> Result<Self, SimpleVaultError> {
@@ -86,7 +87,7 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// # Errors
     /// Returns an error if there is an RPC error or if the authorization cannot be signed.
     pub async fn authorize_implementation(
-        signer: &PrivateKeySigner,
+        signer: &impl Signer,
         implementation: Address,
         provider: &P,
     ) -> Result<SignedAuthorization, SimpleVaultError> {

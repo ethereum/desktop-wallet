@@ -1,12 +1,10 @@
-use alloy::{
-    network::TransactionBuilder7702,
-    node_bindings::Anvil,
-    primitives::{Address, U256},
-    providers::{Provider, ProviderBuilder},
-    rpc::types::TransactionRequest,
-    signers::local::PrivateKeySigner,
-    sol,
-};
+use alloy_network::TransactionBuilder7702;
+use alloy_node_bindings::Anvil;
+use alloy_primitives::{Address, U256};
+use alloy_provider::{Provider, ProviderBuilder};
+use alloy_rpc_types_eth::TransactionRequest;
+use alloy_signer_local::PrivateKeySigner;
+use alloy_sol_types::sol;
 use ethereum_desktop_wallet_core::{
     asset::AssetId,
     executor::Executor,

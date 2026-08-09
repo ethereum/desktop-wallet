@@ -1,4 +1,4 @@
-use alloy::primitives::{Address, U256};
+use alloy_primitives::{Address, U256};
 
 use crate::{asset::AssetId, call::Call};
 

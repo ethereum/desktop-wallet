@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use ethereum_desktop_wallet_core::{
     asset::AssetId,
     executor::{Executor, ExecutorError},
