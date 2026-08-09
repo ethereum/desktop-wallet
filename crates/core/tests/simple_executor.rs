@@ -47,10 +47,10 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     //? Create SimpleExecutor
-    let executor = SimpleExecutor::new_with_delegate(
+    let executor = SimpleExecutor::new_with_implementation(
         executor_signer.clone(),
-        provider.clone(),
         delegate_address,
+        provider.clone(),
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());

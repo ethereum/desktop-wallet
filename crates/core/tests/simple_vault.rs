@@ -51,16 +51,17 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     //? Create SimpleExecutor
-    let executor = SimpleExecutor::new_with_delegate(
+    let executor = SimpleExecutor::new_with_implementation(
         executor_signer.clone(),
-        provider.clone(),
         delegate_address,
+        provider.clone(),
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());
 
     //? Create and authorize SimpleVault
-    let auth = SimpleVault::authorize_delegate(&vault_signer, &provider, delegate_address).await?;
+    let auth =
+        SimpleVault::authorize_implementation(&vault_signer, delegate_address, &provider).await?;
 
     let tx = TransactionRequest::default()
         .to(signer.address())
@@ -69,7 +70,8 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     info!("Authorized SimpleVault");
 
     let vault =
-        SimpleVault::new_with_delegate(vault_signer, provider.clone(), delegate_address).await?;
+        SimpleVault::new_with_implementation(vault_signer, delegate_address, provider.clone())
+            .await?;
     info!("Created SimpleVault with ID {:?}", vault.id());
 
     //? Deposit into the vault

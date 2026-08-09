@@ -51,7 +51,7 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// Returns an error if the signer's address is not delegated to the `SimpleVault`
     /// implementation contract.
     pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleVaultError> {
-        Self::new_with_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
+        Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
     }
 
     /// Returns a 7702 delegation authorization for the `SimpleVault` contract. If the
@@ -63,20 +63,22 @@ impl<P: Provider + Clone> SimpleVault<P> {
         signer: &PrivateKeySigner,
         provider: &P,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
-        Self::authorize_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
+        Self::authorize_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
     }
 
-    /// Creates a new `SimpleVault` instance with the given signer, provider, and delegate address.
+    /// Creates a new `SimpleVault` instance.
     ///
     /// # Errors
-    /// Returns an error if the signer's address is not delegated to the given delegate address.
-    pub async fn new_with_delegate(
+    /// Returns an error if the signer's code is not delegated to the implementation
+    /// address or if there is an RPC error.
+    pub async fn new_with_implementation(
         signer: PrivateKeySigner,
+        implementation: Address,
         provider: P,
-        delegate: Address,
     ) -> Result<Self, SimpleVaultError> {
         let delegate =
-            SimpleDelegate::new_with_delegate(signer, provider.clone(), delegate).await?;
+            SimpleDelegate::new_with_implementation(signer, implementation, provider.clone())
+                .await?;
         Ok(Self { delegate, provider })
     }
 
@@ -84,14 +86,16 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// for the signer's address.
     ///
     /// # Errors
-    /// Returns an error if the authorization transaction fails or if there is an RPC error.
-    pub async fn authorize_delegate(
+    /// Returns an error if there is an RPC error or if the authorization cannot be signed.
+    pub async fn authorize_implementation(
         signer: &PrivateKeySigner,
+        implementation: Address,
         provider: &P,
-        delegate: Address,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         let nonce = provider.get_transaction_count(signer.address()).await?;
-        let auth = SimpleDelegate::authorize_delegate(signer, nonce, provider, delegate).await?;
+        let auth =
+            SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
+                .await?;
         Ok(auth)
     }
 }

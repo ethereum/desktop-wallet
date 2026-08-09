@@ -16,7 +16,7 @@ use crate::{
         ExecutorId,
         executor::{Executor, ExecutorError},
     },
-    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
+    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated},
 };
 
 pub struct SimpleExecutor<P: Provider> {
@@ -40,31 +40,33 @@ pub enum SimpleExecutorError {
 }
 
 impl<P: Provider + Clone> SimpleExecutor<P> {
-    /// Creates a new `SimpleExecutor` instance with the given signer and provider. If the signer
-    /// has not already delegated to the `SimpleExecutor` implementation contract, this method
-    /// will submit the 7702 authorization.
+    /// Creates a new `SimpleExecutor`. If the signer has not already delegated to
+    /// the `SimpleDelegate` implementation contract, this method will automatically
+    /// submit the 7702 authorization.
     ///
     /// # Errors
-    /// Returns an error if the signer is not authorized to delegate to the `SimpleExecutor`
-    /// implementation contract, or if there is an RPC error.
+    /// Returns an error if there is a RPC error.
     pub async fn new(signer: PrivateKeySigner, provider: P) -> Result<Self, SimpleExecutorError> {
-        Self::new_with_delegate(signer, provider, SIMPLE_DELEGATE_ADDRESS).await
+        Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
     }
 
-    /// Creates a new `SimpleExecutor` instance with the given signer, provider, and delegate address.
+    /// Creates a new `SimpleExecutor` instance.
     ///
     /// # Errors
-    /// Returns an error if the signer is not authorized to delegate to the given delegate address,
-    /// or if there is an RPC error.
-    pub async fn new_with_delegate(
+    /// Returns an error if there is a RPC error.
+    pub async fn new_with_implementation(
         signer: PrivateKeySigner,
+        implementation: Address,
         provider: P,
-        delegate: Address,
     ) -> Result<Self, SimpleExecutorError> {
-        Self::authorize_if_missing(delegate, &signer, &provider).await?;
+        Self::authorize_if_missing(implementation, &signer, &provider).await?;
 
-        let delegate =
-            SimpleDelegate::new_with_delegate(signer.clone(), provider.clone(), delegate).await?;
+        let delegate = SimpleDelegate::new_with_implementation(
+            signer.clone(),
+            implementation,
+            provider.clone(),
+        )
+        .await?;
         let wallet = EthereumWallet::new(signer);
         Ok(Self {
             delegate,
@@ -76,22 +78,24 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
     /// Submits the 7702 authorization transaction on-chain if the delegate is not already authorized
     /// for the signer's address.
     async fn authorize_if_missing(
-        delegate: Address,
+        implementation: Address,
         signer: &PrivateKeySigner,
         provider: &P,
     ) -> Result<(), SimpleExecutorError> {
-        let address = signer.address();
-        if SimpleDelegate::authorized(address, delegate, provider).await? {
+        let delegator = signer.address();
+        if is_delegated(delegator, implementation, provider).await? {
             return Ok(());
         }
 
         info!(
-            "Authorization missing for delegate {delegate:} and signer {address:}, authorizing...",
+            "Authorization missing for delegate {implementation:} and signer {delegator:}, authorizing...",
         );
 
         //? nonce + 1 to account for the authorization transaction itself
         let nonce = provider.get_transaction_count(signer.address()).await? + 1;
-        let auth = SimpleDelegate::authorize_delegate(signer, nonce, provider, delegate).await?;
+        let auth =
+            SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
+                .await?;
 
         let tx = TransactionRequest::default()
             .to(Address::ZERO)

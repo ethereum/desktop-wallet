@@ -9,6 +9,11 @@ use alloy::{
 
 use crate::call::Call;
 
+/// `SimpleDelegate` is a 7702-compatible delegate contract loosely based on Safe's
+/// [`SafeLite`](https://github.com/5afe/safe-eip7702/blob/main/safe-eip7702-contracts/contracts/experimental/SafeLite.sol)
+/// contract. An address can authorize the `SimpleDelegate` contract with a 7702
+/// authorization, then execute signed batches of calls. This is used for atomic
+/// execution of multiple calls and gasless execution for the signer.
 pub struct SimpleDelegate<P: Provider> {
     chain_id: u64,
     signer: PrivateKeySigner,
@@ -37,7 +42,7 @@ mod sol {
             bytes data;
         }
 
-        struct ExecuteBatch {
+        struct Batch {
             Call[] calls;
             uint256 nonce;
         }
@@ -60,13 +65,14 @@ impl<P: Provider> SimpleDelegate<P> {
     /// Creates a new `SimpleDelegate` instance.
     ///
     /// # Errors
-    /// Returns an error if the signer is not authorized to act as a delegate for the given address.
-    pub async fn new_with_delegate(
+    /// Returns an error if the signer's code is not delegated to the implementation
+    /// address or if there is an RPC error.
+    pub async fn new_with_implementation(
         signer: PrivateKeySigner,
+        implementation: Address,
         provider: P,
-        delegate: Address,
     ) -> Result<Self, SimpleDelegateError> {
-        if !Self::authorized(signer.address(), delegate, &provider).await? {
+        if !is_delegated(signer.address(), implementation, &provider).await? {
             return Err(SimpleDelegateError::NotAuthorized);
         }
 
@@ -78,37 +84,27 @@ impl<P: Provider> SimpleDelegate<P> {
         })
     }
 
-    /// Returns a signed 7702 authorization for the given delegate address.
+    /// Returns a signed 7702 authorization for the given implementation address.
     ///
     /// # Errors
     /// Returns an error if an RPC error occurs or if the signer fails to sign
     /// the authorization.
-    pub async fn authorize_delegate(
+    pub async fn authorize_implementation(
         signer: &PrivateKeySigner,
         nonce: u64,
         provider: &P,
-        delegate: Address,
+        implementation: Address,
     ) -> Result<SignedAuthorization, SimpleDelegateError> {
         let chain_id = provider.get_chain_id().await?;
 
         let authorization = Authorization {
             chain_id: U256::from(chain_id),
-            address: delegate,
+            address: implementation,
             nonce,
         };
 
         let signature = signer.sign_hash(&authorization.signature_hash()).await?;
         Ok(authorization.into_signed(signature))
-    }
-
-    pub async fn authorized(
-        address: Address,
-        expected: Address,
-        provider: &P,
-    ) -> Result<bool, SimpleDelegateError> {
-        let code = provider.get_code_at(address).await?;
-        let expected = delegation_code(expected);
-        Ok(code == expected)
     }
 
     pub fn address(&self) -> Address {
@@ -126,7 +122,7 @@ impl<P: Provider> SimpleDelegate<P> {
             })
             .collect();
 
-        let batch = sol::ExecuteBatch {
+        let batch = sol::Batch {
             calls: calls.clone(),
             nonce: self.nonce().await?,
         };
@@ -169,9 +165,23 @@ impl<P: Provider> SimpleDelegate<P> {
     }
 }
 
-fn delegation_code(delegate: Address) -> Bytes {
+/// Returns whether the given address is delegated to act as the implementation
+/// for the given delegator.
+pub async fn is_delegated<P: Provider>(
+    delegator: Address,
+    implementation: Address,
+    provider: &P,
+) -> Result<bool, SimpleDelegateError> {
+    let code = provider.get_code_at(delegator).await?;
+    let expected = delegation_designator_code(implementation);
+    Ok(code == expected)
+}
+
+/// Builds the EIP-7702 delegation designator bytecode that an EOA installs
+/// on itself to delegate execution to `implementation`.
+fn delegation_designator_code(implementation: Address) -> Bytes {
     let mut code = Vec::with_capacity(23);
     code.extend_from_slice(&EIP7702_DELEGATION_DESIGNATOR);
-    code.extend_from_slice(delegate.as_slice());
+    code.extend_from_slice(implementation.as_slice());
     Bytes::from(code)
 }
