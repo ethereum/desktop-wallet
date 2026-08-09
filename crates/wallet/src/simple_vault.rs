@@ -5,15 +5,13 @@ use alloy::{
     signers::local::PrivateKeySigner,
     sol_types::SolCall,
 };
-
-use crate::{
+use ethereum_desktop_wallet_core::{
+    asset::AssetId,
     call::Call,
-    profile::{
-        AssetId, VaultId,
-        vault::{Vault, VaultError},
-    },
-    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
+    vault::{Vault, VaultError, VaultId},
 };
+
+use crate::simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError};
 
 pub struct SimpleVault<P: Provider> {
     delegate: SimpleDelegate<P>,

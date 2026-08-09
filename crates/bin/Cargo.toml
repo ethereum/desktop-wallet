@@ -8,5 +8,5 @@ name = "ethereum-desktop-wallet"
 peth = "src/main.rs"
 
 [dependencies]
-tracing = "0.1"
-thiserror = "2"
+tracing = { workspace = true }
+thiserror = { workspace = true }

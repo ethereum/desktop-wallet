@@ -3,20 +3,19 @@ use alloy::{
     network::{
         EthereumWallet, NetworkTransactionBuilder, TransactionBuilder, TransactionBuilder7702,
     },
-    primitives::Address,
+    primitives::{Address, B256},
     providers::Provider,
-    rpc::types::{TransactionReceipt, TransactionRequest},
+    rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
+};
+use ethereum_desktop_wallet_core::{
+    call::Call,
+    executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},
 };
 use tracing::info;
 
-use crate::{
-    call::Call,
-    profile::{
-        ExecutorId,
-        executor::{Executor, ExecutorError},
-    },
-    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated},
+use crate::simple_delegate::{
+    SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated,
 };
 
 pub struct SimpleExecutor<P: Provider> {
@@ -67,6 +66,7 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
             provider.clone(),
         )
         .await?;
+
         let wallet = EthereumWallet::new(signer);
         Ok(Self {
             delegate,
@@ -91,7 +91,7 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
             "Authorization missing for delegate {implementation:} and signer {delegator:}, authorizing...",
         );
 
-        //? nonce + 1 to account for the authorization transaction itself
+        //? nonce + 1 to account for the authorization transaction
         let nonce = provider.get_transaction_count(signer.address()).await? + 1;
         let auth =
             SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
@@ -103,7 +103,11 @@ impl<P: Provider + Clone> SimpleExecutor<P> {
         let wallet = EthereumWallet::new(signer.clone());
         let envelope = fill_and_sign(tx, provider, &wallet).await?;
 
-        let _ = send_signed(envelope, provider).await?;
+        let _ = provider
+            .send_tx_envelope(envelope)
+            .await?
+            .get_receipt()
+            .await?;
         Ok(())
     }
 }
@@ -118,14 +122,30 @@ impl<P: Provider> Executor for SimpleExecutor<P> {
         self.delegate.address()
     }
 
-    async fn execute(&self, calls: &[Call]) -> Result<(), ExecutorError> {
-        self.send(calls).await?;
-        Ok(())
+    async fn execute(&self, calls: &[Call]) -> Result<CallId, ExecutorError> {
+        let txhash = self.send(calls).await?;
+        Ok(CallId(txhash))
+    }
+
+    async fn receipt(&self, id: CallId) -> Result<Option<CallReceipt>, ExecutorError> {
+        let hash = id.0;
+        let receipt = self
+            .provider
+            .get_transaction_receipt(hash)
+            .await
+            .map_err(|e| ExecutorError::Inner(Box::new(e)))?;
+
+        let Some(_receipt) = receipt else {
+            return Ok(None);
+        };
+
+        // TODO
+        Ok(Some(CallReceipt))
     }
 }
 
 impl<P: Provider> SimpleExecutor<P> {
-    async fn send(&self, calls: &[Call]) -> Result<(), SimpleExecutorError> {
+    async fn send(&self, calls: &[Call]) -> Result<B256, SimpleExecutorError> {
         let call = self.delegate.batch_calls(calls).await?;
 
         let tx = TransactionRequest::default()
@@ -135,8 +155,8 @@ impl<P: Provider> SimpleExecutor<P> {
         let envelope = fill_and_sign(tx, &self.provider, &self.wallet).await?;
         dbg!(&envelope);
 
-        let _ = send_signed(envelope, &self.provider).await?;
-        Ok(())
+        let pending_tx = self.provider.send_tx_envelope(envelope).await?;
+        Ok(*pending_tx.tx_hash())
     }
 }
 
@@ -165,23 +185,6 @@ async fn fill_and_sign<P: Provider>(
 
     let tx_envelope = tx.build(wallet).await?;
     Ok(tx_envelope)
-}
-
-async fn send_signed<P: Provider>(
-    envelope: TxEnvelope,
-    provider: &P,
-) -> Result<TransactionReceipt, SimpleExecutorError> {
-    let receipt = provider
-        .send_tx_envelope(envelope)
-        .await?
-        .get_receipt()
-        .await?;
-
-    if !receipt.status() {
-        return Err(SimpleExecutorError::TransactionFailed);
-    }
-
-    Ok(receipt)
 }
 
 impl From<SimpleExecutorError> for ExecutorError {

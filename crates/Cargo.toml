@@ -1,6 +1,17 @@
 [workspace]
-members = ["bin", "core"]
+members = ["bin", "core", "wallet"]
 resolver = "2"
+
+[workspace.dependencies]
+async-trait = "0.1"
+# Alloy pinned since 2.3.0 has some dependency fetching issues. Update once resolved
+alloy = { version = "=2.2.0" }
+futures = "0.3"
+thiserror = "2"
+tracing = "0.1"
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ethereum-desktop-wallet-core = { path = "core" }
 
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }

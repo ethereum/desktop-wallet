@@ -7,11 +7,12 @@ use alloy::{
     signers::local::PrivateKeySigner,
     sol,
 };
-use ethereum_desktop_wallet_core::profile::{
-    AssetId, VaultId,
-    executor::{Executor, simple::SimpleExecutor},
-    vault::{Vault, simple::SimpleVault},
+use ethereum_desktop_wallet_core::{
+    asset::AssetId,
+    executor::Executor,
+    vault::{Vault, VaultId},
 };
+use ethereum_desktop_wallet_wallet::{simple_executor::SimpleExecutor, simple_vault::SimpleVault};
 use tracing::info;
 
 sol!(

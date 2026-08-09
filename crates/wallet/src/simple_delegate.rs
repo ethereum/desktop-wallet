@@ -6,8 +6,7 @@ use alloy::{
     signers::{Signer, local::PrivateKeySigner},
     sol_types::{SolCall, eip712_domain},
 };
-
-use crate::call::Call;
+use ethereum_desktop_wallet_core::call::Call;
 
 /// `SimpleDelegate` is a 7702-compatible delegate contract loosely based on Safe's
 /// [`SafeLite`](https://github.com/5afe/safe-eip7702/blob/main/safe-eip7702-contracts/contracts/experimental/SafeLite.sol)

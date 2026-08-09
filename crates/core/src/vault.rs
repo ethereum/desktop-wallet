@@ -1,24 +1,18 @@
 use alloy::primitives::{Address, U256};
 
-use crate::{
-    call::Call,
-    profile::{AssetId, VaultId},
-};
+use crate::{asset::AssetId, call::Call};
 
-pub mod simple;
-
-#[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub enum VaultError {
-    #[error("Unsupported vault id: {0:?}")]
-    UnsupportedVaultId(VaultId),
-    #[error(transparent)]
-    Inner(Box<dyn std::error::Error + Send + Sync>),
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum VaultId {
+    Address(Address),
 }
 
+/// A trait representing a store of assets. Assets can be deposited into and withdrawn from a vault,
+/// and the vault can track the total balance of assets it holds.
 #[async_trait::async_trait]
 pub trait Vault: Send + Sync {
     fn id(&self) -> VaultId;
+
     /// Returns the total balance of the given asset in the vault.
     async fn balance(&self, asset: &AssetId) -> Result<U256, VaultError>;
 
@@ -39,4 +33,13 @@ pub trait Vault: Send + Sync {
         asset: &AssetId,
         amount: U256,
     ) -> Result<Vec<Call>, VaultError>;
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub enum VaultError {
+    #[error("Unsupported vault id: {0:?}")]
+    UnsupportedVaultId(VaultId),
+    #[error(transparent)]
+    Inner(Box<dyn std::error::Error + Send + Sync>),
 }

@@ -1,0 +1,21 @@
+[package]
+name = "ethereum-desktop-wallet-wallet"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+async-trait = { workspace = true }
+alloy = { workspace = true, features = ["eip712"] }
+futures = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ethereum-desktop-wallet-core = { workspace = true }
+
+[dev-dependencies]
+alloy = { workspace = true, features = ["node-bindings"] }
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+
+[lints]
+workspace = true
