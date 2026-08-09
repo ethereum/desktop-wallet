@@ -3,15 +3,25 @@ members = ["bin", "core", "wallet"]
 resolver = "2"
 
 [workspace.dependencies]
+alloy-consensus = "2.3.0"
+alloy-contract = "2.3.0"
+alloy-eips = "2.3.0"
+alloy-network = "2.3.0"
+alloy-node-bindings = "2.3.0"
+alloy-primitives = "1.6.1"
+alloy-provider = "2.3.0"
+alloy-rpc-types-eth = "2.3.0"
+alloy-signer = "2.3.0"
+alloy-signer-local = "2.3.0"
+alloy-sol-types = "1.6.1"
+alloy-transport = "2.3.0"
 async-trait = "0.1"
-# Alloy pinned since 2.3.0 has some dependency fetching issues. Update once resolved
-alloy = { version = "=2.2.0" }
+ethereum-desktop-wallet-core = { path = "core" }
 futures = "0.3"
 thiserror = "2"
-tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ethereum-desktop-wallet-core = { path = "core" }
 
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }

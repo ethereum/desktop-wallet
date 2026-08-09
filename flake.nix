@@ -39,6 +39,8 @@
             rustToolchain
             rust-analyzer
             bacon
+            cargo-autoinherit
+            cargo-sort
 
             foundry
 
