@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use alloy_primitives::U256;
 use ethereum_desktop_wallet_core::{
     asset::AssetId,
@@ -10,13 +8,13 @@ use ethereum_desktop_wallet_core::{
 use futures::future::try_join_all;
 
 pub struct SimpleProfile {
-    pub default_executor: Arc<dyn Executor>,
-    pub executors: Vec<Arc<dyn Executor>>,
-    pub vaults: Vec<Arc<dyn Vault>>,
+    pub default_executor: Box<dyn Executor>,
+    pub executors: Vec<Box<dyn Executor>>,
+    pub vaults: Vec<Box<dyn Vault>>,
 }
 
 impl SimpleProfile {
-    pub fn new(executor: Arc<dyn Executor>, vaults: Vec<Arc<dyn Vault>>) -> Self {
+    pub fn new(executor: Box<dyn Executor>, vaults: Vec<Box<dyn Vault>>) -> Self {
         Self {
             default_executor: executor,
             executors: vec![],
@@ -28,11 +26,11 @@ impl SimpleProfile {
 #[async_trait::async_trait]
 impl Profile for SimpleProfile {
     fn add_executor(&mut self, executor: impl Executor + 'static) {
-        self.executors.push(Arc::new(executor));
+        self.executors.push(Box::new(executor));
     }
 
     fn add_vault(&mut self, vault: impl Vault + 'static) {
-        self.vaults.push(Arc::new(vault));
+        self.vaults.push(Box::new(vault));
     }
 
     async fn balance(&self, asset: AssetId) -> Result<U256, ProfileError> {
