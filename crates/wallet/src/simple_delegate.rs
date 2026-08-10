@@ -43,7 +43,7 @@ mod sol {
             bytes data;
         }
 
-        struct Batch {
+        struct ExecuteBatch {
             Call[] calls;
             uint256 nonce;
         }
@@ -128,7 +128,7 @@ impl<S: Signer> SimpleDelegate<S> {
             })
             .collect();
 
-        let batch = sol::Batch {
+        let batch = sol::ExecuteBatch {
             calls: calls.clone(),
             nonce: self.nonce().await?,
         };

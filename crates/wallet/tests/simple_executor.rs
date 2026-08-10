@@ -25,7 +25,7 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        // .with_test_writer()
+        .with_test_writer()
         .init();
 
     let anvil = Anvil::new().spawn();
