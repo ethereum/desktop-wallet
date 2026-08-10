@@ -3,13 +3,13 @@ pragma solidity ^0.8.26;
 
 import "@openzeppelin-contracts-5.7.0/utils/cryptography/EIP712.sol";
 
-contract SimpleDelegate is EIP712 {
-    struct Call {
-        address target;
-        uint256 value;
-        bytes data;
-    }
+struct Call {
+    address target;
+    uint256 value;
+    bytes data;
+}
 
+contract SimpleDelegate is EIP712 {
     /// @custom:storage-location erc7201:simple_delegate.main
     struct Storage {
         uint256 nonce;
