@@ -8,8 +8,8 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 alloy-primitives = { workspace = true, features = ["serde"] }
 alloy-provider = { workspace = true }
-inventory = "0.3.24"
-serde = "1.0.229"
+inventory = { workspace = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true

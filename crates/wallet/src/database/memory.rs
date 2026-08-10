@@ -12,6 +12,7 @@ pub struct MemoryDatabase {
 pub struct MemoryDatabaseError;
 
 impl MemoryDatabase {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

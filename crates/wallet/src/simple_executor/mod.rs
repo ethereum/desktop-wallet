@@ -49,7 +49,7 @@ pub enum SimpleExecutorError {
     TransactionFailed,
 }
 
-const SIMPLE_EXECUTOR_TAG: &'static str = "simple-executor";
+const SIMPLE_EXECUTOR_TAG: &str = "simple-executor";
 
 inventory::submit! {
     Factory::new(SIMPLE_EXECUTOR_TAG, |ctx: BuildContext| {
@@ -85,7 +85,7 @@ impl SimpleExecutor {
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleExecutorError> {
         Self::authorize_if_missing(implementation, &signer, provider.as_ref()).await?;
-        db.put_signing_key(&signer.credential()).await?;
+        db.put_signing_key(signer.credential()).await?;
         db.put_implementation(&implementation).await?;
 
         let delegate = SimpleDelegate::new_with_implementation(

@@ -56,7 +56,7 @@ mod sol {
     );
 }
 
-const SIMPLE_VAULT_TAG: &'static str = "simple-vault";
+const SIMPLE_VAULT_TAG: &str = "simple-vault";
 
 inventory::submit! {
     Factory::new(SIMPLE_VAULT_TAG, |ctx: BuildContext| {

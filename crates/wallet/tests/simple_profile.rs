@@ -51,8 +51,10 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
 
     //? Construct a profile with a default executor. `SimpleExecutor` authorizes
     //? itself, so no sponsor transaction is needed here.
-    let mut profile =
-        SimpleProfile::new(provider.clone(), db.clone(), |ctx: BuildContext| async move {
+    let mut profile = SimpleProfile::new(
+        provider.clone(),
+        db.clone(),
+        |ctx: BuildContext| async move {
             SimpleExecutor::new_with_implementation(
                 executor_signer,
                 implementation,
@@ -60,8 +62,9 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
                 ctx.db,
             )
             .await
-        })
-        .await?;
+        },
+    )
+    .await?;
     info!(
         "Created profile with default executor {:?}",
         profile.default_executor.1.id()

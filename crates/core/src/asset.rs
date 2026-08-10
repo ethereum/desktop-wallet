@@ -7,10 +7,12 @@ pub enum AssetId {
 }
 
 impl AssetId {
+    #[must_use]
     pub fn native() -> Self {
         AssetId::Native
     }
 
+    #[must_use]
     pub fn erc20(address: Address) -> Self {
         AssetId::Erc20(address)
     }

@@ -14,7 +14,7 @@ pub struct CallId(pub B256);
 
 /// A receipt for a [`Call`] that has been executed.
 ///
-/// TODO: Decide whether / how we want to merge UserOperation receipts with
+/// TODO: Decide whether / how we want to merge `UserOperation` receipts with
 /// Transaction receipts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CallReceipt;
