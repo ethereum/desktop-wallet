@@ -15,10 +15,10 @@ use ethereum_desktop_wallet_core::call::Call;
 /// contract. An address can authorize the `SimpleDelegate` contract with a 7702
 /// authorization, then execute signed batches of calls. This is used for atomic
 /// execution of multiple calls and gasless execution for the signer.
-pub struct SimpleDelegate<P: Provider> {
+pub struct SimpleDelegate<S: Signer> {
     chain_id: u64,
-    signer: Arc<dyn Signer + Send + Sync>,
-    provider: P,
+    signer: S,
+    provider: Arc<dyn Provider>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,23 +62,22 @@ mod sol {
 
 pub const SIMPLE_DELEGATE_ADDRESS: Address = address!("0xACAe14c5d84EA4a1ddb84bFbDc1a62796677ACcA");
 
-impl<P: Provider> SimpleDelegate<P> {
+impl<S: Signer> SimpleDelegate<S> {
     /// Creates a new `SimpleDelegate` instance.
     ///
     /// # Errors
     /// Returns an error if the signer's code is not delegated to the implementation
     /// address or if there is an RPC error.
     pub async fn new_with_implementation(
-        signer: impl Signer + Send + Sync + 'static,
+        signer: S,
         implementation: Address,
-        provider: P,
+        provider: Arc<dyn Provider>,
     ) -> Result<Self, SimpleDelegateError> {
-        if !is_delegated(signer.address(), implementation, &provider).await? {
+        if !is_delegated(signer.address(), implementation, provider.as_ref()).await? {
             return Err(SimpleDelegateError::NotAuthorized);
         }
 
         let chain_id = provider.get_chain_id().await?;
-        let signer = Arc::new(signer);
         Ok(Self {
             chain_id,
             signer,
@@ -92,9 +91,9 @@ impl<P: Provider> SimpleDelegate<P> {
     /// Returns an error if an RPC error occurs or if the signer fails to sign
     /// the authorization.
     pub async fn authorize_implementation(
-        signer: &impl Signer,
+        signer: &S,
         nonce: u64,
-        provider: &P,
+        provider: &dyn Provider,
         implementation: Address,
     ) -> Result<SignedAuthorization, SimpleDelegateError> {
         let chain_id = provider.get_chain_id().await?;
@@ -111,6 +110,10 @@ impl<P: Provider> SimpleDelegate<P> {
 
     pub fn address(&self) -> Address {
         self.signer.address()
+    }
+
+    pub fn signer(&self) -> &S {
+        &self.signer
     }
 
     /// Signs a batch of calls to be executed by the `SimpleVault` contract. Returns
@@ -171,10 +174,10 @@ impl<P: Provider> SimpleDelegate<P> {
 
 /// Returns whether the given address is delegated to act as the implementation
 /// for the given delegator.
-pub async fn is_delegated<P: Provider>(
+pub async fn is_delegated(
     delegator: Address,
     implementation: Address,
-    provider: &P,
+    provider: &dyn Provider,
 ) -> Result<bool, SimpleDelegateError> {
     let code = provider.get_code_at(delegator).await?;
     let expected = delegation_designator_code(implementation);

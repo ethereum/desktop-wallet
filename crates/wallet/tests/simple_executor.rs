@@ -1,10 +1,14 @@
+use std::sync::Arc;
+
 use alloy_node_bindings::Anvil;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::sol;
 use ethereum_desktop_wallet_core::{call::Call, executor::Executor};
-use ethereum_desktop_wallet_wallet::simple_executor::SimpleExecutor;
+use ethereum_desktop_wallet_wallet::{
+    database::memory::MemoryDatabase, simple_executor::SimpleExecutor,
+};
 use tracing::info;
 
 sol!(
@@ -21,7 +25,7 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_test_writer()
+        // .with_test_writer()
         .init();
 
     let anvil = Anvil::new().spawn();
@@ -29,10 +33,11 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     let signer = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
     let executor_signer = PrivateKeySigner::from_slice(&anvil.nth_key(1).unwrap().to_bytes())?;
 
-    let provider = ProviderBuilder::new()
-        .wallet(signer.clone())
-        .connect_http(rpc_url.parse()?)
-        .erased();
+    let provider = Arc::new(
+        ProviderBuilder::new()
+            .wallet(signer.clone())
+            .connect_http(rpc_url.parse()?),
+    );
 
     //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
@@ -47,6 +52,7 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
         executor_signer.clone(),
         delegate_address,
         provider.clone(),
+        Arc::new(MemoryDatabase::default()),
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());

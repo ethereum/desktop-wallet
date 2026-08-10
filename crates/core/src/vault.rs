@@ -1,8 +1,9 @@
 use alloy_primitives::{Address, U256};
+use serde::{Deserialize, Serialize};
 
 use crate::{asset::AssetId, call::Call};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VaultId {
     Address(Address),
 }
@@ -11,6 +12,7 @@ pub enum VaultId {
 /// and the vault can track the total balance of assets it holds.
 #[async_trait::async_trait]
 pub trait Vault: Send + Sync {
+    fn tag(&self) -> &'static str;
     fn id(&self) -> VaultId;
 
     /// Returns the total balance of the given asset in the vault.
@@ -38,8 +40,16 @@ pub trait Vault: Send + Sync {
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 pub enum VaultError {
-    #[error("Unsupported vault id: {0:?}")]
+    #[error("unsupported vault id: {0:?}")]
     UnsupportedVaultId(VaultId),
     #[error(transparent)]
-    Inner(Box<dyn std::error::Error + Send + Sync>),
+    Other(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for VaultId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VaultId::Address(addr) => write!(f, "addr:{addr:}"),
+        }
+    }
 }

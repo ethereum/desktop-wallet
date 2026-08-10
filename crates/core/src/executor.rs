@@ -1,8 +1,9 @@
 use alloy_primitives::{Address, B256};
+use serde::{Deserialize, Serialize};
 
 use crate::call::Call;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExecutorId {
     Address(Address),
 }
@@ -21,6 +22,7 @@ pub struct CallReceipt;
 /// A trait representing an address that can execute [`Call`]s.
 #[async_trait::async_trait]
 pub trait Executor: Send + Sync {
+    fn tag(&self) -> &'static str;
     fn id(&self) -> ExecutorId;
     fn address(&self) -> Address;
 
@@ -38,8 +40,15 @@ pub trait Executor: Send + Sync {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error(transparent)]
 pub enum ExecutorError {
     #[error(transparent)]
-    Inner(Box<dyn std::error::Error + Send + Sync>),
+    Other(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for ExecutorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecutorId::Address(addr) => write!(f, "addr:{addr:}"),
+        }
+    }
 }

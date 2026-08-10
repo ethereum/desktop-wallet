@@ -1,28 +1,41 @@
+use std::sync::Arc;
+
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
-use alloy_signer::Signer;
+use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::SolCall;
 use ethereum_desktop_wallet_core::{
     asset::AssetId,
     call::Call,
+    database::Database,
+    factory::{BuildContext, Factory, FactoryError},
     vault::{Vault, VaultError, VaultId},
 };
 
-use crate::simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError};
+use crate::{
+    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
+    simple_vault::db::{SimpleVaultDatabaseError, SimpleVaultDb},
+};
+
+mod db;
 
 /// `SimpleVault` is a basic [`Vault`] implementation that uses a signer-based wallet
 /// to store and transfer assets through its address. It uses the`SimpleDelegate`
 /// contract to allow the signer to authorize vault transactions for withdrawals.
-pub struct SimpleVault<P: Provider> {
-    delegate: SimpleDelegate<P>,
-    provider: P,
+pub struct SimpleVault {
+    delegate: SimpleDelegate<PrivateKeySigner>,
+    provider: Arc<dyn Provider>,
+    #[allow(unused)]
+    db: Arc<dyn Database>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum SimpleVaultError {
     #[error(transparent)]
     Delegate(#[from] SimpleDelegateError),
+    #[error("database error: {0}")]
+    Database(#[from] SimpleVaultDatabaseError),
     #[error("address not authorized")]
     NotAuthorized,
     #[error("RPC error: {0}")]
@@ -43,17 +56,28 @@ mod sol {
     );
 }
 
-impl<P: Provider + Clone> SimpleVault<P> {
+const SIMPLE_VAULT_TAG: &'static str = "simple-vault";
+
+inventory::submit! {
+    Factory::new(SIMPLE_VAULT_TAG, |ctx: BuildContext| {
+        Box::pin(async move {
+            SimpleVault::from_context(ctx).await.map_err(|e| FactoryError::Other(Box::new(e)))
+        })
+    })
+}
+
+impl SimpleVault {
     /// Creates a new `SimpleVault` instance with the given signer and provider.
     ///
     /// # Errors
     /// Returns an error if the signer's address is not delegated to the `SimpleVault`
     /// implementation contract.
     pub async fn new(
-        signer: impl Signer + Send + Sync + 'static,
-        provider: P,
+        signer: PrivateKeySigner,
+        provider: Arc<dyn Provider>,
+        db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
-        Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
+        Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider, db).await
     }
 
     /// Returns a 7702 delegation authorization for the `SimpleVault` contract. If the
@@ -62,10 +86,25 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// # Errors
     /// Returns an error if an RPC call fails or if the authorization cannot be signed.
     pub async fn authorization(
-        signer: &impl Signer,
-        provider: &P,
+        signer: &PrivateKeySigner,
+        provider: &dyn Provider,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         Self::authorize_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
+    }
+
+    /// Creates a new `SimpleVault` instance from the given context.
+    ///
+    /// # Errors
+    /// Errors if the signer cannot be retrieved from the database or if the `SimpleVault` cannot
+    /// be created (see [`SimpleVault::new`]).
+    pub async fn from_context(ctx: BuildContext) -> Result<Box<dyn Vault>, SimpleVaultError> {
+        let provider = ctx.provider;
+        let db = ctx.db;
+
+        let signing_key = db.get_signing_key().await?;
+        let signer = PrivateKeySigner::from_signing_key(signing_key);
+        let vault = SimpleVault::new(signer, provider, db).await?;
+        Ok(Box::new(vault))
     }
 
     /// Creates a new `SimpleVault` instance.
@@ -74,14 +113,21 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// Returns an error if the signer's code is not delegated to the implementation
     /// address or if there is an RPC error.
     pub async fn new_with_implementation(
-        signer: impl Signer + Send + Sync + 'static,
+        signer: PrivateKeySigner,
         implementation: Address,
-        provider: P,
+        provider: Arc<dyn Provider>,
+        db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
         let delegate =
             SimpleDelegate::new_with_implementation(signer, implementation, provider.clone())
                 .await?;
-        Ok(Self { delegate, provider })
+
+        db.put_signing_key(delegate.signer().credential()).await?;
+        Ok(Self {
+            delegate,
+            provider,
+            db,
+        })
     }
 
     /// Submits the 7702 authorization transaction on-chain if the delegate is not already authorized
@@ -90,9 +136,9 @@ impl<P: Provider + Clone> SimpleVault<P> {
     /// # Errors
     /// Returns an error if there is an RPC error or if the authorization cannot be signed.
     pub async fn authorize_implementation(
-        signer: &impl Signer,
+        signer: &PrivateKeySigner,
         implementation: Address,
-        provider: &P,
+        provider: &dyn Provider,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         let nonce = provider.get_transaction_count(signer.address()).await?;
         let auth =
@@ -103,7 +149,11 @@ impl<P: Provider + Clone> SimpleVault<P> {
 }
 
 #[async_trait::async_trait]
-impl<P: Provider> Vault for SimpleVault<P> {
+impl Vault for SimpleVault {
+    fn tag(&self) -> &'static str {
+        SIMPLE_VAULT_TAG
+    }
+
     fn id(&self) -> VaultId {
         VaultId::Address(self.address())
     }
@@ -147,7 +197,7 @@ impl<P: Provider> Vault for SimpleVault<P> {
     }
 }
 
-impl<P: Provider> SimpleVault<P> {
+impl SimpleVault {
     fn address(&self) -> Address {
         self.delegate.address()
     }
@@ -219,6 +269,6 @@ impl<P: Provider> SimpleVault<P> {
 
 impl From<SimpleVaultError> for VaultError {
     fn from(err: SimpleVaultError) -> Self {
-        VaultError::Inner(Box::new(err))
+        VaultError::Other(Box::new(err))
     }
 }

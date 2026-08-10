@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy_network::TransactionBuilder7702;
 use alloy_node_bindings::Anvil;
 use alloy_primitives::{Address, U256};
@@ -10,7 +12,9 @@ use ethereum_desktop_wallet_core::{
     executor::Executor,
     vault::{Vault, VaultId},
 };
-use ethereum_desktop_wallet_wallet::{simple_executor::SimpleExecutor, simple_vault::SimpleVault};
+use ethereum_desktop_wallet_wallet::{
+    database::memory::MemoryDatabase, simple_executor::SimpleExecutor, simple_vault::SimpleVault,
+};
 use tracing::info;
 
 sol!(
@@ -36,31 +40,33 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let vault_signer = PrivateKeySigner::random();
     let executor_signer = PrivateKeySigner::from_slice(&anvil.nth_key(1).unwrap().to_bytes())?;
 
-    let provider = ProviderBuilder::new()
-        .wallet(signer.clone())
-        .connect_http(rpc_url.parse()?)
-        .erased();
+    let provider = Arc::new(
+        ProviderBuilder::new()
+            .wallet(signer.clone())
+            .connect_http(rpc_url.parse()?),
+    );
 
     //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
-    let delegate_address = *delegate_contract.address();
+    let implementation_addr = *delegate_contract.address();
     info!(
         "Deployed SimpleDelegate contract at: {:?}",
-        delegate_address
+        implementation_addr
     );
 
     //? Create SimpleExecutor
     let executor = SimpleExecutor::new_with_implementation(
         executor_signer.clone(),
-        delegate_address,
+        implementation_addr,
         provider.clone(),
+        Arc::new(MemoryDatabase::default()),
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());
 
     //? Create and authorize SimpleVault
-    let auth =
-        SimpleVault::authorize_implementation(&vault_signer, delegate_address, &provider).await?;
+    let auth = SimpleVault::authorize_implementation(&vault_signer, implementation_addr, &provider)
+        .await?;
 
     let tx = TransactionRequest::default()
         .to(signer.address())
@@ -68,9 +74,13 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     provider.send_transaction(tx).await?.get_receipt().await?;
     info!("Authorized SimpleVault");
 
-    let vault =
-        SimpleVault::new_with_implementation(vault_signer, delegate_address, provider.clone())
-            .await?;
+    let vault = SimpleVault::new_with_implementation(
+        vault_signer,
+        implementation_addr,
+        provider.clone(),
+        Arc::new(MemoryDatabase::default()),
+    )
+    .await?;
     info!("Created SimpleVault with ID {:?}", vault.id());
 
     //? Deposit into the vault
