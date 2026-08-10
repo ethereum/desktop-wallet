@@ -86,6 +86,7 @@ impl SimpleExecutor {
     ) -> Result<Self, SimpleExecutorError> {
         Self::authorize_if_missing(implementation, &signer, provider.as_ref()).await?;
         db.put_signing_key(&signer.credential()).await?;
+        db.put_implementation(&implementation).await?;
 
         let delegate = SimpleDelegate::new_with_implementation(
             signer.clone(),
@@ -114,7 +115,9 @@ impl SimpleExecutor {
 
         let signing_key = db.get_signing_key().await?;
         let signer = PrivateKeySigner::from_signing_key(signing_key);
-        let executor = SimpleExecutor::new(signer, provider, db).await?;
+        let implementation = db.get_implementation().await?;
+        let executor =
+            SimpleExecutor::new_with_implementation(signer, implementation, provider, db).await?;
         Ok(Box::new(executor))
     }
 

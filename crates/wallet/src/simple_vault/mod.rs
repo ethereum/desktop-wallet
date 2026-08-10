@@ -103,7 +103,9 @@ impl SimpleVault {
 
         let signing_key = db.get_signing_key().await?;
         let signer = PrivateKeySigner::from_signing_key(signing_key);
-        let vault = SimpleVault::new(signer, provider, db).await?;
+        let implementation = db.get_implementation().await?;
+        let vault =
+            SimpleVault::new_with_implementation(signer, implementation, provider, db).await?;
         Ok(Box::new(vault))
     }
 
@@ -123,6 +125,7 @@ impl SimpleVault {
                 .await?;
 
         db.put_signing_key(delegate.signer().credential()).await?;
+        db.put_implementation(&implementation).await?;
         Ok(Self {
             delegate,
             provider,

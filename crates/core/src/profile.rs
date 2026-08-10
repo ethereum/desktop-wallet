@@ -1,13 +1,26 @@
+use std::future::Future;
+
 use alloy_primitives::U256;
 
-use crate::{asset::AssetId, executor::Executor, vault::Vault};
+use crate::{
+    asset::AssetId,
+    factory::BuildContext,
+    vault::{Vault, VaultError},
+};
 
-/// A trait representing a wallet that manages multiple vaults and executors.
+/// A trait representing a wallet with a default executor and multiple vaults.
+///
+/// `add_vault` takes a constructor so the [`Profile`] can resolve the
+/// [`BuildContext`] before construction starts, making any adjustments to the
+/// context as needed.
 #[async_trait::async_trait]
 pub trait Profile {
-    async fn add_vault(&mut self, vault: impl Vault + 'static) -> Result<(), ProfileError>;
-    async fn add_executor(&mut self, executor: impl Executor + 'static)
-    -> Result<(), ProfileError>;
+    async fn add_vault<V, E, F, Fut>(&mut self, ctor: F) -> Result<(), ProfileError>
+    where
+        V: Vault + 'static,
+        E: Into<VaultError>,
+        F: FnOnce(BuildContext) -> Fut + Send,
+        Fut: Future<Output = Result<V, E>> + Send;
 
     async fn balance(&self, asset: AssetId) -> Result<U256, ProfileError>;
 }
