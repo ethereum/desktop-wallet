@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use ethereum_desktop_wallet_core::database::{Database, DatabaseError};
+use edw_core::database::{Database, DatabaseError};
 
 #[derive(Default)]
 pub struct MemoryDatabase {

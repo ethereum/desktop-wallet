@@ -7,12 +7,12 @@ use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::sol;
-use ethereum_desktop_wallet_core::{
+use edw_core::{
     asset::AssetId,
     executor::Executor,
     vault::{Vault, VaultId},
 };
-use ethereum_desktop_wallet_wallet::{
+use edw_wallet::{
     database::memory::MemoryDatabase, simple_executor::SimpleExecutor, simple_vault::SimpleVault,
 };
 use tracing::info;

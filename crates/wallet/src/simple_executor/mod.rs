@@ -8,7 +8,7 @@ use alloy_primitives::{Address, B256};
 use alloy_provider::{Provider, network::EthereumWallet};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
-use ethereum_desktop_wallet_core::{
+use edw_core::{
     call::Call,
     database::Database,
     executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},

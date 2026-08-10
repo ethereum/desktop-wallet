@@ -6,8 +6,8 @@ use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::sol;
-use ethereum_desktop_wallet_core::{database::Database, factory::BuildContext, profile::Profile};
-use ethereum_desktop_wallet_wallet::{
+use edw_core::{database::Database, factory::BuildContext, profile::Profile};
+use edw_wallet::{
     database::memory::MemoryDatabase, simple_executor::SimpleExecutor,
     simple_profile::SimpleProfile, simple_vault::SimpleVault,
 };

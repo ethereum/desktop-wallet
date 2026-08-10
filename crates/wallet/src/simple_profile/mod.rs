@@ -2,7 +2,7 @@ use std::{future::Future, sync::Arc};
 
 use alloy_primitives::U256;
 use alloy_provider::Provider;
-use ethereum_desktop_wallet_core::{
+use edw_core::{
     asset::AssetId,
     database::Database,
     executor::{Executor, ExecutorError},

@@ -1,5 +1,5 @@
 [package]
-name = "ethereum-desktop-wallet-core"
+name = "edw-core"
 version = "0.0.1"
 edition = "2024"
 

@@ -1,5 +1,5 @@
 [package]
-name = "ethereum-desktop-wallet-wallet"
+name = "edw-wallet"
 version = "0.0.1"
 edition = "2024"
 
@@ -8,7 +8,7 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-ethereum-desktop-wallet-core = { workspace = true }
+edw-core = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-signer = { workspace = true, features = ["eip712"] }
 alloy-provider = { workspace = true }

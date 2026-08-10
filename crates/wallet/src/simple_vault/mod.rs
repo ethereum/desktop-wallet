@@ -5,7 +5,7 @@ use alloy_provider::Provider;
 use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::SolCall;
-use ethereum_desktop_wallet_core::{
+use edw_core::{
     asset::AssetId,
     call::Call,
     database::Database,

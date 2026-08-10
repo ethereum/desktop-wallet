@@ -1564,6 +1564,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "edw-core"
+version = "0.0.1"
+dependencies = [
+ "alloy-primitives",
+ "alloy-provider",
+ "async-trait",
+ "inventory",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "edw-wallet"
+version = "0.0.1"
+dependencies = [
+ "alloy-consensus",
+ "alloy-contract",
+ "alloy-eips",
+ "alloy-network",
+ "alloy-node-bindings",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-rpc-types-eth",
+ "alloy-signer",
+ "alloy-signer-local",
+ "alloy-sol-types",
+ "alloy-transport",
+ "async-trait",
+ "edw-core",
+ "futures",
+ "inventory",
+ "postcard",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1646,46 +1686,6 @@ version = "0.0.1"
 dependencies = [
  "thiserror",
  "tracing",
-]
-
-[[package]]
-name = "ethereum-desktop-wallet-core"
-version = "0.0.1"
-dependencies = [
- "alloy-primitives",
- "alloy-provider",
- "async-trait",
- "inventory",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "ethereum-desktop-wallet-wallet"
-version = "0.0.1"
-dependencies = [
- "alloy-consensus",
- "alloy-contract",
- "alloy-eips",
- "alloy-network",
- "alloy-node-bindings",
- "alloy-primitives",
- "alloy-provider",
- "alloy-rpc-types-eth",
- "alloy-signer",
- "alloy-signer-local",
- "alloy-sol-types",
- "alloy-transport",
- "async-trait",
- "ethereum-desktop-wallet-core",
- "futures",
- "inventory",
- "postcard",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

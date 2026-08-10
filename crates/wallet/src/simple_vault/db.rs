@@ -1,6 +1,6 @@
 use alloy_primitives::Address;
 use alloy_signer::k256::ecdsa::SigningKey;
-use ethereum_desktop_wallet_core::database::{Database, DatabaseError};
+use edw_core::database::{Database, DatabaseError};
 
 pub trait SimpleVaultDb: Database {
     async fn get_signing_key(&self) -> Result<SigningKey, SimpleVaultDatabaseError> {
