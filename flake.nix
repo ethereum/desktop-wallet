@@ -40,6 +40,8 @@
             rust-analyzer
             bacon
 
+            foundry
+
             just
             nodejs_24
             pnpm_11
