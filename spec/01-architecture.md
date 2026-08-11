@@ -11,8 +11,8 @@
 > **Status: DRAFT** (circulating for team review). The decomposition and API below are a
 > **proposal**, offered as something concrete to react
 > to. The one firm commitment is the **invariant** (secret material never leaves the core);
-> everything else (the crate split, the API signatures, the chosen libraries, the milestone
-> tags) is a starting point for discussion, not a settled decision. Items flagged
+> everything else (the crate split, the API signatures, the chosen libraries, the release
+> scoping) is a starting point for discussion, not a settled decision. Items flagged
 > _(open for review)_ are the least settled of all.
 
 ## The one invariant
@@ -357,7 +357,7 @@ Proposed standards to adopt or adjust as the code lands:
 - **Testing:** `wallet-core` logic should carry unit tests; derivation should have committed
   known-answer vectors; user-visible flows should be driven live in the running app before
   "done."
-- **CI (M0 deliverable):** build + clippy + test on macOS/Linux/Windows; deny warnings in
+- **CI (`EDW-001`, v0.1.0):** build + clippy + test on macOS/Linux/Windows; deny warnings in
   `wallet-core`; dependency audit (`cargo audit`/`cargo deny`) given the supply-chain
   principle.
 - **Security review gate:** any PR touching keys, signing, storage, derivation, mixing, or
