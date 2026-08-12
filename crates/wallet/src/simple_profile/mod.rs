@@ -58,12 +58,14 @@ impl SimpleProfile {
             .await
             .map_err(Into::into)?;
 
-        Ok(Self {
+        let profile = Self {
             default_executor: (id, Box::new(executor)),
             vaults: vec![],
             provider,
             db,
-        })
+        };
+        profile.save().await?;
+        Ok(profile)
     }
 
     pub async fn load(
