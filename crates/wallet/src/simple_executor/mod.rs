@@ -203,7 +203,6 @@ impl SimpleExecutor {
             .value(call.value)
             .with_input(call.data);
         let envelope = fill_and_sign(tx, self.provider.as_ref(), &self.wallet).await?;
-        dbg!(&envelope);
 
         let pending_tx = self.provider.send_tx_envelope(envelope).await?;
         Ok(*pending_tx.tx_hash())
@@ -229,7 +228,6 @@ async fn fill_and_sign(
         .with_max_fee_per_gas(fees.max_fee_per_gas)
         .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas);
 
-    dbg!(&tx);
     let gas_limit = provider.estimate_gas(tx.clone()).await?;
     let tx = tx.with_gas_limit(gas_limit);
 
