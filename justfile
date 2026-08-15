@@ -2,10 +2,11 @@ default:
     just --list
 
 build:
+    cd contracts && forge soldeer install
     cd contracts && forge build
     cd crates && cargo build
 
-test:
+test: build
     cd contracts && forge test
     cd crates && cargo test
 
