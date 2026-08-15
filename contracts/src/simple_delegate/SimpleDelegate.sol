@@ -45,16 +45,16 @@ contract SimpleDelegate is EIP712 {
         bytes32 s
     ) external {
         Storage storage $ = _storage();
-        uint256 nonce = $.nonce;
+        uint256 _nonce = $.nonce;
 
-        bytes32 digest = _hashTypedDataV4(hashBatch(calls, nonce));
+        bytes32 digest = _hashTypedDataV4(hashBatch(calls, _nonce));
         address recovered = ecrecover(digest, v, r, s);
 
         if (recovered != address(this)) {
             revert InvalidSignature();
         }
 
-        $.nonce = nonce + 1;
+        $.nonce = _nonce + 1;
         for (uint256 i = 0; i < calls.length; i++) {
             (bool ok, bytes memory ret) = calls[i].target.call{
                 value: calls[i].value
@@ -73,7 +73,7 @@ contract SimpleDelegate is EIP712 {
 
     function hashBatch(
         Call[] calldata calls,
-        uint256 nonce
+        uint256 _nonce
     ) public pure returns (bytes32) {
         bytes32[] memory callHashes = new bytes32[](calls.length);
         for (uint256 i = 0; i < calls.length; i++) {
@@ -84,7 +84,7 @@ contract SimpleDelegate is EIP712 {
                 abi.encode(
                     EXECUTE_BATCH_TYPEHASH,
                     keccak256(abi.encodePacked(callHashes)),
-                    nonce
+                    _nonce
                 )
             );
     }
