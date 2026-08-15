@@ -39,6 +39,7 @@
             rustToolchain
             rust-analyzer
             bacon
+            cargo-audit
             cargo-autoinherit
             cargo-sort
 
@@ -56,7 +57,10 @@
       
         ci = pkgs.mkShell {
           packages = with pkgs; [
+            rustfmtNightly
             rustToolchain
+            cargo-audit
+            
             foundry
           ];
         };

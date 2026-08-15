@@ -11,7 +11,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: cachix/install-nix-action@v31
+    - uses: nix-community/cache-nix-action@v7
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+
+    - uses: Swatinem/rust-cache@v2
+
+    - run: nix develop .#ci --command bash -c "cd crates && cargo check --locked"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo audit"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo fmt --check"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo clippy --all-targets --all-features -- -D warnings"
+
+  test:
     strategy:
       matrix:
         build: [linux, macos]
@@ -37,6 +54,5 @@ jobs:
 
     - run: nix develop .#ci --command bash -c "cd contracts && forge soldeer install"
     - run: nix develop .#ci --command bash -c "cd contracts && forge test"
-    - run: nix develop .#ci --command bash -c "cd crates && cargo check"
     - run: nix develop .#ci --command bash -c "cd crates && cargo test"
     - run: nix develop .#ci --command bash -c "cd crates && cargo test -- --ignored"
