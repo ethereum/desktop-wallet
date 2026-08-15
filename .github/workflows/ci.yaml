@@ -22,6 +22,8 @@ jobs:
         primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
 
     - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "crates"
 
     - run: nix develop .#ci --command bash -c "cd contracts && forge soldeer install"
     - run: nix develop .#ci --command bash -c "cd contracts && forge build"
@@ -53,6 +55,8 @@ jobs:
         primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
 
     - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "crates"
 
     - run: nix develop .#ci --command bash -c "cd contracts && forge soldeer install"
     - run: nix develop .#ci --command bash -c "cd contracts && forge test"
