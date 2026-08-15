@@ -44,18 +44,21 @@
 
             foundry
 
-            foundry
-
             just
             nodejs_24
             pnpm_11
           ];
 
           shellHook = ''
-            export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-
             just
           '';
+        };
+      
+        ci = pkgs.mkShell {
+          packages = with pkgs; [
+            rustToolchain
+            foundry
+          ];
         };
       };
     });
