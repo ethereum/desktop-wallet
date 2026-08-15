@@ -24,11 +24,13 @@ Following the conventions in [`README.md`](./README.md):
 - **Interface-first.** Issues tagged `interface` define a core API surface and are merged as
   an agreed stub before work fans out behind them.
 - **Vertical slices.** Each issue is a user-observable outcome through core to UI, not a
-  single-layer fragment. For v0.1.0 the UI is the terminal surface (EDW-006), so
-  "user-observable" means "driveable from the terminal."
+  single-layer fragment. For v0.1.0 the UI is the CLI (EDW-006), so "user-observable"
+  means "driveable from the CLI."
 - **Acceptance criteria on every issue**, so "done" is checkable without the author
   adjudicating.
-- **Issue IDs use the `EDW-###` convention** (Ethereum Desktop Wallet).
+- **Issue IDs use the `EDW-###` convention** (Ethereum Desktop Wallet). IDs are stable
+  identifiers, not positions: issues added later keep their number and sit wherever the
+  dependencies put them, so EDW-021 and EDW-022 appear mid-document by design.
 
 Every issue also inherits the **definition of done** in [`README.md`](./README.md), including
 the second-reviewer requirement for anything touching keys, signing, storage, or the trust
@@ -45,18 +47,39 @@ against Tornado Cash, Railgun, and Privacy Pools through the `@kohaku-eth/*` plu
 **UX and flow prototype, not an implementation to port**: it is Node and TypeScript, the
 desktop wallet is Rust, so what carries over is the model and the command surface.
 
-**The protocol code underneath it is a different story, and the split matters.** Kohaku is a
-mixed repo. Railgun is implemented in **Rust** (`crates/railgun`), and the npm package the
-prototype consumes is a wasm wrapper over it (`crates/railgun-ts` is a `cdylib` with
-`wasm-bindgen`). Tornado Cash and Privacy Pools exist **only as TypeScript packages**.
-`userop-kit` (ERC-4337 EntryPoint, UserOperations, smart accounts, bundler client) and the ZK
-primitives (`crypto`: Pedersen and BabyJubJub; `poseidon-rust`) are also Rust. So a Rust
-wallet can reuse Railgun and the 4337 path directly, and would have to build a Tornado or
-Privacy Pools integration from scratch, including its proving path. This drives EDW-013 and
-open question 2.
+**The protocol code underneath it is a different story, and the split matters.**
+`ethereum/kohaku` is a mixed repo, and what exists in Rust is what a Rust wallet can reuse:
+
+- **Railgun: Rust** (`crates/railgun`), and the npm package the prototype consumes is a wasm
+  wrapper over it (`crates/railgun-ts` is a `cdylib` with `wasm-bindgen`).
+- **Tornado Cash: Rust in progress** (`crates/tornadocash`, largely Robert's work), with
+  circuit artifacts, an indexer, and merkle/prove benches already in place. **TypeScript is
+  what is in production**, so the Rust implementation still needs parity verification against
+  it, and there is real detail work left there.
+- **Privacy Pools: TypeScript only** (`packages/privacy-pools`). Choosing it would mean
+  writing the protocol and its proving path from scratch.
+- **`userop-kit`** (ERC-4337 EntryPoint, UserOperations, smart accounts, bundler client) and
+  the ZK primitives (`crypto`: Pedersen and BabyJubJub; `poseidon-rust`) are **Rust**.
+
+This drives EDW-013 and open question 6.
+
+> **Note on freshness.** `kohaku-cli` moves fast. As of `0.0.3` it has dropped React, Ink,
+> and its TUI, moved from ethers to viem, and added Tor, stealth addresses, ENS name
+> management, and network-traffic logging. Anyone reasoning about diffs against it should
+> pull the latest and rebuild `node_modules` first; the observations below are current as of
+> that version.
 
 **Carry over:**
 
+- **The Profile concept**, and more centrally than the prototype has it. In `kohaku-cli` the
+  profile is a container; here it should be the thing the user actually drives, with
+  address-level detail staying invisible (principle 9). This is the single biggest intended
+  departure and it drives EDW-022.
+- **Tor by default for every non-RPC HTTP egress.** The prototype now ships `tor-js` and
+  routes through it. Whatever egress survives the audit in EDW-021 goes through Tor rather
+  than direct.
+- **Network-traffic visibility.** The prototype logs egress and ships a viewer for it. That
+  turns principle 2 from an assertion into something a user and a reviewer can check.
 - **The account model.** BIP-39 seed as the primary object, HD-derived public accounts,
   `next-fresh-address` to derive and persist the next one, and import-by-mnemonic that scans
   for used addresses to resume the account index. This is the model v0.1.0 should adopt.
@@ -81,14 +104,16 @@ open question 2.
   **`see-decrypted-storage`** decrypting wallet storage to stdout. These are prototype
   conveniences and direct violations of principles 1 and 11. If an export path is needed at
   all, it needs a different design.
-- **Non-RPC egress.** The prototype reaches `public.pimlico.io` (4337 bundler),
+- **Unaudited non-RPC egress.** The prototype reaches `public.pimlico.io` (4337 bundler),
   `fastrelay.xyz` (relayer), `api.0xbow.io` / `dw.0xbow.io` (Privacy Pools association data),
-  and `saga.fatsolutions.xyz` (sync), plus a USD price feed. That is five third-party
-  services with visibility into user activity, against principle 2. See open question 4:
-  some of this is not sloppiness, it is structural, and we need a position on it.
-- **The dependency surface.** Roughly fourteen runtime npm packages including React. Whatever
-  the UI stack decision, principle 4 asks for materially less than this inside the trust
-  boundary.
+  a state-sync host, an artifact host, and a USD price feed. **Some of this is structural
+  rather than sloppy**: a bundler or relayer is what makes private gas work at all. So the
+  goal is not zero egress, it is a deliberate, minimal, Tor-routed, and documented set. That
+  is EDW-021, and it is why the egress decision landed the way it did rather than by cutting
+  the sponsor.
+- **The dependency surface**, though less than it was: `0.0.3` dropped React and Ink and
+  moved to viem, and now carries roughly seventeen runtime npm packages. Principle 4 still
+  asks for materially less than that inside the trust boundary.
 
 **Vocabulary note.** The prototype's model is directional: public accounts **shield** into a
 private protocol and **unshield** back out. [`01-architecture.md`](./01-architecture.md)
@@ -135,13 +160,17 @@ silence would read as "delivered":
 - **Private reads (principle 3).** A plain JSON-RPC provider lets the provider correlate
   every address in a profile, and private-state sync via chunked `eth_getLogs` makes that
   worse, not better. v0.1.0 accepts this; v0.2.0 does not.
-- **Egress limiting and Tor (principle 2).** Not addressed, and see open question 4.
 - **Auto-mix-back / background mixing.** Manual only.
 - **Fund classification and footgun guards (principles 7 and 8).** Not surfaced.
-- **A graphical UI.** The v0.1.0 surface is a terminal UI, which also defers vision decision
-  5 without blocking core work. See open question 3.
+- **A graphical UI, and an interactive TUI.** The v0.1.0 surface is a flag-driven CLI. The
+  next UI step after that is a real GUI, not a richer terminal; a TUI would be halfway to
+  neither. This defers vision decision 5 without blocking core work.
 
-Per principle 6, the v0.1.0 terminal surface should say plainly that it is a development
+**Egress limiting and Tor are now IN scope** (EDW-021), moved in during review. They were the
+one principle-2 item where deferring would have meant shipping v0.1.0 with unaudited
+third-party egress and then retrofitting, which is the harder order.
+
+Per principle 6, the v0.1.0 CLI should say plainly that it is a development
 preview and does not yet deliver the privacy properties in the vision, in the same spirit as
 the prototype's own README notice.
 
@@ -231,16 +260,33 @@ without recompiling.
 - [ ] Chunked `eth_getLogs` with a configurable span, since private-state sync needs it and
       strict providers reject large ranges.
 
+**EDW-021 - Every non-RPC egress is audited, minimal, and Tor-routed**
+`core` `security` `infra` - needs EDW-005
+
+Why: moved into v0.1.0 during review. Private gas requires a sponsor, so zero non-RPC egress
+is not achievable (see Decisions taken in review), which makes a deliberate and observable egress set the
+actual goal. Retrofitting this after v0.1.0 ships is the harder order.
+
+- [ ] Every outbound host the app can contact is enumerated in one place, with what it sees
+      about the user, and that list is part of the threat model rather than folklore.
+- [ ] All non-RPC HTTP goes through **Tor by default**, following the prototype's `tor-js`
+      approach, degrading with a clear error rather than silently falling back to direct.
+- [ ] Anything that can come from RPC does, and anything that can be built locally is, per
+      principle 2. No fiat price feed in v0.1.0.
+- [ ] Egress is logged and inspectable by the user, following the prototype's
+      network-traffic viewer, so principle 2 is checkable rather than asserted.
+- [ ] A test fails the build on an unexpected outbound host.
+
 ### Stage 2 - A profile that holds and moves funds
 
-**EDW-006 - Terminal surface**
+**EDW-006 - CLI surface**
 `ui` - needs EDW-001
 
-Why: v0.1.0's UI is the terminal, and it needs to exist early so every subsequent issue can
-be a real vertical slice rather than a library change.
+Why: v0.1.0's UI is a flag-driven CLI, and it needs to exist early so every subsequent issue
+can be a real vertical slice rather than a library change.
 
-- [ ] Scope decided first: flag-driven subcommands only, or a full interactive TUI as in the
-      prototype. See open question 3.
+- [ ] **Flag-driven subcommands, no interactive TUI** (decided in review; the prototype has
+      since dropped its own TUI).
 - [ ] Unlock / lock, with the password never echoed or logged.
 - [ ] `--non-interactive` with JSON output on every command that produces data.
 - [ ] Every state-changing command dry-runs by default and requires an explicit
@@ -323,30 +369,38 @@ the stage with the most prototype coverage to lean on.
 `core` - needs EDW-008
 
 Why: stealth is the standard for direct transfers in the vision, and it is the first vault
-whose balance is not simply one address's balance. Note this is the one vault kind the
-prototype does **not** cover.
+whose balance is not simply one address's balance. The prototype added stealth support in
+`0.0.3`, so there is now prior art here too.
 
 - [ ] Meta-address generation, announcement scanning, and claiming.
 - [ ] `balance` aggregates across discovered stealth addresses.
 - [ ] `withdraw` produces calls that spend from the discovered addresses.
 - [ ] Test vectors from ERC-5564 pass.
 
-**EDW-013 - Shielded-pool vault**
+**EDW-013 - Shielded-pool vaults: Railgun and Tornado Cash**
 `core` `research` - needs EDW-008
 
 Why: the vault kind that proves privacy is real rather than architectural, and the largest
 single integration in v0.1.0.
 
-- [ ] **Which protocol ships in v0.1.0 is decided first, and it is a cost decision, not a
-      taste one.** Railgun has a Rust implementation in Kohaku that already handles note
-      management, merkle sync, and Groth16 proving (`ark-groth16` / `ark-circom`). Tornado
-      Cash and Privacy Pools are TypeScript-only there, so either would mean writing the
-      protocol and its proving path from scratch in Rust. One protocol is enough to prove the
-      `Vault` abstraction. See open question 2.
-- [ ] Shield and unshield end to end on a testnet.
+**Decided in review: both Railgun and Tornado Cash, and nothing else.** They are the two with
+the most mature Rust support, they sit at opposite ends of the shielded-pool design space
+(Privacy Pools sits between them), and shipping both means the wallet is built for a
+multiple-mixer world from day one rather than retrofitted into one. That is a deliberate
+scope increase over the one-protocol version of this issue; it is the main thing to weigh
+against the date in open question 5.
+
+- [ ] Shield and unshield end to end on a testnet, for **both** protocols.
+- [ ] Tornado specifically: the Rust `crates/tornadocash` implementation is verified at
+      parity with the TypeScript one that is in production, since TypeScript is what is
+      battle-tested today and the Rust port still has detail work outstanding.
+- [ ] The two protocols' very different constraint models (fixed denominations and
+      single-note unshields for Tornado, arbitrary-amount UTXOs for Railgun) are both
+      expressed through `AssetConstraint` without either one special-casing the `Vault`
+      trait.
 - [ ] `balance` reflects spendable notes; note secrets are stored via EDW-003, not in the
       protocol crate's own storage layer.
-- [ ] Whatever constraints the chosen protocol imposes (denomination multiples, one note per
+- [ ] Whatever constraints each protocol imposes (denomination multiples, one note per
       unshield, note-size caps) are stated plainly in the UI, following the prototype's
       example.
 - [ ] The anonymity set is reported honestly and never overstated (principle 6).
@@ -362,7 +416,7 @@ private receipt actually usable. The prototype solves it with a 7702 delegation 
 paymaster or relayer, and PR #19's `Executor` currently has no notion of sponsored execution.
 
 - [ ] The sponsorship path is decided and recorded: bundler and paymaster, a relayer, or a
-      self-relay gas tank. Each has a different egress and trust profile; see open question 4.
+      self-relay gas tank. Each has a different egress and trust profile; see EDW-021.
       Note that Kohaku's `userop-kit` gives us a Rust 4337 path (EntryPoint, UserOperations,
       smart accounts, a bundler client) essentially for free if we take the Railgun crate,
       since Railgun already depends on it. That makes the bundler-and-paymaster route the
@@ -385,10 +439,32 @@ shield / unshield model, so it is the one most likely to expose a design flaw.
 - [ ] Works for every pair among the private-key, stealth, and shielded vaults.
 - [ ] No vault implementation imports or matches on another vault implementation's type.
 
+**EDW-022 - The user operates on the Profile, not on scattered addresses**
+`core` `ui` - needs EDW-014, EDW-015
+
+Why: **this is the intended headline difference from the prototype.** In `kohaku-cli` the
+only integrated flow is unshield-plus-tail-call; outside that narrow path the user is left to
+work out their own address juggling by hand. The canonical broken case: an ERC-20 arrives at
+a stealth address that holds no ETH, and shielding it means the user manually unshields gas
+first, or hand-assembles an unshield-plus-tail-call. Principles 8 and 9 say the wallet should
+do that, not the user.
+
+- [ ] Funds sitting at an address that cannot pay for its own next action are detected, and
+      the wallet composes the gas path itself rather than reporting a dead end.
+- [ ] The ERC-20-at-a-stealth-address case works without the user naming an intermediate
+      address or hand-ordering calls.
+- [ ] Profile-level actions ("shield this", "send this") resolve which underlying accounts
+      and sponsorship they need, rather than requiring the user to pick a source account.
+- [ ] Where the wallet cannot do it automatically, it says so plainly rather than implying
+      the funds are stuck or that more privacy was achieved than actually was (principle 6).
+
 ### Stage 4 - Dapps
 
-The prototype has **no dapp support at all**, so this stage has no prior art to lean on and
-carries the most schedule risk in v0.1.0. See open question 5.
+The prototype has **no dapp support at all**. Its answer to "I want to use a frontend" is
+`export-private-key`, and load that key into a browser wallet. So this stage is not just
+unprototyped, it is a **deliberate departure** from how the prototype works, and open
+question 3 asks whether it belongs in v0.1.0 at all. It carries the most schedule risk in the
+milestone either way.
 
 **EDW-016 - Raw contract calls from a profile account**
 `core` `ui` - needs EDW-011
@@ -468,11 +544,28 @@ abstraction were wrong. They are deliberately left unversioned until then.
   surfaced at the moment of action.
 - **Auto-mix-back.** Background mixing so returning funds to the pool is not a manual chore.
 - **The graphical UI.** Whatever vision decision 5 settles on, built against the same facade
-  the terminal surface uses.
+  the CLI uses.
 - **Hardening and release.** Reproducible signed builds, external security review, threat
   model validation, and a conformance guide for other wallets.
 
 ---
+
+## Decisions taken in review
+
+Recorded here so the reasoning survives; each one is reflected in the issues above.
+
+- **Shielded protocols: Railgun and Tornado Cash, and nothing else** (EDW-013). Most mature
+  Rust support, opposite ends of the shielded-pool design space, and building for a
+  multiple-mixer world from day one rather than retrofitting. Privacy Pools sits between the
+  two and adds no new design pressure for the cost.
+- **Private gas wins over strict only-RPC egress** (EDW-014, EDW-021). Zero non-RPC egress is
+  not compatible with an unfunded address being able to receive privately. The goal becomes a
+  minimal, documented, Tor-routed egress set rather than none, and egress limiting moves into
+  v0.1.0 scope rather than being deferred.
+- **Flag-driven CLI, no TUI** (EDW-006). The prototype has since dropped its own TUI. The
+  next UI step after a working CLI is a real GUI; a TUI is halfway to neither.
+- **The Profile is the thing the user drives** (EDW-022), not a container the user reaches
+  through. This is the intended headline difference from the prototype.
 
 ## Open questions for the team
 
@@ -482,36 +575,33 @@ abstraction were wrong. They are deliberately left unversioned until then.
    project board. Within a milestone, work is grouped into numbered **stages**, which are a
    reading order rather than gates. `README.md` and `01-architecture.md` have been updated to
    match; if the team prefers the old `M<n>` axis, all three need reverting together.
-2. **Which shielded protocol for v0.1.0?** The prototype supports Tornado Cash, Railgun, and
-   Privacy Pools, but that parity does not carry into Rust. Only **Railgun** has a Rust
-   implementation in Kohaku, and it is the substantive one: notes, merkle sync, and Groth16
-   proving via arkworks, with the npm package built as wasm on top of it. Tornado Cash and
-   Privacy Pools are TypeScript-only, so choosing either means implementing the protocol and
-   its proving path from scratch. The recommendation is Railgun for v0.1.0 unless there is a
-   reason not to, with the others deferred, where they double as the real test of whether the
-   `Vault` abstraction is genuinely protocol-agnostic.
-
-   Two consequences to weigh. Depending on Kohaku's crates means pinning a rev of an
-   unstable, git-only `0.1.0` API and tying our cadence to theirs. And Railgun is UTXO-based
-   with arbitrary amounts rather than fixed denominations, so choosing it largely dissolves
-   the dust and denomination problem that [`00-vision.md`](./00-vision.md) defers with its
-   "assume a small fixed pool (~0.01 ETH)" language. That assumption is Tornado-shaped and
-   would need updating in the vision if Railgun wins.
-
-   Separately, shipping any specific pool integration in an EF-published reference
-   implementation is a call worth making deliberately rather than inheriting.
-3. **Flag-driven CLI, or a full TUI?** Issue #15 says "CLI UI surface." The prototype has
-   both: scriptable subcommands and an interactive Ink-based TUI with screens and panes. The
-   second is materially more work and pulls in a UI framework, which touches vision decision
-   5. Worth settling before EDW-006 starts.
-4. **Only-RPC egress versus private gas: which gives?** Principle 2 says the only outbound
-   calls are RPC. But the prototype reaches a bundler, a relayer, an association-set
-   provider, and a sync service, and at least the sponsorship dependency is structural: an
-   unfunded fresh address cannot pay for its own withdrawal without someone else submitting
-   it. EDW-014 cannot be specified until the team decides whether we accept a third-party
-   sponsor with a documented trust profile, build a self-relay gas tank, or narrow what
-   principle 2 claims. This is the most load-bearing open question in the document.
-5. **Is the target realistic, and where does it give?** The prototype substantially de-risks
-   stages 2 and 3, which is the strongest argument that 2026-09-30 is achievable. Stage 4 has
-   no prototype coverage at all. If something has to give, cut stage 4 to EDW-016 and EDW-017
-   and move the two private-dapp flows to the next milestone, rather than thinning stage 3.
+2. **Does a Profile enshrine one mixer?** Proposal on the table: a Profile picks its shielded
+   protocol at initialization, so there are `TornadoProfile` and `RailgunProfile` types.
+   Balances in the other protocol are still discovered and displayed, but the Profile does
+   not operate on them. The argument for is that the integrated profile-level flows in
+   EDW-022 (unshield-interact-reshield, stealth-address gas handling, private gas) are much
+   easier to make genuinely good when they can assume one protocol's semantics, and that the
+   prototype only avoids this because it has no profile-level UX to speak of. The argument
+   against is that it puts a protocol choice in front of the user at the moment they know
+   least, and that a Profile spanning both is the more honest model of "these are your
+   funds." **This is the biggest open design question in the document** and it directly
+   shapes EDW-013, EDW-015, and EDW-022.
+3. **Do dapp interactions belong in v0.1.0 at all?** The release gate in #15 includes three
+   dapp lines, but the prototype's answer to using a frontend is `export-private-key` into a
+   browser wallet, so stage 4 is a real departure rather than a port. Two sub-questions: is a
+   first-party dapp connection in scope for the first release, and do we carry over
+   `transact-raw` (EDW-016) as the minimal contract-interaction primitive, or is that also a
+   frontend concern? Note this interacts with question 5.
+4. **Does the vision's fixed-pool language survive?** [`00-vision.md`](./00-vision.md) defers
+   the dust problem with "assume a small fixed pool (~0.01 ETH)", which is Tornado-shaped.
+   Now that Railgun ships alongside Tornado, the wallet spans both a fixed-denomination and
+   an arbitrary-amount UTXO model, and that sentence needs rewriting rather than deleting.
+5. **Is the target realistic, and where does it give?** Stages 2 and 3 have substantial
+   prototype coverage, which is the argument that 2026-09-30 is achievable. Working against
+   it: EDW-013 now covers two protocols instead of one, EDW-021 and EDW-022 were added during
+   review, and stage 4 has no prototype coverage at all. If something has to give, cut stage
+   4 first (see question 3), rather than thinning stage 3.
+6. **Kohaku crate dependency posture.** Taking `crates/railgun`, `crates/tornadocash`, and
+   `userop-kit` means pinning revs of unstable, git-only `0.1.0` APIs and tying our cadence to
+   theirs, and for Tornado specifically the Rust implementation is not yet verified at parity
+   with the TypeScript one in production. Worth an explicit position on how we track that.
