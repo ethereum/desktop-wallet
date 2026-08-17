@@ -6,8 +6,7 @@ without any one author becoming a bottleneck, the **Ethereum Desktop Wallet**: a
 privacy-focused Ethereum L1 wallet that serves as the ecosystem's **reference
 implementation**, the spec _and_ the working example other wallets can conform to.
 
-> **Status:** `00-vision.md` and `01-architecture.md` are **drafts circulating for team
-> review**. `02-backlog.md` is intentionally deferred until those are agreed. Nothing here is
+> **Status:** all three documents are **drafts circulating for team review**. Nothing here is
 > final; that's the point of the review.
 
 If you are new here, read in this order:
@@ -18,9 +17,9 @@ If you are new here, read in this order:
 2. **[`01-architecture.md`](./01-architecture.md):** the system decomposition and, most
    importantly, the **contracts between components** (the `wallet-core` public API). This
    is what lets UI and core work proceed in parallel against a shared interface.
-3. **[`02-backlog.md`](./02-backlog.md):** the work, to be broken into milestones and
-   dependency-ordered issues with acceptance criteria. **Intentionally deferred** until the
-   vision and architecture are agreed; today it holds the provisional milestone themes only.
+3. **[`02-backlog.md`](./02-backlog.md):** the work, broken into milestones and
+   dependency-ordered issues with acceptance criteria. **A milestone is a release** (v0.1.0,
+   v0.2.0), so it means the same thing here that it means on the project board.
 
 ---
 
@@ -54,7 +53,7 @@ coding. Put it in `spec/features/<short-name>.md`. Keep it to one page. Template
 
 **Status:** draft | agreed | in-progress | shipped
 **Owner:** <name>
-**Milestone:** M<n>
+**Milestone:** v<x.y.z>
 **Related:** links to issues, related specs in this directory, prior art
 
 ## Problem
@@ -98,8 +97,8 @@ be marked "done" without the author adjudicating, and it's what a reviewer check
 
 ## Issue conventions
 
-Issues will be seeded from `02-backlog.md` once it's filled in. Use the **`EDW-###`** ID
-convention (Ethereum Desktop Wallet). A good issue:
+Issues are seeded from `02-backlog.md` and assigned to a release milestone. Use the
+**`EDW-###`** ID convention (Ethereum Desktop Wallet). A good issue:
 
 - **Title** is a user-observable outcome or a concrete deliverable, not a fragment.
   Good: "Send to an ENS name." Bad: "ENS resolver util."
