@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: cachix/install-nix-action@v31
+    - uses: nix-community/cache-nix-action@v7
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "crates"
+
+    - run: nix develop .#ci --command bash -c "cd contracts && forge soldeer install"
+    - run: nix develop .#ci --command bash -c "cd contracts && forge build"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo check --locked"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo audit"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo fmt --check"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo clippy --all-targets --all-features -- -D warnings"
+
+  test:
+    strategy:
+      matrix:
+        build: [linux, macos]
+        include:
+          - build: linux
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - build: macos
+            os: macos-latest
+            target: x86_64-apple-darwin
+        
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.target }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: cachix/install-nix-action@v31
+    - uses: nix-community/cache-nix-action@v7
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "crates"
+
+    - run: nix develop .#ci --command bash -c "cd contracts && forge soldeer install"
+    - run: nix develop .#ci --command bash -c "cd contracts && forge test"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo test"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo test -- --ignored"

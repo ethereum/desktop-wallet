@@ -29,7 +29,12 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     let anvil = Anvil::new().spawn();
     let rpc_url = anvil.endpoint();
     let signer = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
-    let executor_signer = PrivateKeySigner::from_slice(&anvil.nth_key(1).unwrap().to_bytes())?;
+    let executor_signer = PrivateKeySigner::from_slice(
+        &anvil
+            .nth_key(1)
+            .ok_or("Failed to get executor signer")?
+            .to_bytes(),
+    )?;
 
     let provider = Arc::new(
         ProviderBuilder::new()
