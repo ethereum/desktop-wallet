@@ -39,10 +39,9 @@
             rustToolchain
             rust-analyzer
             bacon
+            cargo-audit
             cargo-autoinherit
             cargo-sort
-
-            foundry
 
             foundry
 
@@ -52,10 +51,18 @@
           ];
 
           shellHook = ''
-            export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-
             just
           '';
+        };
+      
+        ci = pkgs.mkShell {
+          packages = with pkgs; [
+            rustfmtNightly
+            rustToolchain
+            cargo-audit
+            
+            foundry
+          ];
         };
       };
     });
