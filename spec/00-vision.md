@@ -2,9 +2,6 @@
 
 > The stable core of the spec. Everything else serves this. When a lower-level decision is
 > ambiguous, resolve it against the **Principles** and **Threat model** below.
->
-> **Status: DRAFT** (circulating for team review). Treat this as a starting position to pull apart, not settled doctrine. Points
-> flagged _(open for review)_ are the ones most likely to change during review.
 
 ## What we are building
 

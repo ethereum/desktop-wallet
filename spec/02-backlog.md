@@ -1,7 +1,5 @@
 # 02 - Milestone Backlog
 
-> **Status: DRAFT** (circulating for team review).
->
 > This is a **proposal**, seeded from three places:
 > [issue #15 (`v0.1.0 proposal`)](https://github.com/ethereum/desktop-wallet/issues/15) for
 > the scope and release gate, [PR #19](https://github.com/ethereum/desktop-wallet/pull/19)

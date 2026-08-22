@@ -18,7 +18,7 @@ use crate::{
     simple_profile::db::{SimpleProfileDatabaseError, SimpleProfileDb},
 };
 
-mod db;
+pub(crate) mod db;
 
 pub struct SimpleProfile {
     pub default_executor: (Uuid, Box<dyn Executor>),
