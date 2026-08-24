@@ -52,15 +52,16 @@
 
           shellHook = ''
             just
+            alias edw='./crates/bin/target/release/edw'
           '';
         };
-      
+
         ci = pkgs.mkShell {
           packages = with pkgs; [
             rustfmtNightly
             rustToolchain
             cargo-audit
-            
+
             foundry
           ];
         };

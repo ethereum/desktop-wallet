@@ -93,8 +93,6 @@ This drives EDW-013 and open question 6.
 - **Honest constraint surfacing.** The prototype states plainly that Tornado shields must be
   multiples of 0.1 ETH, that an unshield consumes exactly one note, and that large shields may
   need multiple unshields. That is principle 6 in practice.
-- **Chain binding per wallet** (`--testnet`, RPC chain ID must match), which covers the
-  vision's testnet requirement cleanly.
 
 **Do NOT carry over:**
 
@@ -480,8 +478,7 @@ dapp work. The prototype's `transact-raw` is the model.
 
 Why: fifth line of the release gate, and it defines the dapp session seam.
 
-- [ ] Session transport seam merged as a trait, with one impl. Which transport (OpenLV,
-      WalletConnect) is an implementation choice behind it.
+- [ ] Session transport seam merged as a trait, with one impl, openlv.
 - [ ] A dapp can read chain state and request a signature or transaction.
 - [ ] Every request is surfaced for explicit approval; nothing is auto-approved.
 

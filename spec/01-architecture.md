@@ -137,10 +137,7 @@ trait EthereumProvider {
 
 #### Dapp Sessions
 
-Dapp sessions are how dapps interact with the wallet. When connecting, the wallet and dapp establish a secure transport over which the wallet exposes an EthereumProvider impl. Dapps can then query this EthereumProvider for network data or to submit requests. Trait implementations may include:
-
-- OpenLV
-- WalletConnect
+Dapp sessions are how dapps interact with the wallet. When connecting, the wallet and dapp establish a secure transport over which the wallet exposes an EthereumProvider impl. Dapps can then query this EthereumProvider for network data or to submit requests.
 
 ### Profile
 
@@ -158,7 +155,7 @@ Signers are how the program signs messages. A signer is associated with and can 
 
 - Local signers (e.g. derived from a seed phrase or private key)
 - Hardware signers (e.g. Ledger, Trezor)
-- Remote signers (e.g. OpenLV, WalletConnect)
+- Remote signers (e.g. OpenLV)
 
 ```rust
 trait Signer {
@@ -176,7 +173,7 @@ Executors are how the program sends transactions. An executor is associated with
 
 - EOAs (e.g. derived from a seed phrase or private key)
 - Hardware wallets (e.g. Ledger, Trezor)
-- Remote accounts (e.g. OpenLV, WalletConnect)
+- Remote accounts (e.g. OpenLV)
 - Smart accounts (e.g. ERC-4337, ERC-7702)
 
 ```rust
@@ -195,7 +192,7 @@ Vaults are how the program stores assets. A vault is an abstract collection of a
 
 - Local vaults (e.g. derived from a seed phrase or private key)
 - Hardware vaults (e.g. Ledger, Trezor)
-- Remote vaults (e.g. OpenLV, WalletConnect)
+- Remote vaults (e.g. OpenLV)
 - [Stealth Addresses](https://eips.ethereum.org/EIPS/eip-5564)
 - Privacy Protocols (e.g. Tornado Cash, Railgun)
 
