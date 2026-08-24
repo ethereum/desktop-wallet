@@ -18,7 +18,7 @@ use crate::{
     simple_vault::db::{SimpleVaultDatabaseError, SimpleVaultDb},
 };
 
-mod db;
+pub(crate) mod db;
 
 /// `SimpleVault` is a basic [`Vault`] implementation that uses a signer-based wallet
 /// to store and transfer assets through its address. It uses the`SimpleDelegate`

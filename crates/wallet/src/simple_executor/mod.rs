@@ -21,7 +21,7 @@ use crate::{
     simple_executor::db::{SimpleExecutorDatabaseError, SimpleExecutorDb},
 };
 
-mod db;
+pub(crate) mod db;
 
 /// `SimpleExecutor` is a basic [`Executor`] implementation that uses an signer-based
 /// wallet to execute calls through the `SimpleDelegate` contract.

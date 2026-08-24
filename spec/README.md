@@ -6,9 +6,6 @@ without any one author becoming a bottleneck, the **Ethereum Desktop Wallet**: a
 privacy-focused Ethereum L1 wallet that serves as the ecosystem's **reference
 implementation**, the spec _and_ the working example other wallets can conform to.
 
-> **Status:** all three documents are **drafts circulating for team review**. Nothing here is
-> final; that's the point of the review.
-
 If you are new here, read in this order:
 
 1. **[`00-vision.md`](./00-vision.md):** what the wallet is, who it's for, the threat

@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use edw_core::database::{Database, DatabaseError};
+use zeroize::Zeroizing;
 
 #[derive(Default)]
 pub struct MemoryDatabase {
@@ -16,16 +17,31 @@ impl MemoryDatabase {
     pub fn new() -> Self {
         Self::default()
     }
-}
 
-#[async_trait::async_trait]
-impl Database for MemoryDatabase {
-    async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DatabaseError> {
+    /// Every key currently held, in unspecified order.
+    ///
+    /// [`Database`] has no iteration, so this is the seam tests use to inspect what a
+    /// backend actually stored.
+    ///
+    /// # Errors
+    /// Returns an error if the store's lock is poisoned.
+    pub fn keys(&self) -> Result<Vec<Vec<u8>>, DatabaseError> {
         let store = self
             .store
             .lock()
             .map_err(|_| DatabaseError::Other(Box::new(MemoryDatabaseError)))?;
-        Ok(store.get(key).cloned())
+        Ok(store.keys().cloned().collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl Database for MemoryDatabase {
+    async fn get(&self, key: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, DatabaseError> {
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| DatabaseError::Other(Box::new(MemoryDatabaseError)))?;
+        Ok(store.get(key).cloned().map(Zeroizing::new))
     }
 
     async fn put(&self, key: &[u8], value: &[u8]) -> Result<(), DatabaseError> {

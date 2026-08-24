@@ -1,0 +1,6 @@
+# `expect_used` and `unwrap_used` are denied workspace-wide so no panic path reaches a
+# user's funds. In tests a panic is the reporting mechanism, the same as `assert!`, so the
+# deny buys nothing there and only pushes failures through less legible plumbing.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true

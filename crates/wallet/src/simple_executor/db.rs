@@ -1,6 +1,7 @@
 use alloy_primitives::Address;
 use alloy_signer::k256::ecdsa::SigningKey;
 use edw_core::database::{Database, DatabaseError};
+use zeroize::Zeroizing;
 
 pub trait SimpleExecutorDb: Database {
     async fn get_signing_key(&self) -> Result<SigningKey, SimpleExecutorDatabaseError> {
@@ -16,7 +17,8 @@ pub trait SimpleExecutorDb: Database {
         &self,
         signing_key: &SigningKey,
     ) -> Result<(), SimpleExecutorDatabaseError> {
-        self.put(b"pk", &signing_key.to_bytes()).await?;
+        let bytes = Zeroizing::new(signing_key.to_bytes().to_vec());
+        self.put(b"pk", &bytes).await?;
         Ok(())
     }
 

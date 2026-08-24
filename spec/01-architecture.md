@@ -1,19 +1,12 @@
 # 01 - Architecture & Contracts
 
-> This doc proposes the system decomposition and the **contracts between components**. The
+> This doc describes the system decomposition and the **contracts between components**. The
 > contracts are the point: agree them first, and UI + core work proceeds in parallel. All of
 > this serves the principles in [`00-vision.md`](./00-vision.md), especially **"secret
 > material never leaves the core."**
 >
 > As the ecosystem's **reference implementation**, these contracts are also a _spec other
 > wallets read_. Keep them clean and general, not tuned to internal convenience.
->
-> **Status: DRAFT** (circulating for team review). The decomposition and API below are a
-> **proposal**, offered as something concrete to react
-> to. The one firm commitment is the **invariant** (secret material never leaves the core);
-> everything else (the crate split, the API signatures, the chosen libraries, the release
-> scoping) is a starting point for discussion, not a settled decision. Items flagged
-> _(open for review)_ are the least settled of all.
 
 ## The one invariant
 
@@ -55,7 +48,7 @@
 │   Also in wallet-core:                                             │
 │   - EthereumProvider  -> chain access; executors submit here       │
 │   - Dapp Sessions     -> expose a provider to connected dapps      │
-│   - Database          -> repository over a SQL pool                │
+│   - Database          -> key/value store, encrypted at the seam    │
 └──────────────────────────────────┬─────────────────────────────────┘
                                    │
                                    │  Signer / Executor -> secret storage
@@ -67,7 +60,7 @@
 │                                                                    │
 │   - secret storage: keychain, hardware signer, secure enclave      │
 │   - chain access: RPC / light client / local VM                    │
-│   - persistent store: encrypted repository over a SQL pool         │
+│   - persistent store: file or SQL backend, under encryption        │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -109,7 +102,7 @@ boundaries stay crisp and compile times stay low:
 crates/
 ├── wallet-core/     # facade: re-exports the stable public API the UI depends on
 ├── wallet-keys/     # seed, derivation engine, signers, zeroize discipline  (highest audit bar)
-├── wallet-store/    # encrypted Database: repository trait + SQL pool
+├── wallet-store/    # encrypted Database: encrypting decorator + backends
 ├── wallet-chain/    # EthereumProvider (alloy-based); RPC / light-client / local-VM backends; private reads
 ├── wallet-registry/ # derivation / address-computation schemes as DATA
 └── wallet-privacy/  # privacy vault impls: stealth (ERC-5564), shielded pools (Kohaku)
@@ -296,35 +289,89 @@ This way each vault only needs to know how to transfer to / from an ethereum add
 
 ### Database
 
-The Database is how the program manages persistent state. The database is broken into two parts layers:
-
-1. The repository trait impls, which handles data serialization & encryption and provides a high-level public interface.
-2. The base sql pool, which is an internal connection to the underlying database and handles sql queries.
+The Database is how the program manages persistent state. It is a byte-oriented key/value
+store, kept deliberately narrow so that any backend can satisfy it:
 
 ```rust
-/// Example methods, not exhaustive or necessarily correct.
-trait Repository {
-    async fn get_profile(&self, profile_id: u32) -> Result<Profile>;
-    async fn save_profile(&self, profile: &Profile) -> Result<()>;
-    async fn get_transactions(&self, profile_id: u32) -> Result<Vec<Transaction>>;
-    async fn get_executor_transactions(&self, executor_id: u32) -> Result<Vec<Transaction>>;
-    async fn save_transaction(&self, transaction: &Transaction) -> Result<()>;
-    // ...
-}
-
-/// Consider using https://docs.rs/sqlx/latest/sqlx/trait.Database.html.
-trait Connection {
-    async fn query(&self, ...) -> Result<Row>;
-    async fn execute(&self, ...) -> Result<()>;
-    // ...
+#[async_trait]
+trait Database: Send + Sync {
+    async fn get(&self, key: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, DatabaseError>;
+    async fn put(&self, key: &[u8], value: &[u8]) -> Result<(), DatabaseError>;
+    async fn delete(&self, key: &[u8]) -> Result<(), DatabaseError>;
 }
 ```
 
-#### Encryption & Security
+Reads hand back `Zeroizing` buffers, so decrypted material is wiped when the caller drops it
+instead of being left behind in a freed allocation.
 
-The connection trait should not be assumed to secure any data at rest. The repository trait impl should handle encryption and decryption of sensitive data before saving.
+Behaviour is composed by wrapping one `Database` in another, rather than by asking each
+backend to reimplement it:
 
-For some targets, different underlying storage connections may be required for sensitive data. For example mobile platforms may use the OS keychain or secure enclaves. This is considered out-of-scope for the initial implementation.
+| Layer | Responsibility |
+| --- | --- |
+| `ScopedDatabase` | confines a caller to a single keyspace: one vault, one executor |
+| `EncryptedDatabase` | encrypts every record; the only code in the workspace that performs cryptography on stored data |
+| backend | untrusted bytes in, untrusted bytes out. `FileDatabase`, `MemoryDatabase`, and later a SQL pool |
+
+Above the trait sit the **repository traits**, one per object: `SimpleVaultDb`,
+`SimpleExecutorDb`, `SimpleProfileDb`. They own serialization and the key names an object
+uses, and nothing else. They are crate-private, because methods like `get_signing_key`
+return secret material and so must not be reachable from the crate's public API. They do not
+encrypt.
+
+#### Encryption at rest
+
+**Decision (EDW-003): the encrypting layer sits at the `Database` seam, as a decorator.**
+`EncryptedDatabase` wraps an arbitrary backend and encrypts every record written through it.
+An earlier revision of this document proposed that the repository layer encrypt instead;
+that was rejected, along with moving secrets out to a separate keystore object.
+
+The reasoning:
+
+- **Fail-closed rather than fail-open.** Encrypting in the repository layer makes encryption
+  opt-in per method, and forgetting is silent: the tests still pass and the plaintext simply
+  sits on disk. At the seam, a backend cannot receive plaintext without someone actively
+  unwrapping the decorator.
+- **One place to audit.** The security-review gate below asks a second reviewer to sign off
+  on secret handling for every storage change. That is affordable against one component and
+  expensive against the storage code of every protocol crate that lands later.
+- **Scoping and encryption belong at the same layer.** The scope prefix is part of the
+  logical key, which feeds both key derivation and the AEAD's associated data. Per-object
+  isolation is therefore cryptographic and not merely a naming convention.
+- **A separate keystore was rejected** because it splits an object's state across two stores
+  that then have to be kept consistent, for an audit boundary the decorator already gives.
+
+The scheme, versioned so it can be migrated:
+
+- **Root of trust is the user's password**, not an OS keychain or a secure enclave. Argon2id
+  (64 MiB, 3 passes, one lane) stretches it into a master key.
+- **Per-record keys.** HKDF-SHA256 derives a distinct encryption key and a distinct blinded
+  storage key for each record, from the master key over the record's full logical key.
+- **XChaCha20-Poly1305** seals each value under a random 192-bit nonce, with the format
+  version and the logical key bound in as associated data. A record lifted out of one vault's
+  scope will not open in another.
+- **A header record** holds the format version, the KDF parameters, and the salt in
+  plaintext, plus a sealed verifier. A wrong password fails the verifier's authentication tag
+  at unlock, cleanly and up front, rather than on the first read of a real record.
+- **Storage keys are blinded**, so a backend file discloses neither the logical key names nor
+  how many vaults a profile holds.
+
+Known costs, recorded so they are not rediscovered as surprises:
+
+- **Values are opaque to the backend.** Nothing can be indexed or queried on a value. This
+  costs nothing against a key/value store, and would need selective plaintext for named
+  non-secret columns before a SQL backend could query them. That extension is additive.
+- **Blinding forecloses prefix iteration.** The trait exposes no iteration today. Adding it
+  later needs a different scheme for keys.
+- **The backend is not trusted and not required to be secure.** Anything written outside
+  `EncryptedDatabase` is plaintext by construction. This is why the decorator, rather than the
+  backend, is the thing to review.
+- **Platform keystores stay out of scope.** Mobile targets may later want the OS keychain or a
+  secure enclave for the master key; the password remains the root of trust for now.
+
+Every type holding secret material is zeroize-on-drop, and the master key is deliberately
+neither `Debug`, `Clone`, nor `Serialize`, so it cannot be copied into a log line or a stored
+record. This is principle 5, "no plaintext secrets at rest, ever."
 
 ## Stack (proposed, open for review)
 
@@ -341,7 +388,8 @@ The **core** stack below is a proposal that looks low-risk to keep; the
   Whatever wins, the invariant holds: the view layer imports only `wallet-core` and never
   touches secret material.
 - **Ethereum:** `alloy` 2.x. **Chain reads:** `helios-ethereum` light client, in-process.
-- **At rest:** Argon2id (64 MiB / 3-pass) + XChaCha20-Poly1305, versioned vault blob.
+- **At rest:** Argon2id (64 MiB / 3-pass) + XChaCha20-Poly1305 per record, applied at the
+  `Database` seam. See [Encryption at rest](#encryption-at-rest).
 - **Privacy stack:** Kohaku crates (Rust, git-only 0.1.0, unstable; going native bets on
   them) for shielded pools; ERC-5564 for stealth.
 
