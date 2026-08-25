@@ -353,8 +353,7 @@ The scheme, versioned so it can be migrated:
 - **A header record** holds the format version, the KDF parameters, and the salt in
   plaintext, plus a sealed verifier. A wrong password fails the verifier's authentication tag
   at unlock, cleanly and up front, rather than on the first read of a real record.
-- **Storage keys are blinded**, so a backend file discloses neither the logical key names nor
-  how many vaults a profile holds.
+- **Storage keys are blinded**, so a backend never sees a logical key name.
 
 Known costs, recorded so they are not rediscovered as surprises:
 
@@ -363,6 +362,14 @@ Known costs, recorded so they are not rediscovered as surprises:
   non-secret columns before a SQL backend could query them. That extension is additive.
 - **Blinding forecloses prefix iteration.** The trait exposes no iteration today. Adding it
   later needs a different scheme for keys.
+- **Blinding hides key names, not cardinality or size.** A backend holding one file per record
+  discloses how many records exist, and ciphertext length is `1 + 24 + plaintext + 16`, so a
+  32-byte signing key is distinguishable from a 20-byte address. Whether that matters is a
+  threat-model question: hiding it needs fixed-size padding, and hiding the count needs either
+  decoy records or a single-blob layout. Recorded rather than assumed away (EDW-023).
+- **Records are individually authenticated; the collection is not.** An attacker with write
+  access to the store can delete a record or roll one back to an earlier ciphertext without
+  detection. A MAC'd manifest over the record set would close this, and is tracked separately.
 - **The backend is not trusted and not required to be secure.** Anything written outside
   `EncryptedDatabase` is plaintext by construction. This is why the decorator, rather than the
   backend, is the thing to review.
