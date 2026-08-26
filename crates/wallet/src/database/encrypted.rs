@@ -16,9 +16,13 @@
 //!   prefixed: a record lifted from one scope will not decrypt in another.
 //! - Values are sealed with XChaCha20-Poly1305 under a random 192-bit nonce, with the
 //!   version and logical key bound in as associated data.
-//! - Storage keys are blinded, so a backend file discloses neither the logical key names nor
-//!   how many vaults a profile holds. The cost is that prefix iteration over the backend is
-//!   not possible; the [`Database`] trait exposes no such operation.
+//! - Storage keys are blinded, so a backend never sees a logical key name. This hides the
+//!   names only. Record count and ciphertext length are not hidden: a backend storing one
+//!   file per record discloses how many records exist, and a length of
+//!   `1 + 24 + plaintext + 16` distinguishes a 32-byte signing key from a 20-byte address.
+//!   Closing that would need fixed-size padding and a layout that does not leak cardinality.
+//!   The cost of blinding is that prefix iteration over the backend is not possible; the
+//!   [`Database`] trait exposes no such operation.
 
 use std::sync::Arc;
 
@@ -95,6 +99,10 @@ pub enum EncryptedDatabaseError {
     Corrupt,
     #[error("unsupported format version {0}, expected {RECORD_VERSION}")]
     UnsupportedVersion(u8),
+    #[error("header declares key-derivation parameters this build does not accept")]
+    UnsupportedParameters,
+    #[error("password must not be empty")]
+    EmptyPassword,
     #[error("key derivation failed")]
     KeyDerivation,
     #[error("header serialization error: {0}")]
@@ -104,13 +112,20 @@ pub enum EncryptedDatabaseError {
 impl EncryptedDatabase {
     /// Initializes a fresh encrypted store over `db`, writing its header.
     ///
+    /// The caller owns the password buffer's lifetime, including wiping it; this does not
+    /// take ownership and cannot zeroize it.
+    ///
     /// # Errors
     /// Returns [`EncryptedDatabaseError::AlreadyInitialized`] if `db` already holds a header,
-    /// so an existing store is never silently re-keyed and its records orphaned.
+    /// so an existing store is never silently re-keyed and its records orphaned, or
+    /// [`EncryptedDatabaseError::EmptyPassword`] if `password` is empty.
     pub async fn create(
         db: Arc<dyn Database>,
         password: &[u8],
     ) -> Result<Self, EncryptedDatabaseError> {
+        if password.is_empty() {
+            return Err(EncryptedDatabaseError::EmptyPassword);
+        }
         if db.get(HEADER_KEY).await?.is_some() {
             return Err(EncryptedDatabaseError::AlreadyInitialized);
         }
@@ -148,11 +163,18 @@ impl EncryptedDatabase {
     /// # Errors
     /// Returns [`EncryptedDatabaseError::InvalidPassword`] when the header's verifier fails
     /// its authentication tag, so a wrong password is rejected up front rather than on the
-    /// first read of a real record.
+    /// first read of a real record. Returns
+    /// [`EncryptedDatabaseError::UnsupportedParameters`] if the header's key-derivation
+    /// parameters are not the ones this version writes, which is how a corrupt or tampered
+    /// header is rejected before any expensive work is done.
     pub async fn unlock(
         db: Arc<dyn Database>,
         password: &[u8],
     ) -> Result<Self, EncryptedDatabaseError> {
+        if password.is_empty() {
+            return Err(EncryptedDatabaseError::EmptyPassword);
+        }
+
         let Some(bytes) = db.get(HEADER_KEY).await? else {
             return Err(EncryptedDatabaseError::NotInitialized);
         };
@@ -163,6 +185,18 @@ impl EncryptedDatabase {
         }
         if header.version != RECORD_VERSION {
             return Err(EncryptedDatabaseError::UnsupportedVersion(header.version));
+        }
+        // The header is untrusted input: it is plaintext, so anything able to write the store
+        // can choose these. Argon2's own bounds are far too loose to lean on (`MAX_M_COST` is
+        // `u32::MAX` KiB), so an unchecked header turns a corrupt or hostile file into an
+        // out-of-memory abort or an unbounded hang. Only the parameters this version writes
+        // are accepted; a future cost change travels with a version bump.
+        if header.m_cost != ARGON2_M_COST
+            || header.t_cost != ARGON2_T_COST
+            || header.p_cost != ARGON2_P_COST
+            || header.salt.len() != SALT_LEN
+        {
+            return Err(EncryptedDatabaseError::UnsupportedParameters);
         }
 
         let master = derive_master_key(
@@ -185,6 +219,14 @@ impl EncryptedDatabase {
     }
 
     /// Unlocks an existing store, or initializes one if `db` holds no header.
+    ///
+    /// # Warning
+    /// The two cases are told apart only by whether a header is present, and the store carries
+    /// no integrity protection over its collection of records. If the header is lost or
+    /// deleted, this initializes a fresh store over the top: the existing records survive on
+    /// disk but become permanently unreadable, and the result reports itself as empty rather
+    /// than as damaged. Prefer [`EncryptedDatabase::create`] and
+    /// [`EncryptedDatabase::unlock`] at call sites that know which one they mean. See EDW-023.
     ///
     /// # Errors
     /// See [`EncryptedDatabase::create`] and [`EncryptedDatabase::unlock`].

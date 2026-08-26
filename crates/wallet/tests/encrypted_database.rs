@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+use alloy_primitives::hex;
 use edw_core::database::Database;
 use edw_wallet::database::{
     encrypted::{EncryptedDatabase, EncryptedDatabaseError},
@@ -17,9 +18,13 @@ use edw_wallet::database::{
     memory::MemoryDatabase,
     scoped::ScopedDatabaseExt,
 };
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const PASSWORD: &[u8] = b"correct horse battery staple";
+const HEADER_KEY: &[u8] = b"edw:keystore:v1";
+/// Byte offset of the `t_cost` varint: 8 magic, 1 version, 3 for the `m_cost` varint.
+const T_COST_OFFSET: usize = 12;
 
 /// Removes its directory on drop, so a failing assertion does not leave a store behind.
 struct TempDir(PathBuf);
@@ -329,6 +334,118 @@ fn record_files(dir: &Path) -> Vec<PathBuf> {
         .collect();
     paths.sort();
     paths
+}
+
+/// EDW-023: an empty password is rejected at this layer rather than silently accepted as a
+/// root of trust.
+#[tokio::test]
+async fn empty_password_is_rejected() {
+    let backend = memory_backend();
+    let err = EncryptedDatabase::create(backend.clone(), b"")
+        .await
+        .err()
+        .expect("create must reject an empty password");
+    assert!(matches!(err, EncryptedDatabaseError::EmptyPassword));
+
+    EncryptedDatabase::create(backend.clone(), PASSWORD)
+        .await
+        .expect("create");
+    let err = EncryptedDatabase::unlock(backend, b"")
+        .await
+        .err()
+        .expect("unlock must reject an empty password");
+    assert!(matches!(err, EncryptedDatabaseError::EmptyPassword));
+}
+
+/// EDW-023: the header is plaintext and therefore untrusted input. Key-derivation parameters
+/// taken from it are checked before use, so a corrupt or hostile header cannot drive the
+/// process into an unbounded hash.
+#[tokio::test]
+async fn header_key_derivation_parameters_are_not_trusted() {
+    let dir = TempDir::new();
+    let path = dir.join("store");
+
+    EncryptedDatabase::create(file_backend(&path), PASSWORD)
+        .await
+        .expect("create");
+
+    // The header is stored unblinded under a known key, so its record is locatable.
+    let header_path = path.join(hex::encode(Sha256::digest(HEADER_KEY)));
+    let mut bytes = std::fs::read(&header_path).expect("read header");
+    assert_eq!(&bytes[..8], b"EDWSTORE", "header layout changed");
+
+    // postcard: magic[8] | version[1] | m_cost varint | t_cost | p_cost | salt | verifier.
+    // Raising t_cost in place multiplies the work unlock would perform.
+    assert_eq!(bytes[T_COST_OFFSET], 0x03, "t_cost not where expected");
+    bytes[T_COST_OFFSET] = 0x1E;
+    std::fs::write(&header_path, &bytes).expect("write header");
+
+    let started = std::time::Instant::now();
+    let err = EncryptedDatabase::unlock(file_backend(&path), PASSWORD)
+        .await
+        .err()
+        .expect("unlock must reject unknown parameters");
+
+    assert!(
+        matches!(err, EncryptedDatabaseError::UnsupportedParameters),
+        "expected UnsupportedParameters, got {err:?}"
+    );
+    // Rejection happens before any hashing. A generous bound still fails loudly if the check
+    // is ever moved after key derivation, which takes over a second even at the honest cost.
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "parameters were validated only after doing the work"
+    );
+}
+
+/// EDW-023: a store is not readable by other local accounts. Encryption does not make a
+/// world-readable file acceptable, since it is still an offline guessing target.
+#[cfg(unix)]
+#[tokio::test]
+async fn store_is_not_world_readable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new();
+    let path = dir.join("store");
+
+    let store = EncryptedDatabase::create(file_backend(&path), PASSWORD)
+        .await
+        .expect("create");
+    store.put(b"pk", b"secret").await.expect("put");
+
+    let dir_mode = std::fs::metadata(&path)
+        .expect("stat dir")
+        .permissions()
+        .mode();
+    assert_eq!(dir_mode & 0o777, 0o700, "store directory is too permissive");
+
+    for record in record_files(&path) {
+        let mode = std::fs::metadata(&record)
+            .expect("stat record")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "record {record:?} is too permissive");
+    }
+}
+
+/// A directory left permissive by an earlier build or a loose umask is tightened on open.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_existing_permissive_directory_is_tightened() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new();
+    let path = dir.join("store");
+    std::fs::create_dir_all(&path).expect("create dir");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("loosen");
+
+    let _ = file_backend(&path);
+
+    let mode = std::fs::metadata(&path)
+        .expect("stat dir")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700, "existing directory was not tightened");
 }
 
 fn sole_new_key(before: &HashSet<Vec<u8>>, after: &HashSet<Vec<u8>>) -> Vec<u8> {
