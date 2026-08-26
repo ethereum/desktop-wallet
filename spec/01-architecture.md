@@ -162,13 +162,33 @@ Signers are how the program signs messages. A signer is associated with and can 
 
 ```rust
 trait Signer {
+    fn tag(&self) -> &'static str;
     fn id(&self) -> SignerId;
-    fn public_key(&self) -> PublicKey;
-    async fn sign_message(&self, msg: &[u8]) -> Result<Signature>;
-    async fn personal_sign(&self, msg: &[u8]) -> Result<Signature>;
-    async fn sign_typed_data(&self, domain: &EIP712Domain, types: &EIP712Types, value: &EIP712Value) -> Result<Signature>;
+    fn public_key(&self) -> VerifyingKey;
+    async fn personal_sign(&self, message: &[u8]) -> Result<Signature>;
+    async fn sign_typed_data(&self, data: &TypedData) -> Result<Signature>;
 }
 ```
+
+No method returns secret material, and none may be added that does (principle 1). A caller
+gets signatures and a public key, never a way to export the private half. This is why there
+is no `export` path of the kind the prototype has.
+
+**Decision (EDW-004): there is no method that signs a caller-supplied digest.** An earlier
+revision listed both `sign_message` and `personal_sign`. Those are the same operation, since
+`personal_sign` is defined by the EIP-191 prefix, so the only way to make them distinct would
+be for one to sign raw bytes or a bare 32-byte hash. A signer that will sign an arbitrary
+digest will sign a transaction hash or an EIP-7702 authorization presented as a message,
+which is the blind-signing hole this wallet exists to avoid. Both remaining operations commit
+to a domain that cannot be confused with a transaction: EIP-191 for messages, EIP-712 for
+structured data.
+
+`sign_typed_data` takes dynamically-typed data rather than a compile-time Rust type, for two
+reasons: it is what a dapp's `eth_signTypedData_v4` request actually carries, and a generic
+method would not be callable on a `dyn Signer`.
+
+`tag` is not part of the conceptual contract; it is how a stored signer is rebuilt through
+the factory, matching `Vault` and `Executor`.
 
 ### Executor
 
