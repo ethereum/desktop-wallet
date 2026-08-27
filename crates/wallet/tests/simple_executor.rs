@@ -1,6 +1,5 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use alloy_node_bindings::Anvil;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_signer_local::PrivateKeySigner;
@@ -8,6 +7,11 @@ use alloy_sol_types::sol;
 use edw_core::{call::Call, executor::Executor};
 use edw_wallet::{database::memory::MemoryDatabase, simple_executor::SimpleExecutor};
 use tracing::info;
+
+mod common;
+
+/// How long a test waits for a submitted call to be mined.
+const MINING_TIMEOUT: Duration = Duration::from_secs(30);
 
 sol!(
     #[sol(rpc)]
@@ -18,15 +22,9 @@ sol!(
 #[tokio::test]
 #[ignore = "run with `cargo test -- --ignored`"]
 async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    common::init_tracing();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_test_writer()
-        .init();
-
-    let anvil = Anvil::new().spawn();
+    let anvil = common::devnet();
     let rpc_url = anvil.endpoint();
     let signer = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
     let executor_signer = PrivateKeySigner::from_slice(
@@ -68,12 +66,13 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     let target_2 = Address::from_slice(&[3; 20]);
     let value_1 = U256::from(1234);
     let value_2 = U256::from(5678);
-    executor
+    let call = executor
         .execute(&[
             Call::new(target_1, Bytes::new(), value_1),
             Call::new(target_2, Bytes::new(), value_2),
         ])
         .await?;
+    executor.await_call(call, MINING_TIMEOUT).await?;
     info!("Sent SimpleExecutor calls");
 
     //? Verify the call was executed by checking the nonce of the SimpleDelegate contract

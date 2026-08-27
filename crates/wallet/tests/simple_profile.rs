@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use alloy_network::TransactionBuilder7702;
-use alloy_node_bindings::Anvil;
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
@@ -13,6 +12,8 @@ use edw_wallet::{
 };
 use tracing::info;
 
+mod common;
+
 sol!(
     #[sol(rpc)]
     SimpleDelegateContract,
@@ -22,15 +23,9 @@ sol!(
 #[tokio::test]
 #[ignore = "run with `cargo test -- --ignored`"]
 async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    common::init_tracing();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_test_writer()
-        .init();
-
-    let anvil = Anvil::new().spawn();
+    let anvil = common::devnet();
     let rpc_url = anvil.endpoint();
     let sponsor = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
     let executor_signer = PrivateKeySigner::from_slice(
