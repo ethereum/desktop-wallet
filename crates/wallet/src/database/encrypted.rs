@@ -378,3 +378,35 @@ impl From<EncryptedDatabaseError> for DatabaseError {
         DatabaseError::Other(Box::new(err))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::memory::MemoryDatabase;
+
+    /// Tests that a value written to an [`EncryptedDatabase`] is not stored in
+    /// plaintext in its underlying storage.
+    #[tokio::test]
+    async fn test_encrypted_db_encrypts() {
+        let password: &[u8] = b"password";
+        let key: &[u8] = b"key";
+        let value: &[u8] = b"value";
+
+        let memory_db = Arc::new(MemoryDatabase::new());
+        let db = EncryptedDatabase::create(memory_db.clone(), password)
+            .await
+            .unwrap();
+
+        db.put(key, value).await.unwrap();
+
+        //? Asserts that the value can be retrieved from the encrypted db.
+        assert_eq!(*db.get(key).await.unwrap().unwrap(), value);
+
+        //? Asserts that the plaintext value does not exist in the underlying memory db.
+        let memory_keys = memory_db.keys().unwrap();
+        for memory_key in memory_keys {
+            assert_ne!(memory_key, key);
+            assert_ne!(*memory_db.get(&memory_key).await.unwrap().unwrap(), value);
+        }
+    }
+}
