@@ -15,7 +15,7 @@ alloy-signer = { workspace = true, features = ["eip712"] }
 alloy-provider = { workspace = true }
 alloy-transport = { workspace = true }
 alloy-eips = { workspace = true }
-alloy-sol-types = { workspace = true }
+alloy-sol-types = { workspace = true, features = ["eip712-serde"] }
 alloy-rpc-types-eth = { workspace = true }
 alloy-network = { workspace = true }
 alloy-consensus = { workspace = true }

@@ -9,11 +9,14 @@ use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::sol;
 use edw_core::{
     asset::AssetId,
+    database::Database,
     executor::Executor,
+    signer::Signer,
     vault::{Vault, VaultId},
 };
 use edw_wallet::{
-    database::memory::MemoryDatabase, simple_executor::SimpleExecutor, simple_vault::SimpleVault,
+    database::memory::MemoryDatabase, simple_executor::SimpleExecutor, simple_signer::SimpleSigner,
+    simple_vault::SimpleVault,
 };
 use tracing::info;
 
@@ -60,18 +63,26 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     //? Create SimpleExecutor
+    let executor_db: Arc<dyn Database> = Arc::new(MemoryDatabase::default());
+    let executor_signer: Arc<dyn Signer> =
+        Arc::new(SimpleSigner::new(executor_signer.credential().clone(), &executor_db).await?);
     let executor = SimpleExecutor::new_with_implementation(
-        executor_signer.clone(),
+        executor_signer,
         implementation_addr,
         provider.clone(),
-        Arc::new(MemoryDatabase::default()),
+        executor_db,
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());
 
     //? Create and authorize SimpleVault
-    let auth = SimpleVault::authorize_implementation(&vault_signer, implementation_addr, &provider)
-        .await?;
+    let (vault_signer, vault_db) = signer_with_db(&vault_signer).await?;
+    let auth = SimpleVault::authorize_implementation(
+        vault_signer.as_ref(),
+        implementation_addr,
+        &provider,
+    )
+    .await?;
 
     let tx = TransactionRequest::default()
         .to(signer.address())
@@ -83,7 +94,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
         vault_signer,
         implementation_addr,
         provider.clone(),
-        Arc::new(MemoryDatabase::default()),
+        vault_db,
     )
     .await?;
     info!("Created SimpleVault with ID {:?}", vault.id());
@@ -142,4 +153,13 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     Ok(())
+}
+
+/// A signer paired with the database it persists to, as the executor and vault expect.
+async fn signer_with_db(
+    key: &PrivateKeySigner,
+) -> Result<(Arc<dyn Signer>, Arc<dyn Database>), Box<dyn std::error::Error>> {
+    let db: Arc<dyn Database> = Arc::new(MemoryDatabase::default());
+    let signer: Arc<dyn Signer> = Arc::new(SimpleSigner::new(key.credential().clone(), &db).await?);
+    Ok((signer, db))
 }

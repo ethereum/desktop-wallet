@@ -5,8 +5,10 @@ use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::sol;
-use edw_core::{call::Call, executor::Executor};
-use edw_wallet::{database::memory::MemoryDatabase, simple_executor::SimpleExecutor};
+use edw_core::{call::Call, database::Database, executor::Executor, signer::Signer};
+use edw_wallet::{
+    database::memory::MemoryDatabase, simple_executor::SimpleExecutor, simple_signer::SimpleSigner,
+};
 use tracing::info;
 
 sol!(
@@ -51,11 +53,14 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     //? Create SimpleExecutor
+    let executor_db: Arc<dyn Database> = Arc::new(MemoryDatabase::default());
+    let executor_signer: Arc<dyn Signer> =
+        Arc::new(SimpleSigner::new(executor_signer.credential().clone(), &executor_db).await?);
     let executor = SimpleExecutor::new_with_implementation(
-        executor_signer.clone(),
+        executor_signer,
         delegate_address,
         provider.clone(),
-        Arc::new(MemoryDatabase::default()),
+        executor_db,
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());

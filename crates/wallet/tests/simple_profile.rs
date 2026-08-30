@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::sync::Arc;
 
 use alloy_network::TransactionBuilder7702;
@@ -6,10 +7,10 @@ use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::sol;
-use edw_core::{database::Database, factory::BuildContext, profile::Profile};
+use edw_core::{database::Database, factory::BuildContext, profile::Profile, signer::Signer};
 use edw_wallet::{
     database::memory::MemoryDatabase, simple_executor::SimpleExecutor,
-    simple_profile::SimpleProfile, simple_vault::SimpleVault,
+    simple_profile::SimpleProfile, simple_signer::SimpleSigner, simple_vault::SimpleVault,
 };
 use tracing::info;
 
@@ -39,7 +40,7 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("Failed to get executor signer")?
             .to_bytes(),
     )?;
-    let vault_signer = PrivateKeySigner::random();
+    let vault_key = PrivateKeySigner::random().credential().clone();
 
     let provider = Arc::new(
         ProviderBuilder::new()
@@ -60,13 +61,13 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
         provider.clone(),
         db.clone(),
         |ctx: BuildContext| async move {
-            SimpleExecutor::new_with_implementation(
-                executor_signer,
-                implementation,
-                ctx.provider,
-                ctx.db,
-            )
-            .await
+            let signer: Arc<dyn Signer> = Arc::new(
+                SimpleSigner::new(executor_signer.credential().clone(), &ctx.db)
+                    .await
+                    .expect("build executor signer"),
+            );
+            SimpleExecutor::new_with_implementation(signer, implementation, ctx.provider, ctx.db)
+                .await
         },
     )
     .await?;
@@ -77,9 +78,17 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
 
     //? Unlike `SimpleExecutor`, `SimpleVault` can't pay for its own authorization,
     //? so the sponsor submits it on the vault signer's behalf before construction.
-    let auth =
-        SimpleVault::authorize_implementation(&vault_signer, implementation, provider.as_ref())
-            .await?;
+    //? The vault's signer is rebuilt from the vault's own database inside `add_vault`; this
+    //? copy exists only to sign the authorization the sponsor submits beforehand.
+    let scratch: Arc<dyn Database> = Arc::new(MemoryDatabase::default());
+    let auth_signer: Arc<dyn Signer> =
+        Arc::new(SimpleSigner::new(vault_key.clone(), &scratch).await?);
+    let auth = SimpleVault::authorize_implementation(
+        auth_signer.as_ref(),
+        implementation,
+        provider.as_ref(),
+    )
+    .await?;
     let tx = TransactionRequest::default()
         .to(sponsor.address())
         .with_authorization_list(vec![auth]);
@@ -87,8 +96,12 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
 
     profile
         .add_vault(|ctx: BuildContext| async move {
-            SimpleVault::new_with_implementation(vault_signer, implementation, ctx.provider, ctx.db)
-                .await
+            let signer: Arc<dyn Signer> = Arc::new(
+                SimpleSigner::new(vault_key.clone(), &ctx.db)
+                    .await
+                    .expect("build vault signer"),
+            );
+            SimpleVault::new_with_implementation(signer, implementation, ctx.provider, ctx.db).await
         })
         .await?;
     info!("Added vault {:?} to profile", profile.vaults[0].1.id());

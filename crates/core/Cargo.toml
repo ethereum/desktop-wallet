@@ -6,7 +6,9 @@ edition = "2024"
 [dependencies]
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+alloy-consensus = { workspace = true }
 alloy-dyn-abi = { workspace = true, features = ["eip712"] }
+alloy-eips = { workspace = true }
 alloy-primitives = { workspace = true, features = ["serde", "k256"] }
 alloy-provider = { workspace = true }
 alloy-signer = { workspace = true }

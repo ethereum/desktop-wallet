@@ -1,24 +1,27 @@
 use std::sync::Arc;
 
-use alloy_consensus::TxEnvelope;
+use alloy_consensus::{SignableTransaction, TxEnvelope};
 use alloy_network::{
     NetworkTransactionBuilder, TransactionBuilder, TransactionBuilder7702, TxSigner,
 };
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, Signature};
 use alloy_provider::{Provider, network::EthereumWallet};
 use alloy_rpc_types_eth::TransactionRequest;
-use alloy_signer_local::PrivateKeySigner;
 use edw_core::{
     call::Call,
     database::Database,
     executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},
-    factory::{BuildContext, Factory, FactoryError},
+    factory::{BuildContext, Factory, FactoryError, try_build_signer},
+    signer::Signer,
 };
 use tracing::info;
 
 use crate::{
-    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated},
+    simple_delegate::{
+        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated, signer_address,
+    },
     simple_executor::db::{SimpleExecutorDatabaseError, SimpleExecutorDb},
+    simple_signer::db::{SimpleSignerDatabaseError, SimpleSignerDb},
 };
 
 pub(crate) mod db;
@@ -26,7 +29,7 @@ pub(crate) mod db;
 /// `SimpleExecutor` is a basic [`Executor`] implementation that uses an signer-based
 /// wallet to execute calls through the `SimpleDelegate` contract.
 pub struct SimpleExecutor {
-    delegate: SimpleDelegate<PrivateKeySigner>,
+    delegate: SimpleDelegate,
     wallet: EthereumWallet,
     provider: Arc<dyn Provider>,
     #[allow(unused)]
@@ -39,6 +42,10 @@ pub enum SimpleExecutorError {
     Delegate(#[from] SimpleDelegateError),
     #[error("database error: {0}")]
     Database(#[from] SimpleExecutorDatabaseError),
+    #[error("signer database error: {0}")]
+    SignerDatabase(#[from] SimpleSignerDatabaseError),
+    #[error("factory error: {0}")]
+    Factory(#[from] FactoryError),
     #[error("RPC error: {0}")]
     Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
     #[error("transaction builder error: {0}")]
@@ -67,7 +74,7 @@ impl SimpleExecutor {
     /// # Errors
     /// Returns an error if there is a RPC error.
     pub async fn new(
-        signer: PrivateKeySigner,
+        signer: Arc<dyn Signer>,
         provider: Arc<dyn Provider>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleExecutorError> {
@@ -76,16 +83,20 @@ impl SimpleExecutor {
 
     /// Creates a new `SimpleExecutor` instance.
     ///
+    /// `signer`'s [`Signer::tag`] is recorded so that [`SimpleExecutor::from_context`] rebuilds
+    /// the same kind through the factory, which requires `signer` to have stored whatever it
+    /// needs in `db`.
+    ///
     /// # Errors
     /// Returns an error if there is a RPC error.
     pub async fn new_with_implementation(
-        signer: PrivateKeySigner,
+        signer: Arc<dyn Signer>,
         implementation: Address,
         provider: Arc<dyn Provider>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleExecutorError> {
         Self::authorize_if_missing(implementation, &signer, provider.as_ref()).await?;
-        db.put_signing_key(signer.credential()).await?;
+        db.put_signer_tag(signer.tag()).await?;
         db.put_implementation(&implementation).await?;
 
         let delegate = SimpleDelegate::new_with_implementation(
@@ -95,7 +106,7 @@ impl SimpleExecutor {
         )
         .await?;
 
-        let wallet = EthereumWallet::new(signer);
+        let wallet = EthereumWallet::new(TxSignerBridge::new(signer));
         Ok(Self {
             delegate,
             wallet,
@@ -110,11 +121,11 @@ impl SimpleExecutor {
     /// Errors if the signer cannot be retrieved from the database or if the `SimpleExecutor` cannot
     /// be created (see [`SimpleExecutor::new`]).
     pub async fn from_context(ctx: BuildContext) -> Result<Box<dyn Executor>, SimpleExecutorError> {
+        let tag = ctx.db.get_signer_tag().await?;
+        let signer: Arc<dyn Signer> = Arc::from(try_build_signer(&tag, ctx.clone()).await?);
         let provider = ctx.provider;
         let db = ctx.db;
 
-        let signing_key = db.get_signing_key().await?;
-        let signer = PrivateKeySigner::from_signing_key(signing_key);
         let implementation = db.get_implementation().await?;
         let executor =
             SimpleExecutor::new_with_implementation(signer, implementation, provider, db).await?;
@@ -125,10 +136,10 @@ impl SimpleExecutor {
     /// for the signer's address.
     async fn authorize_if_missing(
         implementation: Address,
-        signer: &PrivateKeySigner,
+        signer: &Arc<dyn Signer>,
         provider: &dyn Provider,
     ) -> Result<(), SimpleExecutorError> {
-        let delegator = TxSigner::address(&signer);
+        let delegator = signer_address(signer.as_ref());
         if is_delegated(delegator, implementation, provider).await? {
             return Ok(());
         }
@@ -139,14 +150,18 @@ impl SimpleExecutor {
 
         //? nonce + 1 to account for the authorization transaction
         let nonce = provider.get_transaction_count(delegator).await? + 1;
-        let auth =
-            SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
-                .await?;
+        let auth = SimpleDelegate::authorize_implementation(
+            signer.as_ref(),
+            nonce,
+            provider,
+            implementation,
+        )
+        .await?;
 
         let tx = TransactionRequest::default()
             .to(Address::ZERO)
             .with_authorization_list(vec![auth]);
-        let wallet = EthereumWallet::new(signer.clone());
+        let wallet = EthereumWallet::new(TxSignerBridge::new(signer.clone()));
         let envelope = fill_and_sign(tx, provider, &wallet).await?;
 
         let _ = provider
@@ -206,6 +221,37 @@ impl SimpleExecutor {
 
         let pending_tx = self.provider.send_tx_envelope(envelope).await?;
         Ok(*pending_tx.tx_hash())
+    }
+}
+
+/// [`EthereumWallet`] needs a [`TxSigner`], so the provider's fill-and-sign path reaches this
+/// executor's signer through here.
+struct TxSignerBridge {
+    signer: Arc<dyn Signer>,
+    address: Address,
+}
+
+impl TxSignerBridge {
+    fn new(signer: Arc<dyn Signer>) -> Self {
+        let address = signer_address(signer.as_ref());
+        Self { signer, address }
+    }
+}
+
+#[async_trait::async_trait]
+impl TxSigner<Signature> for TxSignerBridge {
+    fn address(&self) -> Address {
+        self.address
+    }
+
+    async fn sign_transaction(
+        &self,
+        tx: &mut dyn SignableTransaction<Signature>,
+    ) -> alloy_signer::Result<Signature> {
+        self.signer
+            .sign_transaction(tx)
+            .await
+            .map_err(alloy_signer::Error::other)
     }
 }
 

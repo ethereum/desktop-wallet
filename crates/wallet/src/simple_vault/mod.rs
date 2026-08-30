@@ -3,18 +3,21 @@ use std::sync::Arc;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
-use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::SolCall;
 use edw_core::{
     asset::AssetId,
     call::Call,
     database::Database,
-    factory::{BuildContext, Factory, FactoryError},
+    factory::{BuildContext, Factory, FactoryError, try_build_signer},
+    signer::Signer,
     vault::{Vault, VaultError, VaultId},
 };
 
 use crate::{
-    simple_delegate::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
+    simple_delegate::{
+        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, signer_address,
+    },
+    simple_signer::db::{SimpleSignerDatabaseError, SimpleSignerDb},
     simple_vault::db::{SimpleVaultDatabaseError, SimpleVaultDb},
 };
 
@@ -24,7 +27,7 @@ pub(crate) mod db;
 /// to store and transfer assets through its address. It uses the`SimpleDelegate`
 /// contract to allow the signer to authorize vault transactions for withdrawals.
 pub struct SimpleVault {
-    delegate: SimpleDelegate<PrivateKeySigner>,
+    delegate: SimpleDelegate,
     provider: Arc<dyn Provider>,
     #[allow(unused)]
     db: Arc<dyn Database>,
@@ -36,6 +39,10 @@ pub enum SimpleVaultError {
     Delegate(#[from] SimpleDelegateError),
     #[error("database error: {0}")]
     Database(#[from] SimpleVaultDatabaseError),
+    #[error("signer database error: {0}")]
+    SignerDatabase(#[from] SimpleSignerDatabaseError),
+    #[error("factory error: {0}")]
+    Factory(#[from] FactoryError),
     #[error("address not authorized")]
     NotAuthorized,
     #[error("RPC error: {0}")]
@@ -73,7 +80,7 @@ impl SimpleVault {
     /// Returns an error if the signer's address is not delegated to the `SimpleVault`
     /// implementation contract.
     pub async fn new(
-        signer: PrivateKeySigner,
+        signer: Arc<dyn Signer>,
         provider: Arc<dyn Provider>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
@@ -86,7 +93,7 @@ impl SimpleVault {
     /// # Errors
     /// Returns an error if an RPC call fails or if the authorization cannot be signed.
     pub async fn authorization(
-        signer: &PrivateKeySigner,
+        signer: &dyn Signer,
         provider: &dyn Provider,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         Self::authorize_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
@@ -98,11 +105,11 @@ impl SimpleVault {
     /// Errors if the signer cannot be retrieved from the database or if the `SimpleVault` cannot
     /// be created (see [`SimpleVault::new`]).
     pub async fn from_context(ctx: BuildContext) -> Result<Box<dyn Vault>, SimpleVaultError> {
-        let provider = ctx.provider;
-        let db = ctx.db;
+        let provider = ctx.provider.clone();
+        let db = ctx.db.clone();
 
-        let signing_key = db.get_signing_key().await?;
-        let signer = PrivateKeySigner::from_signing_key(signing_key);
+        let tag = ctx.db.get_signer_tag().await?;
+        let signer: Arc<dyn Signer> = Arc::from(try_build_signer(&tag, ctx.clone()).await?);
         let implementation = db.get_implementation().await?;
         let vault =
             SimpleVault::new_with_implementation(signer, implementation, provider, db).await?;
@@ -111,20 +118,24 @@ impl SimpleVault {
 
     /// Creates a new `SimpleVault` instance.
     ///
+    /// `signer`'s [`Signer::tag`] is recorded, so [`SimpleVault::from_context`] rebuilds the
+    /// same kind of signer through the factory.
+    ///
     /// # Errors
     /// Returns an error if the signer's code is not delegated to the implementation
     /// address or if there is an RPC error.
     pub async fn new_with_implementation(
-        signer: PrivateKeySigner,
+        signer: Arc<dyn Signer>,
         implementation: Address,
         provider: Arc<dyn Provider>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
+        let signer_tag = signer.tag();
         let delegate =
             SimpleDelegate::new_with_implementation(signer, implementation, provider.clone())
                 .await?;
 
-        db.put_signing_key(delegate.signer().credential()).await?;
+        db.put_signer_tag(signer_tag).await?;
         db.put_implementation(&implementation).await?;
         Ok(Self {
             delegate,
@@ -139,11 +150,13 @@ impl SimpleVault {
     /// # Errors
     /// Returns an error if there is an RPC error or if the authorization cannot be signed.
     pub async fn authorize_implementation(
-        signer: &PrivateKeySigner,
+        signer: &dyn Signer,
         implementation: Address,
         provider: &dyn Provider,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
-        let nonce = provider.get_transaction_count(signer.address()).await?;
+        let nonce = provider
+            .get_transaction_count(signer_address(signer))
+            .await?;
         let auth =
             SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
                 .await?;

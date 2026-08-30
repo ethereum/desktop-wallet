@@ -1,23 +1,26 @@
 use std::sync::Arc;
 
+use alloy_dyn_abi::TypedData;
 use alloy_eips::eip7702::{
     Authorization, SignedAuthorization, constants::EIP7702_DELEGATION_DESIGNATOR,
 };
 use alloy_primitives::{Address, Bytes, U256, address};
 use alloy_provider::Provider;
 use alloy_rpc_types_eth::TransactionRequest;
-use alloy_signer::Signer;
-use alloy_sol_types::{Eip712Domain, SolCall, SolStruct, eip712_domain};
-use edw_core::call::Call;
+use alloy_sol_types::{Eip712Domain, SolCall, eip712_domain};
+use edw_core::{
+    call::Call,
+    signer::{Signer, SignerError, SignerId},
+};
 
 /// `SimpleDelegate` is a 7702-compatible delegate contract loosely based on Safe's
 /// [`SafeLite`](https://github.com/5afe/safe-eip7702/blob/main/safe-eip7702-contracts/contracts/experimental/SafeLite.sol)
 /// contract. An address can authorize the `SimpleDelegate` contract with a 7702
 /// authorization, then execute signed batches of calls. This is used for atomic
 /// execution of multiple calls and gasless execution for the signer.
-pub struct SimpleDelegate<S: Signer> {
+pub struct SimpleDelegate {
     chain_id: u64,
-    signer: S,
+    signer: Arc<dyn Signer>,
     provider: Arc<dyn Provider>,
 }
 
@@ -28,7 +31,7 @@ pub enum SimpleDelegateError {
     #[error("RPC error: {0}")]
     Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
     #[error("signer error: {0}")]
-    Signer(#[from] alloy_signer::Error),
+    Signer(#[from] SignerError),
     #[error("sol error: {0}")]
     Sol(#[from] alloy_sol_types::Error),
 }
@@ -37,12 +40,14 @@ mod sol {
     use alloy_sol_types::sol;
 
     sol!(
+        #[derive(serde::Serialize)]
         struct Call {
             address target;
             uint256 value;
             bytes data;
         }
 
+        #[derive(serde::Serialize)]
         struct ExecuteBatch {
             Call[] calls;
             uint256 nonce;
@@ -62,18 +67,24 @@ mod sol {
 
 pub const SIMPLE_DELEGATE_ADDRESS: Address = address!("0xACAe14c5d84EA4a1ddb84bFbDc1a62796677ACcA");
 
-impl<S: Signer> SimpleDelegate<S> {
+impl SimpleDelegate {
     /// Creates a new `SimpleDelegate` instance.
     ///
     /// # Errors
     /// Returns an error if the signer's code is not delegated to the implementation
     /// address or if there is an RPC error.
     pub async fn new_with_implementation(
-        signer: S,
+        signer: Arc<dyn Signer>,
         implementation: Address,
         provider: Arc<dyn Provider>,
     ) -> Result<Self, SimpleDelegateError> {
-        if !is_delegated(signer.address(), implementation, provider.as_ref()).await? {
+        if !is_delegated(
+            signer_address(signer.as_ref()),
+            implementation,
+            provider.as_ref(),
+        )
+        .await?
+        {
             return Err(SimpleDelegateError::NotAuthorized);
         }
 
@@ -91,7 +102,7 @@ impl<S: Signer> SimpleDelegate<S> {
     /// Returns an error if an RPC error occurs or if the signer fails to sign
     /// the authorization.
     pub async fn authorize_implementation(
-        signer: &S,
+        signer: &dyn Signer,
         nonce: u64,
         provider: &dyn Provider,
         implementation: Address,
@@ -104,16 +115,12 @@ impl<S: Signer> SimpleDelegate<S> {
             nonce,
         };
 
-        let signature = signer.sign_hash(&authorization.signature_hash()).await?;
-        Ok(authorization.into_signed(signature))
+        Ok(signer.sign_authorization(&authorization).await?)
     }
 
+    #[must_use]
     pub fn address(&self) -> Address {
-        self.signer.address()
-    }
-
-    pub fn signer(&self) -> &S {
-        &self.signer
+        signer_address(self.signer.as_ref())
     }
 
     /// Signs a batch of calls to be executed by the `SimpleVault` contract. Returns
@@ -133,8 +140,8 @@ impl<S: Signer> SimpleDelegate<S> {
             nonce: self.nonce().await?,
         };
 
-        let digest = batch.eip712_signing_hash(&self.domain());
-        let signature = self.signer.sign_hash(&digest).await?;
+        let typed_data = TypedData::from_struct(&batch, Some(self.domain()));
+        let signature = self.signer.sign_typed_data(&typed_data).await?;
         let data = sol::SimpleDelegate::executeBatchCall {
             calls,
             v: u8::from(signature.v()) + 27,
@@ -169,6 +176,14 @@ impl<S: Signer> SimpleDelegate<S> {
             chain_id: self.chain_id,
             verifying_contract: self.address(),
         }
+    }
+}
+
+/// A [`SignerId`] variant without an address would need a different delegate, since 7702
+/// delegation is a property of an EOA.
+pub(crate) fn signer_address(signer: &dyn Signer) -> Address {
+    match signer.id() {
+        SignerId::Address(address) => address,
     }
 }
 
