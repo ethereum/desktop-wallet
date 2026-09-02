@@ -115,7 +115,8 @@ impl SimpleDelegate {
             nonce,
         };
 
-        Ok(signer.sign_authorization(&authorization).await?)
+        let signature = signer.sign_authorization(&authorization).await?;
+        Ok(authorization.into_signed(signature))
     }
 
     #[must_use]
@@ -201,9 +202,69 @@ pub async fn is_delegated(
 
 /// Builds the EIP-7702 delegation designator bytecode that an EOA installs
 /// on itself to delegate execution to `implementation`.
-fn delegation_designator_code(implementation: Address) -> Bytes {
+pub(crate) fn delegation_designator_code(implementation: Address) -> Bytes {
     let mut code = Vec::with_capacity(23);
     code.extend_from_slice(&EIP7702_DELEGATION_DESIGNATOR);
     code.extend_from_slice(implementation.as_slice());
     Bytes::from(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_dyn_abi::TypedData;
+    use alloy_primitives::{Address, Bytes, U256};
+    use alloy_sol_types::{SolStruct, eip712_domain};
+
+    use super::*;
+
+    fn domain() -> Eip712Domain {
+        eip712_domain! {
+            name: "SimpleDelegate",
+            version: "1",
+            chain_id: 1,
+            verifying_contract: Address::repeat_byte(0x11),
+        }
+    }
+
+    fn batch(call_count: u8) -> sol::ExecuteBatch {
+        sol::ExecuteBatch {
+            calls: (0..call_count)
+                .map(|i| sol::Call {
+                    target: Address::repeat_byte(0x20 + i),
+                    value: U256::from(i),
+                    data: Bytes::from(vec![i; usize::from(i)]),
+                })
+                .collect(),
+            nonce: U256::from(7),
+        }
+    }
+
+    /// The preimage of `EXECUTE_BATCH_TYPEHASH` in `contracts/src/SimpleDelegate.sol`, which
+    /// hardcodes it. A field added, renamed or reordered on either side produces signatures
+    /// `executeBatch` rejects.
+    #[test]
+    fn encoded_type_matches_the_contract_typehash() {
+        assert_eq!(
+            sol::ExecuteBatch::eip712_encode_type(),
+            "ExecuteBatch(Call[] calls,uint256 nonce)Call(address target,uint256 value,bytes data)",
+        );
+    }
+
+    /// [`SimpleDelegate::batch_calls`] signs through [`TypedData`], which rebuilds the encoding
+    /// from the struct's serde representation rather than from its [`SolStruct`] impl. The
+    /// array of structs and the dynamic `bytes` field are where the two can disagree.
+    #[test]
+    fn typed_data_hash_matches_execute_batch_sol_struct_hash() {
+        for call_count in 0..3 {
+            let batch = batch(call_count);
+
+            let typed_data = TypedData::from_struct(&batch, Some(domain()));
+
+            assert_eq!(
+                typed_data.eip712_signing_hash().expect("typed data hash"),
+                batch.eip712_signing_hash(&domain()),
+                "hashes disagree for a batch of {call_count} call(s)",
+            );
+        }
+    }
 }

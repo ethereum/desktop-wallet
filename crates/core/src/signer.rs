@@ -1,8 +1,7 @@
 use alloy_consensus::SignableTransaction;
 use alloy_dyn_abi::TypedData;
-use alloy_eips::eip7702::{Authorization, SignedAuthorization};
+use alloy_eips::eip7702::Authorization;
 use alloy_primitives::{Address, Signature};
-use alloy_signer::k256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -18,8 +17,6 @@ pub trait Signer: Send + Sync {
     fn tag(&self) -> &'static str;
 
     fn id(&self) -> SignerId;
-
-    fn public_key(&self) -> VerifyingKey;
 
     /// Signs a message per [EIP-191].
     ///
@@ -46,11 +43,15 @@ pub trait Signer: Send + Sync {
     /// contract it names. Separate from [`Signer::sign_transaction`] because a delegation
     /// changes what the account is rather than what it does once.
     ///
+    /// Returns only the signature, so the caller keeps the authorization it built. An
+    /// implementation that returned a whole [`alloy_eips::eip7702::SignedAuthorization`]
+    /// could substitute the implementation address, chain or nonce it was asked to sign for.
+    ///
     /// [EIP-7702]: https://eips.ethereum.org/EIPS/eip-7702
     async fn sign_authorization(
         &self,
         authorization: &Authorization,
-    ) -> Result<SignedAuthorization, SignerError>;
+    ) -> Result<Signature, SignerError>;
 }
 
 #[derive(Debug, thiserror::Error)]

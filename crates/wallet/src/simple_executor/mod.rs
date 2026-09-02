@@ -21,7 +21,10 @@ use crate::{
         SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated, signer_address,
     },
     simple_executor::db::{SimpleExecutorDatabaseError, SimpleExecutorDb},
-    simple_signer::db::{SimpleSignerDatabaseError, SimpleSignerDb},
+    simple_signer::{
+        db::{SimpleSignerDatabaseError, SimpleSignerDb},
+        persist_and_rebuild,
+    },
 };
 
 pub(crate) mod db;
@@ -83,21 +86,26 @@ impl SimpleExecutor {
 
     /// Creates a new `SimpleExecutor` instance.
     ///
-    /// `signer`'s [`Signer::tag`] is recorded so that [`SimpleExecutor::from_context`] rebuilds
-    /// the same kind through the factory, which requires `signer` to have stored whatever it
-    /// needs in `db`.
+    /// The signer is rebuilt from `db` and its [`Signer::tag`] recorded, and `implementation`
+    /// is written, before any 7702 authorization is submitted: an authorization that lands
+    /// while `db` is missing either one delegates an account this executor cannot rebuild.
     ///
     /// # Errors
-    /// Returns an error if there is a RPC error.
+    /// Returns an error if the signer cannot be rebuilt from `db`, if the database cannot be
+    /// written, or if there is a RPC error.
     pub async fn new_with_implementation(
         signer: Arc<dyn Signer>,
         implementation: Address,
         provider: Arc<dyn Provider>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleExecutorError> {
-        Self::authorize_if_missing(implementation, &signer, provider.as_ref()).await?;
-        db.put_signer_tag(signer.tag()).await?;
+        persist_and_rebuild(
+            signer.as_ref(),
+            BuildContext::new(provider.clone(), db.clone()),
+        )
+        .await?;
         db.put_implementation(&implementation).await?;
+        Self::authorize_if_missing(implementation, &signer, provider.as_ref()).await?;
 
         let delegate = SimpleDelegate::new_with_implementation(
             signer.clone(),
@@ -284,5 +292,142 @@ async fn fill_and_sign(
 impl From<SimpleExecutorError> for ExecutorError {
     fn from(err: SimpleExecutorError) -> Self {
         ExecutorError::Other(Box::new(err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::{Bytes, U64};
+    use alloy_signer_local::PrivateKeySigner;
+    use alloy_transport::mock::Asserter;
+
+    use super::*;
+    use crate::{
+        database::memory::MemoryDatabase,
+        simple_delegate::delegation_designator_code,
+        simple_signer::{SIMPLE_SIGNER_TAG, SimpleSigner},
+        test_support::mocked_provider,
+    };
+
+    /// The address is the one the stored key belongs to.
+    async fn seeded_db() -> (Arc<dyn Database>, Address) {
+        let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
+        let signer = SimpleSigner::new(PrivateKeySigner::random().credential().clone(), &db)
+            .await
+            .expect("build signer");
+        db.put_signer_tag(signer.tag()).await.expect("store tag");
+        db.put_implementation(&SIMPLE_DELEGATE_ADDRESS)
+            .await
+            .expect("store implementation");
+        (db, signer.address())
+    }
+
+    #[tokio::test]
+    async fn from_context_rebuilds_the_signer_named_by_the_stored_tag() {
+        let (db, address) = seeded_db().await;
+        let asserter = Asserter::new();
+        // The delegation lookup runs twice, once for `authorize_if_missing` and once for the
+        // delegate itself, and the delegate then reads the chain id for its EIP-712 domain.
+        asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
+        asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
+        asserter.push_success(&U64::from(1));
+
+        let executor =
+            SimpleExecutor::from_context(BuildContext::new(mocked_provider(&asserter), db.clone()))
+                .await
+                .expect("rebuild from the stored tag");
+
+        assert_eq!(
+            executor.id(),
+            ExecutorId::Address(address),
+            "the rebuilt executor must belong to the key the stored tag names",
+        );
+    }
+
+    /// The ordering [`SimpleExecutor::new_with_implementation`] promises: nothing is
+    /// authorized on-chain until the database can rebuild what was authorized.
+    #[tokio::test]
+    async fn the_database_is_written_before_any_authorization_is_attempted() {
+        let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
+        let signer: Arc<dyn Signer> = Arc::new(
+            SimpleSigner::new(PrivateKeySigner::random().credential().clone(), &db)
+                .await
+                .expect("build signer"),
+        );
+        let asserter = Asserter::new();
+        // Undelegated, so the build goes on to authorize and runs out of queued responses.
+        asserter.push_success(&Bytes::new());
+
+        let result = SimpleExecutor::new_with_implementation(
+            signer,
+            SIMPLE_DELEGATE_ADDRESS,
+            mocked_provider(&asserter),
+            db.clone(),
+        )
+        .await;
+
+        assert!(result.is_err(), "the authorization has no chain to land on");
+        assert_eq!(
+            db.get_signer_tag().await.expect("tag stored"),
+            SIMPLE_SIGNER_TAG,
+        );
+        db.get_implementation()
+            .await
+            .expect("implementation stored");
+    }
+
+    #[tokio::test]
+    async fn from_context_fails_before_the_chain_when_no_tag_is_stored() {
+        let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
+        let asserter = Asserter::new();
+        asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
+
+        let result =
+            SimpleExecutor::from_context(BuildContext::new(mocked_provider(&asserter), db)).await;
+
+        let Err(error) = result else {
+            panic!("there is nothing to rebuild from");
+        };
+        assert!(
+            matches!(
+                error,
+                SimpleExecutorError::SignerDatabase(SimpleSignerDatabaseError::MissingSignerTag)
+            ),
+            "expected a missing tag to be reported as such, got {error}",
+        );
+        assert_eq!(
+            asserter.read_q().len(),
+            1,
+            "a build with no signer to rebuild must not reach the chain",
+        );
+    }
+
+    #[tokio::test]
+    async fn from_context_fails_before_the_chain_when_the_tag_names_an_unrebuildable_signer() {
+        let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
+        db.put_signer_tag(SIMPLE_SIGNER_TAG)
+            .await
+            .expect("store tag");
+        db.put_implementation(&SIMPLE_DELEGATE_ADDRESS)
+            .await
+            .expect("store implementation");
+        let asserter = Asserter::new();
+        asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
+
+        let result =
+            SimpleExecutor::from_context(BuildContext::new(mocked_provider(&asserter), db)).await;
+
+        let Err(error) = result else {
+            panic!("the tag names a signer whose key was never stored");
+        };
+        assert!(
+            matches!(error, SimpleExecutorError::Factory(_)),
+            "expected the factory to refuse, got {error}",
+        );
+        assert_eq!(
+            asserter.read_q().len(),
+            1,
+            "a build whose signer cannot be rebuilt must not reach the chain",
+        );
     }
 }

@@ -4,3 +4,6 @@ pub mod simple_executor;
 pub mod simple_profile;
 pub mod simple_signer;
 pub mod simple_vault;
+
+#[cfg(test)]
+pub(crate) mod test_support;

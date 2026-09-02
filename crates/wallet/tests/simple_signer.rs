@@ -37,6 +37,18 @@ const EIP712_SIGNATURE: [u8; 65] = hex!(
 
 const MESSAGE: &[u8] = b"Hello, Bob!";
 
+/// The `eth_sign` result for [`MESSAGE`] under [`KEY`], derived from the [EIP-191] preimage
+/// `"\x19Ethereum Signed Message:\n" || len || message` and cross-checked against
+/// `cast wallet sign`. It pins the output to the specification rather than to alloy, which
+/// the parity tests above take as correct.
+///
+/// [EIP-191]: https://eips.ethereum.org/EIPS/eip-191
+const EIP191_SIGNATURE: [u8; 65] = hex!(
+    "d088abb597a29a536423146c15e05a9f18af763823eb041bbb6dea6f6e560f5c\
+     45ad634d5594f14191f5f978f7745331fce28c53a348a06ecca512fbc06f65d4\
+     1b"
+);
+
 async fn signer_from(key: SigningKey) -> SimpleSigner {
     let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
     SimpleSigner::new(key, &db).await.expect("build signer")
@@ -55,11 +67,6 @@ async fn identity_is_derived_from_the_key() {
 
     assert_eq!(signer.address(), SIGNER_ADDRESS);
     assert_eq!(signer.id(), SignerId::Address(SIGNER_ADDRESS));
-    assert_eq!(
-        Address::from_public_key(&signer.public_key()),
-        SIGNER_ADDRESS,
-        "public key must derive to the signing address"
-    );
 }
 
 #[tokio::test]
@@ -70,6 +77,15 @@ async fn personal_sign_matches_alloy() {
         ours.personal_sign(MESSAGE).await.expect("sign"),
         reference.sign_message_sync(MESSAGE).expect("sign"),
     );
+}
+
+#[tokio::test]
+async fn personal_sign_matches_the_eip191_vector() {
+    let signer = signer_from(SigningKey::from_slice(&KEY).expect("valid key")).await;
+
+    let signature = signer.personal_sign(MESSAGE).await.expect("sign");
+
+    assert_eq!(signature.as_bytes(), EIP191_SIGNATURE);
 }
 
 /// Guards the EIP-191 prefix directly, so a signer that hashed the message unprefixed would
@@ -140,15 +156,13 @@ async fn sign_authorization_recovers_to_the_signer() {
         nonce: 0,
     };
 
-    let signed = ours
+    let signature = ours
         .sign_authorization(&authorization)
         .await
         .expect("sign authorization");
 
     assert_eq!(
-        signed
-            .signature()
-            .expect("signature")
+        signature
             .recover_address_from_prehash(&authorization.signature_hash())
             .expect("recover"),
         reference.address(),

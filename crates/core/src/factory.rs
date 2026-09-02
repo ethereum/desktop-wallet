@@ -10,7 +10,7 @@ pub struct Factory<T: ?Sized> {
 }
 
 pub type FactoryCreateFn<T> =
-    fn(BuildContext) -> Pin<Box<dyn Future<Output = Result<Box<T>, FactoryError>>>>;
+    fn(BuildContext) -> Pin<Box<dyn Future<Output = Result<Box<T>, FactoryError>> + Send>>;
 
 #[derive(Clone)]
 pub struct BuildContext {
