@@ -10,6 +10,7 @@ alloy-primitives = { workspace = true, features = ["serde"] }
 alloy-provider = { workspace = true }
 inventory = { workspace = true }
 serde = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 zeroize = { workspace = true }
 
 [lints]

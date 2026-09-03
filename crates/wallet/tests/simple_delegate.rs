@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use alloy_node_bindings::Anvil;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::ProviderBuilder;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolStruct, sol};
+
+mod common;
 
 sol!(
     #[sol(rpc)]
@@ -32,7 +33,7 @@ mod eip712_types {
 #[tokio::test]
 #[ignore = "run with `cargo test -- --ignored`"]
 async fn test_typehashes_match_contract() -> Result<(), Box<dyn std::error::Error>> {
-    let anvil = Anvil::new().spawn();
+    let anvil = common::devnet();
     let signer = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
     let provider = Arc::new(
         ProviderBuilder::new()

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use alloy_primitives::{Address, B256};
 use serde::{Deserialize, Serialize};
 
@@ -37,10 +39,39 @@ pub trait Executor: Send + Sync {
     /// Retrieves the receipt of a previously sent [`Call`] using its [`CallId`].
     /// If the receipt is not yet available, this method will return `None`.
     async fn receipt(&self, id: CallId) -> Result<Option<CallReceipt>, ExecutorError>;
+
+    /// Polls [`Executor::receipt`] until the call is executed or `timeout` elapses.
+    ///
+    /// A caller that asserts on chain state straight after [`Executor::execute`] is racing
+    /// the block, since `execute` returns on submission.
+    ///
+    /// # Errors
+    /// Returns [`ExecutorError::NotExecuted`] if no receipt appears within `timeout`.
+    async fn await_call(
+        &self,
+        id: CallId,
+        timeout: Duration,
+    ) -> Result<CallReceipt, ExecutorError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(receipt) = self.receipt(id).await? {
+                return Ok(receipt);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ExecutorError::NotExecuted { id, timeout });
+            }
+            tokio::time::sleep(RECEIPT_POLL_INTERVAL).await;
+        }
+    }
 }
+
+/// How often [`Executor::await_call`] re-checks for a receipt.
+const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutorError {
+    #[error("call {id:?} was not executed within {timeout:?}")]
+    NotExecuted { id: CallId, timeout: Duration },
     #[error(transparent)]
     Other(Box<dyn std::error::Error + Send + Sync>),
 }

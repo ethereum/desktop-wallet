@@ -1,7 +1,6 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use alloy_network::TransactionBuilder7702;
-use alloy_node_bindings::Anvil;
 use alloy_primitives::{Address, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
@@ -17,6 +16,11 @@ use edw_wallet::{
 };
 use tracing::info;
 
+mod common;
+
+/// How long a test waits for a submitted call to be mined.
+const MINING_TIMEOUT: Duration = Duration::from_secs(30);
+
 sol!(
     #[sol(rpc)]
     SimpleDelegateContract,
@@ -26,15 +30,9 @@ sol!(
 #[tokio::test]
 #[ignore = "run with `cargo test -- --ignored`"]
 async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    common::init_tracing();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_test_writer()
-        .init();
-
-    let anvil = Anvil::new().spawn();
+    let anvil = common::devnet();
     let rpc_url = anvil.endpoint();
     let signer = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
     let vault_signer = PrivateKeySigner::random();
@@ -96,7 +94,8 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
         .deposit(signer.address(), &deposit_asset, deposit_amount)
         .await?;
 
-    executor.execute(&deposit_calls).await?;
+    let deposit_call = executor.execute(&deposit_calls).await?;
+    executor.await_call(deposit_call, MINING_TIMEOUT).await?;
     info!("Deposit completed successfully.");
 
     //? Verify balance
@@ -121,7 +120,8 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    executor.execute(&withdraw_calls).await?;
+    let withdraw_call = executor.execute(&withdraw_calls).await?;
+    executor.await_call(withdraw_call, MINING_TIMEOUT).await?;
     info!("Withdrawal completed successfully.");
 
     //? Verify balance after withdrawal
