@@ -1,8 +1,8 @@
 use std::{clone::Clone, fmt::Debug};
 
-use clap::{Args, Subcommand};
+use clap::Subcommand;
 
-use crate::{GlobalArgs, print_help};
+use crate::GlobalArgs;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -12,21 +12,14 @@ pub enum Command {
     View,
 }
 
-#[derive(Debug, Args)]
-pub struct ConfigArgs {
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-impl ConfigArgs {
+impl Command {
     pub fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        match self.command {
-            None => print_help("config"),
-            Some(Command::Path) => {
+        match self {
+            Command::Path => {
                 println!("{}", global.data_dir.display());
                 Ok(())
             }
-            Some(Command::View) => {
+            Command::View => {
                 println!("data_dir={}", global.data_dir.display());
                 println!("network_store={}/network", global.data_dir.display());
                 println!("profile_store={}/*/db", global.data_dir.display());

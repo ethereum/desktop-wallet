@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Context;
-use clap::{Args, Subcommand};
+use clap::Subcommand;
 use edw_core::{
     database::file::FileDatabase,
     executor::simple::SimpleExecutor,
@@ -13,7 +13,7 @@ use edw_core::{
     profile::simple::SimpleProfile,
 };
 
-use crate::{GlobalArgs, print_help};
+use crate::GlobalArgs;
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
@@ -25,19 +25,12 @@ pub(crate) enum Command {
     Balance { name: String },
 }
 
-#[derive(Args)]
-pub struct ProfileArgs {
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-impl ProfileArgs {
+impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        match &self.command {
-            None => print_help("profile"),
-            Some(Command::List) => list(global).await,
-            Some(Command::Create { name }) => create(name, global).await,
-            Some(Command::Balance { name }) => {
+        match &self {
+            Command::List => list(global).await,
+            Command::Create { name } => create(name, global).await,
+            Command::Balance { name } => {
                 println!("Balance lookup for profile `{name}` is not implemented");
                 Ok(())
             }

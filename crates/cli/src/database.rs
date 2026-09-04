@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
-use clap::{Args, Subcommand};
+use clap::Subcommand;
 
-use crate::{GlobalArgs, print_help};
+use crate::GlobalArgs;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -14,17 +14,10 @@ pub enum Command {
     Purge,
 }
 
-#[derive(Debug, Args)]
-pub struct DatabaseArgs {
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-impl DatabaseArgs {
+impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        match self.command {
-            None => print_help("database"),
-            Some(Command::Path) => {
+        match self {
+            Command::Path => {
                 if let Ok(_ctx) = global.gather().await {
                     println!("{}/*/db", global.data_dir.display());
                     Ok(())
@@ -32,8 +25,8 @@ impl DatabaseArgs {
                     anyhow::bail!("not implemented")
                 }
             }
-            Some(Command::Migrate) => anyhow::bail!("database migrations are not implemented"),
-            Some(Command::Purge) => anyhow::bail!("database purge is not implemented"),
+            Command::Migrate => anyhow::bail!("database migrations are not implemented"),
+            Command::Purge => anyhow::bail!("database purge is not implemented"),
         }
     }
 }

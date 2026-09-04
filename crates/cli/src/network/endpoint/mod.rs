@@ -2,12 +2,11 @@ use std::fmt::Debug;
 
 use anyhow::anyhow;
 use clap::{Args, Subcommand};
-
-pub mod list;
 use edw_core::network::{Network, db::NetworkDb};
-use list::NetworkEndpointListArgs;
 
-use crate::GlobalArgs;
+use crate::{GlobalArgs, network::endpoint::list::NetworkEndpointListArgs};
+
+mod list;
 
 #[derive(Args, Debug)]
 pub struct NetworkEndpointArgs {
@@ -15,11 +14,11 @@ pub struct NetworkEndpointArgs {
     network: String,
 
     #[command(subcommand)]
-    pub command: NetworkEndpointCommand,
+    pub command: Command,
 }
 
 #[derive(Subcommand, Debug)]
-pub enum NetworkEndpointCommand {
+pub enum Command {
     /// Lists endpoints configured for a network.
     List(NetworkEndpointListArgs),
 }
@@ -40,7 +39,7 @@ impl NetworkEndpointArgs {
     }
 }
 
-impl NetworkEndpointCommand {
+impl Command {
     pub fn run(&self, network: &Network, _global: &GlobalArgs) {
         match self {
             Self::List(args) => args.run(network),

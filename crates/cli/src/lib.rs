@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 mod config;
 mod context;
@@ -33,13 +33,17 @@ pub(crate) struct GlobalArgs {
 #[derive(Subcommand)]
 enum Command {
     /// Inspects the resolved CLI configuration.
-    Config(config::ConfigArgs),
+    #[command(subcommand)]
+    Config(config::Command),
     /// Manages wallet profiles.
-    Profile(profile::ProfileArgs),
+    #[command(subcommand)]
+    Profile(profile::Command),
     /// Manages profile databases.
-    Database(database::DatabaseArgs),
+    #[command(subcommand)]
+    Database(database::Command),
     /// Manages configured networks and their endpoints.
-    Network(network::NetworkArgs),
+    #[command(subcommand)]
+    Network(network::Command),
     /// Unlocks the wallet for this terminal session.
     Unlock,
     /// Locks the wallet, ending this terminal's session.
@@ -59,18 +63,4 @@ impl Cli {
 
         Ok(())
     }
-}
-
-pub(crate) fn print_help(name: &str) -> Result<(), anyhow::Error> {
-    let mut command = Cli::command();
-    let mut subcommand = &mut command;
-    for part in name.split_whitespace() {
-        subcommand = subcommand
-            .find_subcommand_mut(part)
-            .ok_or_else(|| anyhow::anyhow!("unknown command: {name}"))?;
-    }
-    subcommand.set_bin_name(format!("edw {name}"));
-    subcommand.print_help()?;
-    println!();
-    Ok(())
 }
