@@ -17,12 +17,7 @@ pub enum Command {
     /// Add a new network
     Add(NetworkAddArgs),
     /// View network status, latest reported block-height, etc
-    Status {
-        id_or_preset: Option<String>,
-        /// Prints endpoint URLs in full
-        #[arg(long)]
-        show_urls: bool,
-    },
+    Status { id_or_preset: Option<String> },
     /// Manage network endpoints
     #[command(external_subcommand = false)]
     Endpoint(NetworkEndpointArgs),
@@ -34,7 +29,7 @@ impl Command {
             Command::List(args) => args.run(global).await,
             Command::Add(args) => args.run(global).await,
             Command::Endpoint(args) => args.run(global).await,
-            _ => {
+            Command::Status { id_or_preset: _ } => {
                 println!("Unimplemented.");
                 Ok(())
             }

@@ -53,7 +53,7 @@ enum Command {
 impl Cli {
     pub async fn run(&self) -> Result<(), anyhow::Error> {
         match &self.command {
-            Command::Config(args) => args.run(&self.global)?,
+            Command::Config(args) => args.run(&self.global),
             Command::Profile(args) => args.run(&self.global).await?,
             Command::Database(args) => args.run(&self.global).await?,
             Command::Network(args) => args.run(&self.global).await?,

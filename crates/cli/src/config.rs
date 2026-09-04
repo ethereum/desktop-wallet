@@ -13,11 +13,10 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+    pub fn run(&self, global: &GlobalArgs) {
         match self {
             Command::Path => {
                 println!("{}", global.data_dir.display());
-                Ok(())
             }
             Command::View => {
                 println!("data_dir={}", global.data_dir.display());
@@ -27,7 +26,6 @@ impl Command {
                     Some(rpc_url) => println!("rpc_url={rpc_url} (override)"),
                     None => println!("rpc_url=(from the active network)"),
                 }
-                Ok(())
             }
         }
     }
