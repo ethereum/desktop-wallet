@@ -5,9 +5,6 @@ pub mod file;
 pub mod memory;
 pub mod scoped;
 
-#[cfg(test)]
-mod profile_at_rest;
-
 /// A byte-oriented key/value store.
 ///
 /// Implementations are treated as untrusted storage: nothing here is assumed to secure data
