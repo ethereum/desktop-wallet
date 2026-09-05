@@ -34,12 +34,9 @@
 │     ┌────────────────┬────────────────────┬────────────────────┐   │
 │     │     Signer     │      Executor      │       Vault        │   │
 │     │                │                    │                    │   │
-│     │ signs messages │ sends transactions │ holds/moves assets │   │
-│     │ for an address │   for an address   │                    │   │
+│     │  signs for an  │ sends transactions │ holds/moves assets │   │
+│     │    address     │   for an address   │                    │   │
 │     │                │     (EIP-5792)     │                    │   │
-│     │                │                    │     balance()      │   │
-│     │ sign_message() │     address()      │     deposit()      │   │
-│     │  public_key()  │    send_calls()    │     withdraw()     │   │
 │     └────────────────┴────────────────────┴────────────────────┘   │
 │                                                                    │
 │   each object sourced independently: seed-derived / hardware /     │
@@ -164,11 +161,10 @@ Signers are how the program produces signatures. A signer is associated with and
 trait Signer {
     fn tag(&self) -> &'static str;
     fn id(&self) -> SignerId;
-    fn public_key(&self) -> VerifyingKey;
     async fn personal_sign(&self, message: &[u8]) -> Result<Signature>;
     async fn sign_typed_data(&self, data: &TypedData) -> Result<Signature>;
     async fn sign_transaction(&self, tx: &mut dyn SignableTransaction<Signature>) -> Result<Signature>;
-    async fn sign_authorization(&self, authorization: &Authorization) -> Result<SignedAuthorization>;
+    async fn sign_authorization(&self, authorization: &Authorization) -> Result<Signature>;
 }
 ```
 
