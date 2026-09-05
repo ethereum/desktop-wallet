@@ -34,12 +34,9 @@
 │     ┌────────────────┬────────────────────┬────────────────────┐   │
 │     │     Signer     │      Executor      │       Vault        │   │
 │     │                │                    │                    │   │
-│     │ signs messages │ sends transactions │ holds/moves assets │   │
-│     │ for an address │   for an address   │                    │   │
+│     │  signs for an  │ sends transactions │ holds/moves assets │   │
+│     │    address     │   for an address   │                    │   │
 │     │                │     (EIP-5792)     │                    │   │
-│     │                │                    │     balance()      │   │
-│     │ sign_message() │     address()      │     deposit()      │   │
-│     │  public_key()  │    send_calls()    │     withdraw()     │   │
 │     └────────────────┴────────────────────┴────────────────────┘   │
 │                                                                    │
 │   each object sourced independently: seed-derived / hardware /     │
@@ -148,13 +145,13 @@ Profiles are how the program manages user-facing identity and state. A profile i
 
 Profiles are primarily a UI-level abstraction, used to collectively expose many lower-level objects. They defer to:
 
-- Signers for signing messages
+- Signers for producing signatures
 - Executors for sending transactions
 - Vaults for storing assets
 
 ### Signer
 
-Signers are how the program signs messages. A signer is associated with and can sign messages for a specific address. Trait implementations may include:
+Signers are how the program produces signatures. A signer is associated with and signs for a specific address. The trait grows one typed method per signing scheme. Trait implementations may include:
 
 - Local signers (e.g. derived from a seed phrase or private key)
 - Hardware signers (e.g. Ledger, Trezor)
@@ -162,11 +159,12 @@ Signers are how the program signs messages. A signer is associated with and can 
 
 ```rust
 trait Signer {
+    fn tag(&self) -> &'static str;
     fn id(&self) -> SignerId;
-    fn public_key(&self) -> PublicKey;
-    async fn sign_message(&self, msg: &[u8]) -> Result<Signature>;
-    async fn personal_sign(&self, msg: &[u8]) -> Result<Signature>;
-    async fn sign_typed_data(&self, domain: &EIP712Domain, types: &EIP712Types, value: &EIP712Value) -> Result<Signature>;
+    async fn personal_sign(&self, message: &[u8]) -> Result<Signature>;
+    async fn sign_typed_data(&self, data: &TypedData) -> Result<Signature>;
+    async fn sign_transaction(&self, tx: &mut dyn SignableTransaction<Signature>) -> Result<Signature>;
+    async fn sign_authorization(&self, authorization: &Authorization) -> Result<Signature>;
 }
 ```
 
@@ -307,11 +305,11 @@ instead of being left behind in a freed allocation.
 Behaviour is composed by wrapping one `Database` in another, rather than by asking each
 backend to reimplement it:
 
-| Layer | Responsibility |
-| --- | --- |
-| `ScopedDatabase` | confines a caller to a single keyspace: one vault, one executor |
+| Layer               | Responsibility                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------- |
+| `ScopedDatabase`    | confines a caller to a single keyspace: one vault, one executor                                 |
 | `EncryptedDatabase` | encrypts every record; the only code in the workspace that performs cryptography on stored data |
-| backend | untrusted bytes in, untrusted bytes out. `FileDatabase`, `MemoryDatabase`, and later a SQL pool |
+| backend             | untrusted bytes in, untrusted bytes out. `FileDatabase`, `MemoryDatabase`, and later a SQL pool |
 
 Above the trait sit the **repository traits**, one per object: `SimpleVaultDb`,
 `SimpleExecutorDb`, `SimpleProfileDb`. They own serialization and the key names an object

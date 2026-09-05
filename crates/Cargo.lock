@@ -1634,8 +1634,12 @@ dependencies = [
 name = "edw-core"
 version = "0.0.1"
 dependencies = [
+ "alloy-consensus",
+ "alloy-dyn-abi",
+ "alloy-eips",
  "alloy-primitives",
  "alloy-provider",
+ "alloy-signer",
  "async-trait",
  "inventory",
  "serde",
@@ -1650,6 +1654,7 @@ version = "0.0.1"
 dependencies = [
  "alloy-consensus",
  "alloy-contract",
+ "alloy-dyn-abi",
  "alloy-eips",
  "alloy-network",
  "alloy-node-bindings",
@@ -1669,6 +1674,7 @@ dependencies = [
  "inventory",
  "postcard",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror",
  "tokio",

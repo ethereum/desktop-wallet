@@ -4,4 +4,5 @@ pub mod database;
 pub mod executor;
 pub mod factory;
 pub mod profile;
+pub mod signer;
 pub mod vault;

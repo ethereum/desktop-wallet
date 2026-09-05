@@ -2,7 +2,7 @@ use std::{pin::Pin, sync::Arc};
 
 use alloy_provider::Provider;
 
-use crate::{database::Database, executor::Executor, vault::Vault};
+use crate::{database::Database, executor::Executor, signer::Signer, vault::Vault};
 
 pub struct Factory<T: ?Sized> {
     pub tag: &'static str,
@@ -10,7 +10,7 @@ pub struct Factory<T: ?Sized> {
 }
 
 pub type FactoryCreateFn<T> =
-    fn(BuildContext) -> Pin<Box<dyn Future<Output = Result<Box<T>, FactoryError>>>>;
+    fn(BuildContext) -> Pin<Box<dyn Future<Output = Result<Box<T>, FactoryError>> + Send>>;
 
 #[derive(Clone)]
 pub struct BuildContext {
@@ -64,5 +64,19 @@ pub async fn try_build_executor(
     Err(FactoryError::NotFound(tag.to_string()))
 }
 
+pub async fn try_build_signer(
+    tag: &str,
+    build_ctx: BuildContext,
+) -> Result<Box<dyn Signer>, FactoryError> {
+    for factory in inventory::iter::<Factory<dyn Signer>> {
+        if factory.tag == tag {
+            return (factory.create)(build_ctx).await;
+        }
+    }
+
+    Err(FactoryError::NotFound(tag.to_string()))
+}
+
 inventory::collect!(Factory<dyn Executor>);
+inventory::collect!(Factory<dyn Signer>);
 inventory::collect!(Factory<dyn Vault>);
