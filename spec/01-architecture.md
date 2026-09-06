@@ -338,16 +338,25 @@ The reasoning:
 
 The scheme, versioned so it can be migrated:
 
-- **Root of trust is the user's password**, not an OS keychain or a secure enclave. Argon2id
-  (64 MiB, 3 passes, one lane) stretches it into a master key.
+- **Root of the record hierarchy is a random data key**, generated when the store is created
+  and never derived from anything the user types.
+- **Credentials wrap the data key** in header slots, each of which recovers it on its own.
+  The only slot kind today stretches a password with Argon2id (64 MiB, 3 passes, one lane);
+  no OS keychain or secure enclave is involved. A hardware token is a second kind rather than
+  a redesign, and a slot's parameters are opaque to every kind but its own, so a build that
+  does not recognize a slot still parses the header and unlocks through one it does.
 - **Per-record keys.** HKDF-SHA256 derives a distinct encryption key and a distinct blinded
-  storage key for each record, from the master key over the record's full logical key.
+  storage key for each record, from the data key over the record's full logical key.
 - **XChaCha20-Poly1305** seals each value under a random 192-bit nonce, with the format
   version and the logical key bound in as associated data. A record lifted out of one vault's
   scope will not open in another.
-- **A header record** holds the format version, the KDF parameters, and the salt in
-  plaintext, plus a sealed verifier. A wrong password fails the verifier's authentication tag
-  at unlock, cleanly and up front, rather than on the first read of a real record.
+- **A header record** holds the format version and the slot list in plaintext, each slot
+  carrying its kind, its parameters and the data key wrapped under that credential. A wrong
+  password fails its slot's authentication tag at unlock, cleanly and up front, rather than
+  on the first read of a real record.
+- **Changing a credential is one header write.** Rotating a password rewraps a slot and
+  leaves every record untouched, which is what deriving record keys from a random data key
+  rather than from the password buys.
 - **Storage keys are blinded**, so a backend never sees a logical key name.
 
 Known costs, recorded so they are not rediscovered as surprises:
@@ -369,9 +378,10 @@ Known costs, recorded so they are not rediscovered as surprises:
   `EncryptedDatabase` is plaintext by construction. This is why the decorator, rather than the
   backend, is the thing to review.
 - **Platform keystores stay out of scope.** Mobile targets may later want the OS keychain or a
-  secure enclave for the master key; the password remains the root of trust for now.
+  secure enclave; that arrives as an additional slot kind, and a password slot is the only one
+  implemented for now.
 
-Every type holding secret material is zeroize-on-drop, and the master key is deliberately
+Every type holding secret material is zeroize-on-drop, and the data key is deliberately
 neither `Debug`, `Clone`, nor `Serialize`, so it cannot be copied into a log line or a stored
 record. This is principle 5, "no plaintext secrets at rest, ever."
 
@@ -390,8 +400,8 @@ The **core** stack below is a proposal that looks low-risk to keep; the
   Whatever wins, the invariant holds: the view layer imports only `wallet-core` and never
   touches secret material.
 - **Ethereum:** `alloy` 2.x. **Chain reads:** `helios-ethereum` light client, in-process.
-- **At rest:** Argon2id (64 MiB / 3-pass) + XChaCha20-Poly1305 per record, applied at the
-  `Database` seam. See [Encryption at rest](#encryption-at-rest).
+- **At rest:** XChaCha20-Poly1305 per record under a random data key, itself wrapped by an
+  Argon2id (64 MiB / 3-pass) password slot, applied at the `Database` seam. See [Encryption at rest](#encryption-at-rest).
 - **Privacy stack:** Kohaku crates (Rust, git-only 0.1.0, unstable; going native bets on
   them) for shielded pools; ERC-5564 for stealth.
 
