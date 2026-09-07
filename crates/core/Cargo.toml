@@ -24,7 +24,7 @@ hkdf = { workspace = true }
 sha2 = { workspace = true }
 zeroize = { workspace = true }
 
-alloy-primitives = { workspace = true, features = ["serde"] }
+alloy-primitives = { workspace = true, features = ["serde", "k256"] }
 alloy-provider = { workspace = true }
 alloy-signer = { workspace = true, features = ["eip712"] }
 alloy-transport = { workspace = true }
@@ -33,9 +33,11 @@ alloy-sol-types = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
 alloy-network = { workspace = true }
 alloy-consensus = { workspace = true }
+alloy-dyn-abi = { workspace = true, features = ["eip712"] }
 alloy-signer-local = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 alloy-node-bindings = { workspace = true }
 alloy-sol-types = { workspace = true, features = ["json"] }
 tokio = { workspace = true, features = ["full"] }

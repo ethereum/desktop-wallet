@@ -3,12 +3,21 @@ use std::sync::Arc;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
-use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::SolCall;
 
 use crate::{
-    delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
+    delegate::simple::{
+        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, signer_address,
+    },
+    factory::try_build_signer,
     prelude::*,
+    signer::{
+        Signer,
+        simple::{
+            db::{SimpleSignerDatabaseError, SimpleSignerDb},
+            persist_and_rebuild,
+        },
+    },
 };
 
 pub(crate) mod db;
@@ -18,7 +27,7 @@ use db::{SimpleVaultDatabaseError, SimpleVaultDb};
 /// to store and transfer assets through its address. It uses the`SimpleDelegate`
 /// contract to allow the signer to authorize vault transactions for withdrawals.
 pub struct SimpleVault {
-    delegate: SimpleDelegate<PrivateKeySigner>,
+    delegate: SimpleDelegate,
     provider: SimpleNetworkEndpoint,
     #[allow(unused)]
     db: Arc<dyn Database>,
@@ -30,6 +39,10 @@ pub enum SimpleVaultError {
     Delegate(#[from] SimpleDelegateError),
     #[error("database error: {0}")]
     Database(#[from] SimpleVaultDatabaseError),
+    #[error("signer database error: {0}")]
+    SignerDatabase(#[from] SimpleSignerDatabaseError),
+    #[error("factory error: {0}")]
+    Factory(#[from] FactoryError),
     #[error("address not authorized")]
     NotAuthorized,
     #[error("RPC error: {0}")]
@@ -67,20 +80,20 @@ impl SimpleVault {
     /// Returns an error if the signer's address is not delegated to the `SimpleVault`
     /// implementation contract.
     pub async fn new(
-        signer: PrivateKeySigner,
+        signer: Arc<dyn Signer>,
         provider: SimpleNetworkEndpoint,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
         Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider, db).await
     }
 
-    /// Returns a 7702 delegation authorization for the `SimpleVault` contract. If the
-    /// address is already authorized, returns `None`.
+    /// Returns a 7702 delegation authorization for the `SimpleVault` contract. The caller
+    /// submits it; this does not check whether the address is already delegated.
     ///
     /// # Errors
     /// Returns an error if an RPC call fails or if the authorization cannot be signed.
     pub async fn authorization(
-        signer: &PrivateKeySigner,
+        signer: &dyn Signer,
         provider: &SimpleNetworkEndpoint,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         Self::authorize_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
@@ -92,11 +105,11 @@ impl SimpleVault {
     /// Errors if the signer cannot be retrieved from the database or if the `SimpleVault` cannot
     /// be created (see [`SimpleVault::new`]).
     pub async fn from_context(ctx: BuildContext) -> Result<Box<dyn Vault>, SimpleVaultError> {
-        let provider = ctx.provider;
-        let db = ctx.db;
+        let provider = ctx.provider.clone();
+        let db = ctx.db.clone();
 
-        let signing_key = db.get_signing_key().await?;
-        let signer = PrivateKeySigner::from_signing_key(signing_key);
+        let tag = ctx.db.get_signer_tag().await?;
+        let signer: Arc<dyn Signer> = Arc::from(try_build_signer(&tag, ctx.clone()).await?);
         let implementation = db.get_implementation().await?;
         let vault =
             SimpleVault::new_with_implementation(signer, implementation, provider, db).await?;
@@ -105,20 +118,28 @@ impl SimpleVault {
 
     /// Creates a new `SimpleVault` instance.
     ///
+    /// `signer`'s [`Signer::tag`] is recorded, then the signer is rebuilt from `db`, so
+    /// [`SimpleVault::from_context`] can recover it. This happens before the delegate is
+    /// constructed.
+    ///
     /// # Errors
-    /// Returns an error if the signer's code is not delegated to the implementation
-    /// address or if there is an RPC error.
+    /// Returns an error if the signer cannot be rebuilt from `db`, if the signer's code is
+    /// not delegated to the implementation address, or if there is an RPC error.
     pub async fn new_with_implementation(
-        signer: PrivateKeySigner,
+        signer: Arc<dyn Signer>,
         implementation: Address,
         provider: SimpleNetworkEndpoint,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
+        persist_and_rebuild(
+            signer.as_ref(),
+            BuildContext::new(provider.clone(), db.clone()),
+        )
+        .await?;
         let delegate =
             SimpleDelegate::new_with_implementation(signer, implementation, provider.clone())
                 .await?;
 
-        db.put_signing_key(delegate.signer().credential()).await?;
         db.put_implementation(&implementation).await?;
         Ok(Self {
             delegate,
@@ -133,13 +154,13 @@ impl SimpleVault {
     /// # Errors
     /// Returns an error if there is an RPC error or if the authorization cannot be signed.
     pub async fn authorize_implementation(
-        signer: &PrivateKeySigner,
+        signer: &dyn Signer,
         implementation: Address,
         provider: &SimpleNetworkEndpoint,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         let nonce = provider
             .provider
-            .get_transaction_count(signer.address())
+            .get_transaction_count(signer_address(signer))
             .await?;
         let auth =
             SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
@@ -271,5 +292,107 @@ impl SimpleVault {
 impl From<SimpleVaultError> for VaultError {
     fn from(err: SimpleVaultError) -> Self {
         VaultError::Other(Box::new(err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::U64;
+    use alloy_signer_local::PrivateKeySigner;
+    use alloy_transport::mock::Asserter;
+
+    use super::*;
+    use crate::{
+        database::memory::MemoryDatabase,
+        delegate::simple::delegation_designator_code,
+        signer::simple::{SIMPLE_SIGNER_TAG, SimpleSigner},
+        test_support::mocked_provider,
+    };
+
+    /// The address is the one the stored key belongs to.
+    async fn seeded_db() -> (Arc<dyn Database>, Address) {
+        let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
+        let signer = SimpleSigner::new(PrivateKeySigner::random().credential().clone(), &db)
+            .await
+            .expect("build signer");
+        db.put_signer_tag(signer.tag()).await.expect("store tag");
+        db.put_implementation(&SIMPLE_DELEGATE_ADDRESS)
+            .await
+            .expect("store implementation");
+        (db, signer.address())
+    }
+
+    #[tokio::test]
+    async fn from_context_rebuilds_the_signer_named_by_the_stored_tag() {
+        let (db, address) = seeded_db().await;
+        let asserter = Asserter::new();
+        // The delegate checks the delegation, then reads the chain id for its EIP-712 domain.
+        asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
+        asserter.push_success(&U64::from(1));
+
+        let vault = SimpleVault::from_context(BuildContext::new(mocked_provider(&asserter), db))
+            .await
+            .expect("rebuild from the stored tag");
+
+        assert_eq!(
+            vault.id(),
+            VaultId::Address(address),
+            "the rebuilt vault must belong to the key the stored tag names",
+        );
+    }
+
+    #[tokio::test]
+    async fn from_context_fails_before_the_chain_when_no_tag_is_stored() {
+        let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
+        let asserter = Asserter::new();
+        asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
+
+        let result =
+            SimpleVault::from_context(BuildContext::new(mocked_provider(&asserter), db)).await;
+
+        let Err(error) = result else {
+            panic!("there is nothing to rebuild from");
+        };
+        assert!(
+            matches!(
+                error,
+                SimpleVaultError::SignerDatabase(SimpleSignerDatabaseError::MissingSignerTag)
+            ),
+            "expected a missing tag to be reported as such, got {error}",
+        );
+        assert_eq!(
+            asserter.read_q().len(),
+            1,
+            "a build with no signer to rebuild must not reach the chain",
+        );
+    }
+
+    #[tokio::test]
+    async fn from_context_fails_before_the_chain_when_the_tag_names_an_unrebuildable_signer() {
+        let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
+        db.put_signer_tag(SIMPLE_SIGNER_TAG)
+            .await
+            .expect("store tag");
+        db.put_implementation(&SIMPLE_DELEGATE_ADDRESS)
+            .await
+            .expect("store implementation");
+        let asserter = Asserter::new();
+        asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
+
+        let result =
+            SimpleVault::from_context(BuildContext::new(mocked_provider(&asserter), db)).await;
+
+        let Err(error) = result else {
+            panic!("the tag names a signer whose key was never stored");
+        };
+        assert!(
+            matches!(error, SimpleVaultError::Factory(_)),
+            "expected the factory to refuse, got {error}",
+        );
+        assert_eq!(
+            asserter.read_q().len(),
+            1,
+            "a build whose signer cannot be rebuilt must not reach the chain",
+        );
     }
 }

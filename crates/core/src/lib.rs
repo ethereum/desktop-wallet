@@ -7,4 +7,8 @@ pub mod factory;
 pub mod network;
 pub mod prelude;
 pub mod profile;
+pub mod signer;
 pub mod vault;
+
+#[cfg(test)]
+pub(crate) mod test_support;
