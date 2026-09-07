@@ -1,0 +1,15 @@
+[package]
+name = "edw-ui"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+alloy-primitives = { workspace = true, features = ["serde"] }
+alloy-provider = { workspace = true }
+inventory = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

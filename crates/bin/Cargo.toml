@@ -1,12 +1,18 @@
 [package]
-name = "ethereum-desktop-wallet"
+name = "edw"
 version = "0.0.1"
 edition = "2024"
 
 [[bin]]
-name = "ethereum-desktop-wallet"
-peth = "src/main.rs"
+name = "edw"
+path = "src/main.rs"
 
 [dependencies]
 tracing = { workspace = true }
 thiserror = { workspace = true }
+clap = { version = "4.6.6", features = ["derive", "env"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+anyhow = "1.0.104"
+tokio = { workspace = true, features = ["full"] }
+rand = "0.8"
+edw-cli = { workspace = true }
