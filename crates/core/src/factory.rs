@@ -1,8 +1,8 @@
 use std::{pin::Pin, sync::Arc};
 
-use alloy_provider::Provider;
-
-use crate::{database::Database, executor::Executor, vault::Vault};
+use crate::{
+    database::Database, executor::Executor, network::alloy::SimpleNetworkEndpoint, vault::Vault,
+};
 
 pub struct Factory<T: ?Sized> {
     pub tag: &'static str,
@@ -14,7 +14,7 @@ pub type FactoryCreateFn<T> =
 
 #[derive(Clone)]
 pub struct BuildContext {
-    pub provider: Arc<dyn Provider>,
+    pub provider: SimpleNetworkEndpoint,
     pub db: Arc<dyn Database>,
 }
 
@@ -33,7 +33,7 @@ impl<T: ?Sized> Factory<T> {
 }
 
 impl BuildContext {
-    pub fn new(provider: Arc<dyn Provider>, db: Arc<dyn Database>) -> Self {
+    pub fn new(provider: SimpleNetworkEndpoint, db: Arc<dyn Database>) -> Self {
         Self { provider, db }
     }
 }

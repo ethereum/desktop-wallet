@@ -6,12 +6,41 @@ edition = "2024"
 [dependencies]
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+inventory = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+futures = { workspace = true }
+tokio = { workspace = true }
+postcard = { workspace = true, features = ["use-std"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+uuid = { workspace = true }
+reqwest = { workspace = true, features = ["json", "blocking"] }
+
+argon2 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+zeroize = { workspace = true }
+
 alloy-primitives = { workspace = true, features = ["serde"] }
 alloy-provider = { workspace = true }
-inventory = { workspace = true }
-serde = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
-zeroize = { workspace = true }
+alloy-signer = { workspace = true, features = ["eip712"] }
+alloy-transport = { workspace = true }
+alloy-eips = { workspace = true }
+alloy-sol-types = { workspace = true }
+alloy-rpc-types-eth = { workspace = true }
+alloy-network = { workspace = true }
+alloy-consensus = { workspace = true }
+alloy-signer-local = { workspace = true }
+
+[dev-dependencies]
+alloy-node-bindings = { workspace = true }
+alloy-sol-types = { workspace = true, features = ["json"] }
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+alloy-contract = { workspace = true }
 
 [lints]
 workspace = true

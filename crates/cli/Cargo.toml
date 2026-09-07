@@ -1,0 +1,26 @@
+[package]
+name = "edw-cli"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.6", features = ["derive", "env"] }
+
+edw-core = { workspace = true }
+rpassword = { workspace = true }
+zeroize = { workspace = true }
+
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+inventory = { workspace = true }
+serde = { workspace = true }
+
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+
+[lints]
+workspace = true
