@@ -7,6 +7,7 @@ pub mod factory;
 pub mod network;
 pub mod prelude;
 pub mod profile;
+pub mod seed;
 pub mod signer;
 pub mod vault;
 

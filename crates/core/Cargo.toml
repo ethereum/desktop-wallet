@@ -35,7 +35,9 @@ alloy-rpc-types-eth = { workspace = true }
 alloy-network = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-dyn-abi = { workspace = true, features = ["eip712"] }
-alloy-signer-local = { workspace = true }
+alloy-signer-local = { workspace = true, features = ["mnemonic"] }
+coins-bip39 = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

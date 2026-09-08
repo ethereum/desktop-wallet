@@ -28,12 +28,22 @@ pub(crate) fn is_initialized(dir: &Path) -> bool {
 }
 
 pub(crate) async fn network_store(data_dir: &Path) -> Result<Arc<dyn Database>, anyhow::Error> {
-    let dir = network_dir(data_dir);
-    let initialized = is_initialized(&dir);
-    let (password, prompted) = password(initialized, &dir)?;
+    encrypted_store(&network_dir(data_dir)).await
+}
+
+pub(crate) async fn profile_store(
+    name: &str,
+    data_dir: &Path,
+) -> Result<Arc<dyn Database>, anyhow::Error> {
+    encrypted_store(&data_dir.join(name).join("db")).await
+}
+
+async fn encrypted_store(dir: &Path) -> Result<Arc<dyn Database>, anyhow::Error> {
+    let initialized = is_initialized(dir);
+    let (password, prompted) = password(initialized, dir)?;
 
     let backend: Arc<dyn Database> = Arc::new(
-        FileDatabase::open(&dir)
+        FileDatabase::open(dir)
             .with_context(|| format!("error opening the store at {}", dir.display()))?,
     );
 
@@ -102,7 +112,7 @@ fn setup(dir: &Path) -> Result<Zeroizing<String>, anyhow::Error> {
 /// With stdin redirected there is no terminal to suppress echo on, so the password is read as
 /// a plain line. That is what makes the command scriptable and testable; it is not a weaker
 /// path, because a redirected stdin was never being echoed to begin with.
-fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
+pub(crate) fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
     if std::io::stdin().is_terminal() {
         return Ok(Zeroizing::new(
             rpassword::prompt_password(label).context("error reading the decryption password")?,

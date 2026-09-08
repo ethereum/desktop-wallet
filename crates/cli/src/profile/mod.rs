@@ -1,24 +1,45 @@
-use std::{
-    fs::create_dir_all,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::Subcommand;
 use edw_core::{
-    database::file::FileDatabase, executor::simple::SimpleExecutor,
-    network::alloy::SimpleNetworkEndpoint, profile::simple::SimpleProfile,
+    network::{NetworkId, SimpleNetworkEndpoint, db::NetworkDb, presets::NetworkPreset},
+    seed::{Mnemonic, SeedRecord, WordCount, assert_network, scan_used, store_seed},
 };
+use zeroize::Zeroizing;
 
-use crate::GlobalArgs;
+use crate::{GlobalArgs, unlock};
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Lists profile directories.
     List,
-    /// Creates a new profile with a random executor.
-    Create { name: String },
+    /// Creates a profile from a new BIP-39 seed.
+    Create {
+        name: String,
+        /// Preset slug or chain id (`sepolia`, `local`, `1`, …).
+        #[arg(long)]
+        network: String,
+        /// BIP-44 account' / profile index. Defaults to 0.
+        #[arg(long, default_value_t = 0)]
+        profile_index: u32,
+        /// Generate a 24-word mnemonic instead of 12.
+        #[arg(long)]
+        long_seed: bool,
+    },
+    /// Restores a profile from an existing mnemonic and scans used addresses.
+    Import {
+        name: String,
+        /// Preset slug or chain id (`sepolia`, `local`, `1`, …).
+        #[arg(long)]
+        network: String,
+        /// BIP-44 account' / profile index. Defaults to 0.
+        #[arg(long, default_value_t = 0)]
+        profile_index: u32,
+        /// Mnemonic phrase (otherwise prompted).
+        #[arg(long)]
+        mnemonic: Option<String>,
+    },
     /// Lists the balance of a profile.
     Balance { name: String },
 }
@@ -27,7 +48,18 @@ impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match &self {
             Command::List => list(global).await,
-            Command::Create { name } => create(name, global).await,
+            Command::Create {
+                name,
+                network,
+                profile_index,
+                long_seed,
+            } => create(name, network, *profile_index, *long_seed, global).await,
+            Command::Import {
+                name,
+                network,
+                profile_index,
+                mnemonic,
+            } => import(name, network, *profile_index, mnemonic.as_deref(), global).await,
             Command::Balance { name } => {
                 println!("Balance lookup for profile `{name}` is not implemented");
                 Ok(())
@@ -52,30 +84,126 @@ async fn list(global: &GlobalArgs) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn create(name: &str, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-    let profile_path = profile_path(name, &global.data_dir);
-    if !profile_path.exists() {
-        create_dir_all(&profile_path).context("error creating profile directory")?;
+async fn create(
+    name: &str,
+    network: &str,
+    profile_index: u32,
+    long_seed: bool,
+    global: &GlobalArgs,
+) -> Result<(), anyhow::Error> {
+    let network_id = resolve_network_id(network, global).await?;
+    let path = profile_path(name, &global.data_dir);
+    if path.exists() {
+        anyhow::bail!("a profile named `{name}` already exists");
     }
 
-    let rpc_url = global
-        .rpc_url
-        .as_deref()
-        .context("no RPC endpoint; pass --rpc-url")?;
-    let provider = SimpleNetworkEndpoint::new_http(rpc_url.parse()?);
-    let db = Arc::new(profile_db(name, &global.data_dir)?);
+    let word_count = if long_seed {
+        WordCount::TwentyFour
+    } else {
+        WordCount::Twelve
+    };
+    let record = SeedRecord::new(Mnemonic::generate(word_count)?, network_id, profile_index);
 
-    SimpleProfile::new(provider, db, |ctx| async move {
-        SimpleExecutor::new_with_random(ctx.provider, ctx.db).await
-    })
-    .await?;
+    std::fs::create_dir_all(&path).context("error creating profile directory")?;
+    if let Err(error) = async {
+        let db = unlock::profile_store(name, &global.data_dir).await?;
+        store_seed(db.as_ref(), &record).await?;
+        Ok::<_, anyhow::Error>(())
+    }
+    .await
+    {
+        let _ = std::fs::remove_dir_all(&path);
+        return Err(error);
+    }
 
+    println!("Write these words down. They are shown once.");
+    println!();
+    println!("{}", record.words());
+    println!();
+    println!("Anyone with these words can take the funds in this profile.");
     Ok(())
 }
 
-fn profile_db(name: &str, data_dir: &Path) -> Result<FileDatabase, anyhow::Error> {
-    let db_path = profile_path(name, data_dir).join("db");
-    FileDatabase::open(db_path).context("error opening profile database")
+async fn import(
+    name: &str,
+    network: &str,
+    profile_index: u32,
+    mnemonic_flag: Option<&str>,
+    global: &GlobalArgs,
+) -> Result<(), anyhow::Error> {
+    let network_id = resolve_network_id(network, global).await?;
+    let path = profile_path(name, &global.data_dir);
+    if path.exists() {
+        anyhow::bail!("a profile named `{name}` already exists");
+    }
+
+    let phrase = match mnemonic_flag {
+        Some(phrase) => Zeroizing::new(phrase.to_owned()),
+        None => unlock::prompt("Mnemonic: ")?,
+    };
+    let record = SeedRecord::new(Mnemonic::parse(&phrase)?, network_id, profile_index);
+    let provider = rpc_provider(global, network_id)?;
+    assert_network(&record, &provider).await?;
+
+    std::fs::create_dir_all(&path).context("error creating profile directory")?;
+    let result = async {
+        let db = unlock::profile_store(name, &global.data_dir).await?;
+        store_seed(db.as_ref(), &record).await?;
+        let scan = scan_used(&record, &provider).await?;
+        Ok::<_, anyhow::Error>(scan)
+    }
+    .await;
+
+    let scan = match result {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&path);
+            return Err(error);
+        }
+    };
+
+    println!(
+        "Imported profile `{name}` on chain {} (profile index {}).",
+        network_id.0, profile_index
+    );
+    println!("nextIndex={}", scan.next_index);
+    for (index, address) in &scan.used {
+        println!("{index}  {address}");
+    }
+    Ok(())
+}
+
+async fn resolve_network_id(input: &str, global: &GlobalArgs) -> Result<NetworkId, anyhow::Error> {
+    if let Some(preset) = NetworkPreset::from_input(input) {
+        return Ok(preset.network_id());
+    }
+
+    let store = unlock::network_store(&global.data_dir).await?;
+    let networks = store.get_networks().await?;
+    networks
+        .iter()
+        .find(|network| {
+            network.name.eq_ignore_ascii_case(input) || network.network_id.0.to_string() == input
+        })
+        .map(|network| network.network_id)
+        .ok_or_else(|| anyhow::anyhow!("unknown network `{input}`"))
+}
+
+fn rpc_provider(
+    global: &GlobalArgs,
+    network_id: NetworkId,
+) -> Result<SimpleNetworkEndpoint, anyhow::Error> {
+    let url = if let Some(url) = &global.rpc_url {
+        url.clone()
+    } else if network_id == NetworkPreset::LocalTestnet.network_id() {
+        NetworkPreset::LocalTestnet
+            .default_rpc_url()
+            .context("local testnet has no default RPC")?
+            .to_owned()
+    } else {
+        anyhow::bail!("no RPC endpoint; pass --rpc-url");
+    };
+    Ok(SimpleNetworkEndpoint::new_http(url.parse()?))
 }
 
 fn profile_path(name: &str, data_dir: &Path) -> PathBuf {
