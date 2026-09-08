@@ -9,10 +9,10 @@ pub struct Context {
 }
 
 impl GlobalArgs {
-    pub async fn gather(&self) -> anyhow::Result<Context> {
-        super::unlock::run_unlock(self).await?;
-        let networks = super::unlock::network_store(&self.data_dir).await?;
-
-        Ok(Context { networks })
+    /// Unlocks the wallet and opens the network store, creating it if needed.
+    pub async fn network_writer(&self) -> anyhow::Result<Context> {
+        Ok(Context {
+            networks: super::unlock::network_store(&self.data_dir).await?,
+        })
     }
 }

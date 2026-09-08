@@ -10,6 +10,17 @@ use zeroize::Zeroizing;
 
 use crate::{GlobalArgs, unlock};
 
+const NETWORK_SUBDIR: &str = "network";
+
+/// Data-dir folders that are not profiles and cannot be used as profile names.
+const RESERVED_DATA_SUBDIRS: &[&str] = &[NETWORK_SUBDIR];
+
+fn is_reserved_data_subdir(name: &str) -> bool {
+    RESERVED_DATA_SUBDIRS
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
+}
+
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Lists profile directories.
@@ -76,9 +87,15 @@ async fn list(global: &GlobalArgs) -> Result<(), anyhow::Error> {
     };
 
     while let Some(entry) = entries.next_entry().await? {
-        if entry.file_type().await?.is_dir() {
-            println!("{}", entry.file_name().to_string_lossy());
+        if !entry.file_type().await?.is_dir() {
+            continue;
         }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if is_reserved_data_subdir(&name) {
+            continue;
+        }
+        println!("{name}");
     }
 
     Ok(())
@@ -91,6 +108,7 @@ async fn create(
     long_seed: bool,
     global: &GlobalArgs,
 ) -> Result<(), anyhow::Error> {
+    assert_usable_profile_name(name)?;
     let network_id = resolve_network_id(network, global).await?;
     let path = profile_path(name, &global.data_dir);
     if path.exists() {
@@ -131,6 +149,7 @@ async fn import(
     mnemonic_flag: Option<&str>,
     global: &GlobalArgs,
 ) -> Result<(), anyhow::Error> {
+    assert_usable_profile_name(name)?;
     let network_id = resolve_network_id(network, global).await?;
     let path = profile_path(name, &global.data_dir);
     if path.exists() {
@@ -178,7 +197,10 @@ async fn resolve_network_id(input: &str, global: &GlobalArgs) -> Result<NetworkI
         return Ok(preset.network_id());
     }
 
-    let store = unlock::network_store(&global.data_dir).await?;
+    let store = unlock::try_network_store(&global.data_dir).await?;
+    let Some(store) = store else {
+        anyhow::bail!("unknown network `{input}`");
+    };
     let networks = store.get_networks().await?;
     networks
         .iter()
@@ -206,6 +228,27 @@ fn rpc_provider(
     Ok(SimpleNetworkEndpoint::new_http(url.parse()?))
 }
 
+fn assert_usable_profile_name(name: &str) -> Result<(), anyhow::Error> {
+    if is_reserved_data_subdir(name) {
+        anyhow::bail!("`{name}` is reserved and cannot be used as a profile name");
+    }
+    Ok(())
+}
+
 fn profile_path(name: &str, data_dir: &Path) -> PathBuf {
     data_dir.join(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_is_a_reserved_data_subdir() {
+        assert!(is_reserved_data_subdir("network"));
+        assert!(is_reserved_data_subdir("NETWORK"));
+        assert!(is_reserved_data_subdir("NeTwOrK"));
+        assert!(!is_reserved_data_subdir("alice"));
+        assert_eq!(RESERVED_DATA_SUBDIRS, &[NETWORK_SUBDIR]);
+    }
 }

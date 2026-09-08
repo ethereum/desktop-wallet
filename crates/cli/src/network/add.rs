@@ -17,7 +17,7 @@ pub struct NetworkAddArgs {
 
 impl NetworkAddArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let context = global.gather().await?;
+        let context = global.network_writer().await?;
         let mut networks = context.networks.get_networks().await?;
 
         let incoming = Network::from_preset(&self.id_or_preset)?;

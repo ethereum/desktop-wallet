@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use clap::{Args, Subcommand};
 use edw_core::network::{Network, db::NetworkDb};
 
-use crate::{GlobalArgs, network::endpoint::list::NetworkEndpointListArgs};
+use crate::{GlobalArgs, network::endpoint::list::NetworkEndpointListArgs, unlock};
 
 mod list;
 
@@ -25,8 +25,10 @@ pub enum Command {
 
 impl NetworkEndpointArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let context = global.gather().await?;
-        let networks = context.networks.get_networks().await?;
+        let Some(store) = unlock::try_network_store(&global.data_dir).await? else {
+            anyhow::bail!("no networks configured");
+        };
+        let networks = store.get_networks().await?;
 
         let network = networks
             .iter()

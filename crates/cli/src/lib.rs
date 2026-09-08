@@ -55,7 +55,7 @@ impl Cli {
         match &self.command {
             Command::Config(args) => args.run(&self.global),
             Command::Profile(args) => args.run(&self.global).await?,
-            Command::Database(args) => args.run(&self.global).await?,
+            Command::Database(args) => args.run(&self.global)?,
             Command::Network(args) => args.run(&self.global).await?,
             Command::Unlock => unlock::run_unlock(&self.global).await?,
             Command::Lock => unlock::run_lock()?,

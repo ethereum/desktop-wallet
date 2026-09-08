@@ -15,15 +15,11 @@ pub enum Command {
 }
 
 impl Command {
-    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+    pub fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match self {
             Command::Path => {
-                if let Ok(_ctx) = global.gather().await {
-                    println!("{}/*/db", global.data_dir.display());
-                    Ok(())
-                } else {
-                    anyhow::bail!("not implemented")
-                }
+                println!("{}/*/db", global.data_dir.display());
+                Ok(())
             }
             Command::Migrate => anyhow::bail!("database migrations are not implemented"),
             Command::Purge => anyhow::bail!("database purge is not implemented"),
