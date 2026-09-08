@@ -6,7 +6,6 @@ use edw_core::{
     network::{NetworkId, SimpleNetworkEndpoint, db::NetworkDb, presets::NetworkPreset},
     seed::{Mnemonic, SeedRecord, WordCount, assert_network, scan_used, store_seed},
 };
-use zeroize::Zeroizing;
 
 use crate::{GlobalArgs, unlock};
 
@@ -47,9 +46,6 @@ pub(crate) enum Command {
         /// BIP-44 account' / profile index. Defaults to 0.
         #[arg(long, default_value_t = 0)]
         profile_index: u32,
-        /// Mnemonic phrase (otherwise prompted).
-        #[arg(long)]
-        mnemonic: Option<String>,
     },
     /// Lists the balance of a profile.
     Balance { name: String },
@@ -69,8 +65,7 @@ impl Command {
                 name,
                 network,
                 profile_index,
-                mnemonic,
-            } => import(name, network, *profile_index, mnemonic.as_deref(), global).await,
+            } => import(name, network, *profile_index, global).await,
             Command::Balance { name } => {
                 println!("Balance lookup for profile `{name}` is not implemented");
                 Ok(())
@@ -146,7 +141,6 @@ async fn import(
     name: &str,
     network: &str,
     profile_index: u32,
-    mnemonic_flag: Option<&str>,
     global: &GlobalArgs,
 ) -> Result<(), anyhow::Error> {
     assert_usable_profile_name(name)?;
@@ -156,10 +150,7 @@ async fn import(
         anyhow::bail!("a profile named `{name}` already exists");
     }
 
-    let phrase = match mnemonic_flag {
-        Some(phrase) => Zeroizing::new(phrase.to_owned()),
-        None => unlock::prompt("Mnemonic: ")?,
-    };
+    let phrase = unlock::prompt("Mnemonic: ")?;
     let record = SeedRecord::new(Mnemonic::parse(&phrase)?, network_id, profile_index);
     let provider = rpc_provider(global, network_id)?;
     assert_network(&record, &provider).await?;
