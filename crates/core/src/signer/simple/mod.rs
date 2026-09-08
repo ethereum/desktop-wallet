@@ -91,38 +91,6 @@ impl SimpleSigner {
     }
 }
 
-/// Rebuilds `signer` from `ctx.db` through the factory, and records its tag once that has
-/// succeeded, so a signer that cannot be recovered leaves no tag behind for a later
-/// [`try_build_signer`] to trip over.
-///
-/// Callers that submit on-chain authorization must do this first: otherwise a
-/// [`SimpleSigner::from_key`] (or any signer that has not stored what it needs)
-/// can land a 7702 delegation that cannot be recovered after restart.
-pub(crate) async fn persist_and_rebuild(
-    signer: &dyn Signer,
-    ctx: BuildContext,
-) -> Result<(), FactoryError> {
-    let rebuilt = try_build_signer(signer.tag(), ctx.clone()).await?;
-    if rebuilt.id() != signer.id() {
-        return Err(FactoryError::Other(Box::new(SignerMismatch {
-            persisted: rebuilt.id().to_string(),
-            given: signer.id().to_string(),
-        })));
-    }
-    ctx.db
-        .put_signer_tag(signer.tag())
-        .await
-        .map_err(|e| FactoryError::Other(Box::new(e)))?;
-    Ok(())
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("persisted signer {persisted} does not match {given}")]
-struct SignerMismatch {
-    persisted: String,
-    given: String,
-}
-
 #[async_trait::async_trait]
 impl Signer for SimpleSigner {
     fn tag(&self) -> &'static str {

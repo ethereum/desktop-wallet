@@ -252,6 +252,12 @@ impl SimpleExecutor {
     }
 }
 
+impl From<SimpleExecutorError> for ExecutorError {
+    fn from(err: SimpleExecutorError) -> Self {
+        ExecutorError::Other(Box::new(err))
+    }
+}
+
 /// Fills the transaction's nonce, network ID, gas limit, and fee parameters, then
 /// signs it with the wallet.
 async fn fill_and_sign(
