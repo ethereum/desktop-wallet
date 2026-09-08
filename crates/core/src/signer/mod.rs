@@ -3,6 +3,7 @@ pub mod simple;
 use alloy_consensus::SignableTransaction;
 use alloy_dyn_abi::TypedData;
 use alloy_eips::eip7702::Authorization;
+use alloy_network::TxSigner;
 use alloy_primitives::{Address, Signature};
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +54,22 @@ pub trait Signer: Send + Sync {
 pub enum SignerError {
     #[error(transparent)]
     Other(Box<dyn std::error::Error + Send + Sync>),
+}
+
+#[async_trait::async_trait]
+impl TxSigner<Signature> for dyn Signer {
+    fn address(&self) -> Address {
+        self.address()
+    }
+
+    async fn sign_transaction(
+        &self,
+        tx: &mut dyn SignableTransaction<Signature>,
+    ) -> alloy_signer::Result<Signature> {
+        self.sign_transaction(tx)
+            .await
+            .map_err(alloy_signer::Error::other)
+    }
 }
 
 impl std::fmt::Display for SignerId {
