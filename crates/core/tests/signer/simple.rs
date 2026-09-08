@@ -26,7 +26,7 @@ const KEY: [u8; 32] = hex!("c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec
 const SIGNER_ADDRESS: Address = address!("0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826");
 
 /// The `Mail` example from <https://eips.ethereum.org/EIPS/eip-712>.
-const EIP712_MAIL: &str = include_str!("fixtures/eip712_mail.json");
+const EIP712_MAIL: &str = include_str!("../fixtures/eip712_mail.json");
 
 /// The signature EIP-712 publishes as the `eth_signTypedData` result for that example.
 const EIP712_SIGNATURE: [u8; 65] = hex!(
