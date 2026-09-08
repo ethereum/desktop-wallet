@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use alloy_network::TransactionBuilder7702;
+use alloy_node_bindings::Anvil;
 use alloy_primitives::{Address, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
@@ -14,8 +15,7 @@ use edw_core::{
     vault::{Vault, VaultId, simple::SimpleVault},
 };
 use tracing::info;
-
-mod common;
+use tracing_subscriber::EnvFilter;
 
 /// How long a test waits for a submitted call to be mined.
 const MINING_TIMEOUT: Duration = Duration::from_secs(30);
@@ -29,9 +29,11 @@ sol!(
 #[tokio::test]
 #[ignore = "run with `cargo test -- --ignored`"]
 async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
-    common::init_tracing();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("info"))
+        .try_init();
 
-    let anvil = common::devnet();
+    let anvil = Anvil::new().prague().spawn();
     let rpc_url = anvil.endpoint();
     let signer = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
     let vault_signer = PrivateKeySigner::random();
@@ -42,11 +44,10 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
             .to_bytes(),
     )?;
 
-    let provider = Arc::new(
-        ProviderBuilder::new()
-            .wallet(signer.clone())
-            .connect_http(rpc_url.parse()?),
-    );
+    let provider = ProviderBuilder::new()
+        .wallet(signer.clone())
+        .connect_http(rpc_url.parse()?)
+        .erased();
 
     //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
@@ -63,7 +64,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let executor = SimpleExecutor::new_with_implementation(
         executor_signer,
         implementation_addr,
-        provider.clone(),
+        provider.clone().into(),
         executor_db,
     )
     .await?;
@@ -74,7 +75,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let auth = SimpleVault::authorize_implementation(
         vault_signer.as_ref(),
         implementation_addr,
-        &provider,
+        &provider.clone().into(),
     )
     .await?;
 
@@ -87,7 +88,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let vault = SimpleVault::new_with_implementation(
         vault_signer,
         implementation_addr,
-        provider.clone(),
+        provider.clone().into(),
         vault_db,
     )
     .await?;

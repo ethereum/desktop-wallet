@@ -2,15 +2,15 @@ use alloy_transport::TransportError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub enum NetworkEndpointConfig {
-    HttpProvider { url: String },
-}
-
 #[async_trait]
 pub trait NetworkEndpoint {
     async fn network_id(&self) -> Result<u64, TransportError>;
     async fn block_height(&self) -> Result<u64, TransportError>;
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub enum NetworkEndpointConfig {
+    HttpProvider { url: String },
 }
 
 #[derive(Debug, thiserror::Error)]

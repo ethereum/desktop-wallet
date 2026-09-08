@@ -2,6 +2,7 @@ use uuid::Uuid;
 
 use crate::database::{Database, DatabaseError};
 
+#[async_trait::async_trait]
 pub trait SimpleProfileDb: Database {
     async fn get_executor(&self) -> Result<Option<(Uuid, String)>, SimpleProfileDatabaseError> {
         let Some(bytes) = self.get(b"executor").await? else {
@@ -32,8 +33,6 @@ pub trait SimpleProfileDb: Database {
     }
 }
 
-impl<D: Database + ?Sized> SimpleProfileDb for D {}
-
 #[derive(Debug, thiserror::Error)]
 pub enum SimpleProfileDatabaseError {
     #[error(transparent)]
@@ -41,3 +40,5 @@ pub enum SimpleProfileDatabaseError {
     #[error("serialization error: {0}")]
     Serialization(#[from] postcard::Error),
 }
+
+impl<D: Database + ?Sized> SimpleProfileDb for D {}

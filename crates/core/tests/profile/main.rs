@@ -2,6 +2,7 @@
 use std::sync::Arc;
 
 use alloy_network::TransactionBuilder7702;
+use alloy_node_bindings::Anvil;
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
@@ -15,8 +16,7 @@ use edw_core::{
     vault::simple::SimpleVault,
 };
 use tracing::info;
-
-mod common;
+use tracing_subscriber::EnvFilter;
 
 sol!(
     #[sol(rpc)]
@@ -27,9 +27,11 @@ sol!(
 #[tokio::test]
 #[ignore = "run with `cargo test -- --ignored`"]
 async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
-    common::init_tracing();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("info"))
+        .try_init();
 
-    let anvil = common::devnet();
+    let anvil = Anvil::new().prague().spawn();
     let rpc_url = anvil.endpoint();
     let sponsor = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
     let executor_signer = PrivateKeySigner::from_slice(
@@ -40,11 +42,10 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let vault_key = PrivateKeySigner::random().credential().clone();
 
-    let provider = Arc::new(
-        ProviderBuilder::new()
-            .wallet(sponsor.clone())
-            .connect_http(rpc_url.parse()?),
-    );
+    let provider = ProviderBuilder::new()
+        .wallet(sponsor.clone())
+        .connect_http(rpc_url.parse()?)
+        .erased();
 
     //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
@@ -56,7 +57,7 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
     //? Construct a profile with a default executor. `SimpleExecutor` authorizes
     //? itself, so no sponsor transaction is needed here.
     let mut profile = SimpleProfile::new(
-        provider.clone(),
+        provider.clone().into(),
         db.clone(),
         |ctx: BuildContext| async move {
             let signer: Arc<dyn Signer> = Arc::new(
@@ -84,7 +85,7 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
     let auth = SimpleVault::authorize_implementation(
         auth_signer.as_ref(),
         implementation,
-        provider.as_ref(),
+        &provider.clone().into(),
     )
     .await?;
     let tx = TransactionRequest::default()
@@ -106,7 +107,7 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
 
     //? Reload the profile from the database and verify every object was
     //? reconstructed without error.
-    let loaded = SimpleProfile::load(provider.clone(), db.clone()).await?;
+    let loaded = SimpleProfile::load(provider.clone().into(), db.clone()).await?;
 
     assert_eq!(
         loaded.default_executor.1.id(),

@@ -2,6 +2,7 @@ use alloy_primitives::Address;
 
 use crate::database::{Database, DatabaseError};
 
+#[async_trait::async_trait]
 pub trait SimpleVaultDb: Database {
     async fn get_implementation(&self) -> Result<Address, SimpleVaultDatabaseError> {
         let Some(bytes) = self.get(b"implementation").await? else {

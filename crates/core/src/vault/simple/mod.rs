@@ -3,7 +3,7 @@ use std::sync::Arc;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
-use alloy_sol_types::SolCall;
+use alloy_sol_types::{SolCall, sol};
 
 use crate::{
     delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
@@ -16,10 +16,20 @@ use crate::{
             persist_and_rebuild,
         },
     },
+    vault::simple::db::{SimpleVaultDatabaseError, SimpleVaultDb},
 };
 
-pub(crate) mod db;
-use db::{SimpleVaultDatabaseError, SimpleVaultDb};
+pub mod db;
+
+sol!(
+    contract Erc20 {
+        // ERC20
+        function balanceOf(address) external view returns (uint256);
+        function transfer(address to, uint256 amount) external returns (bool);
+    }
+);
+
+const SIMPLE_VAULT_TAG: &str = "simple-vault";
 
 /// `SimpleVault` is a basic [`Vault`] implementation that uses a signer-based wallet
 /// to store and transfer assets through its address. It uses the`SimpleDelegate`
@@ -48,20 +58,6 @@ pub enum SimpleVaultError {
     #[error("sol error: {0}")]
     Sol(#[from] alloy_sol_types::Error),
 }
-
-mod sol {
-    use alloy_sol_types::sol;
-
-    sol!(
-        contract Erc20 {
-            // ERC20
-            function balanceOf(address) external view returns (uint256);
-            function transfer(address to, uint256 amount) external returns (bool);
-        }
-    );
-}
-
-const SIMPLE_VAULT_TAG: &str = "simple-vault";
 
 inventory::submit! {
     Factory::new(SIMPLE_VAULT_TAG, |ctx: BuildContext| {
@@ -227,7 +223,7 @@ impl SimpleVault {
     }
 
     async fn balance_erc20(&self, token: Address) -> Result<U256, SimpleVaultError> {
-        let call = sol::Erc20::balanceOfCall::new((self.address(),));
+        let call = Erc20::balanceOfCall::new((self.address(),));
         let data = self
             .provider
             .provider
@@ -238,7 +234,7 @@ impl SimpleVault {
             )
             .await?;
 
-        let balance = sol::Erc20::balanceOfCall::abi_decode_returns(&data)?;
+        let balance = Erc20::balanceOfCall::abi_decode_returns(&data)?;
         Ok(balance)
     }
 
@@ -247,7 +243,7 @@ impl SimpleVault {
     }
 
     fn deposit_erc20(&self, token: Address, amount: U256) -> Vec<Call> {
-        let data = sol::Erc20::transferCall::new((self.address(), amount))
+        let data = Erc20::transferCall::new((self.address(), amount))
             .abi_encode()
             .into();
         vec![Call::new(token, data, U256::ZERO)]
@@ -277,9 +273,7 @@ impl SimpleVault {
         token: Address,
         amount: U256,
     ) -> Result<Vec<Call>, SimpleVaultError> {
-        let data = sol::Erc20::transferCall::new((to, amount))
-            .abi_encode()
-            .into();
+        let data = Erc20::transferCall::new((to, amount)).abi_encode().into();
 
         let call = Call::new(token, data, U256::ZERO);
         let c = self.delegate.batch_calls(&[call]).await?;

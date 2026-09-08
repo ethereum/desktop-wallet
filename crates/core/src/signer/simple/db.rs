@@ -3,6 +3,7 @@ use zeroize::Zeroizing;
 
 use crate::database::{Database, DatabaseError};
 
+#[async_trait::async_trait]
 pub trait SimpleSignerDb: Database {
     async fn get_signing_key(&self) -> Result<SigningKey, SimpleSignerDatabaseError> {
         let Some(pk) = self.get(b"pk").await? else {
