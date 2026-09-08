@@ -1,6 +1,7 @@
 use std::{future::Future, sync::Arc};
 
 use alloy_primitives::U256;
+use db::{SimpleProfileDatabaseError, SimpleProfileDb};
 use futures::future::try_join_all;
 use uuid::Uuid;
 
@@ -12,8 +13,7 @@ use crate::{
     vault::{Vault, VaultError},
 };
 
-pub(crate) mod db;
-use db::{SimpleProfileDatabaseError, SimpleProfileDb};
+pub mod db;
 
 pub struct SimpleProfile {
     pub default_executor: (Uuid, Box<dyn Executor>),

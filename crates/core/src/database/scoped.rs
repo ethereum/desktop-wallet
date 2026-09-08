@@ -4,6 +4,10 @@ use zeroize::Zeroizing;
 
 use super::{Database, DatabaseError};
 
+pub trait ScopedDatabaseExt {
+    fn scoped(self, prefix: &[u8]) -> ScopedDatabase;
+}
+
 /// Confines an inner [`Database`] to a keyspace, so each vault and executor in a profile
 /// reads and writes under its own scope.
 ///
@@ -14,10 +18,6 @@ use super::{Database, DatabaseError};
 pub struct ScopedDatabase {
     db: Arc<dyn Database>,
     prefix: Vec<u8>,
-}
-
-pub trait ScopedDatabaseExt {
-    fn scoped(self, prefix: &[u8]) -> ScopedDatabase;
 }
 
 impl ScopedDatabaseExt for Arc<dyn Database> {
