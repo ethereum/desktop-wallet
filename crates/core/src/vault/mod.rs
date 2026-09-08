@@ -5,11 +5,6 @@ use crate::{asset::AssetId, call::Call};
 
 pub mod simple;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum VaultId {
-    Address(Address),
-}
-
 /// A trait representing a store of assets. Assets can be deposited into and withdrawn from a vault,
 /// and the vault can track the total balance of assets it holds.
 #[async_trait::async_trait]
@@ -37,6 +32,11 @@ pub trait Vault: Send + Sync {
         asset: &AssetId,
         amount: U256,
     ) -> Result<Vec<Call>, VaultError>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VaultId {
+    Address(Address),
 }
 
 #[derive(Debug, thiserror::Error)]

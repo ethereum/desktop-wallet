@@ -29,9 +29,6 @@ pub trait NetworkDb: Database {
     }
 }
 
-#[async_trait::async_trait]
-impl<D: Database + ?Sized> NetworkDb for D {}
-
 #[derive(Debug, thiserror::Error)]
 pub enum NetworkDatabaseError {
     #[error(transparent)]
@@ -39,3 +36,6 @@ pub enum NetworkDatabaseError {
     #[error("serialization error: {0}")]
     Serialization(#[from] postcard::Error),
 }
+
+#[async_trait::async_trait]
+impl<D: Database + ?Sized> NetworkDb for D {}

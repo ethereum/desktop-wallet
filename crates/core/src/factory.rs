@@ -5,13 +5,13 @@ use crate::{
     vault::Vault,
 };
 
+pub type FactoryCreateFn<T> =
+    fn(BuildContext) -> Pin<Box<dyn Future<Output = Result<Box<T>, FactoryError>> + Send>>;
+
 pub struct Factory<T: ?Sized> {
     pub tag: &'static str,
     pub create: FactoryCreateFn<T>,
 }
-
-pub type FactoryCreateFn<T> =
-    fn(BuildContext) -> Pin<Box<dyn Future<Output = Result<Box<T>, FactoryError>> + Send>>;
 
 #[derive(Clone)]
 pub struct BuildContext {

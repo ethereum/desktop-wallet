@@ -7,21 +7,8 @@ use crate::call::Call;
 
 pub mod simple;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ExecutorId {
-    Address(Address),
-}
-
-/// A unique identifier for a [`Call`] that has been sent for execution.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct CallId(pub B256);
-
-/// A receipt for a [`Call`] that has been executed.
-///
-/// TODO: Decide whether / how we want to merge `UserOperation` receipts with
-/// Transaction receipts.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct CallReceipt;
+/// How often [`Executor::await_call`] re-checks for a receipt.
+const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// A trait representing an address that can execute [`Call`]s.
 #[async_trait::async_trait]
@@ -67,8 +54,21 @@ pub trait Executor: Send + Sync {
     }
 }
 
-/// How often [`Executor::await_call`] re-checks for a receipt.
-const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ExecutorId {
+    Address(Address),
+}
+
+/// A unique identifier for a [`Call`] that has been sent for execution.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CallId(pub B256);
+
+/// A receipt for a [`Call`] that has been executed.
+///
+/// TODO: Decide whether / how we want to merge `UserOperation` receipts with
+/// Transaction receipts.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CallReceipt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutorError {

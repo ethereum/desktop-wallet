@@ -1,15 +1,10 @@
-pub mod simple;
-
 use alloy_consensus::SignableTransaction;
 use alloy_dyn_abi::TypedData;
 use alloy_eips::eip7702::Authorization;
 use alloy_primitives::{Address, Signature};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SignerId {
-    Address(Address),
-}
+pub mod simple;
 
 /// A trait representing a key that can sign messages. The trait cannot be used to directly
 /// access any secret material, and no method that returns it may be added.
@@ -54,6 +49,11 @@ pub trait Signer: Send + Sync {
         &self,
         authorization: &Authorization,
     ) -> Result<Signature, SignerError>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SignerId {
+    Address(Address),
 }
 
 #[derive(Debug, thiserror::Error)]

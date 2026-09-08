@@ -99,6 +99,12 @@ impl Database for FileDatabase {
     }
 }
 
+impl From<FileDatabaseError> for DatabaseError {
+    fn from(err: FileDatabaseError) -> Self {
+        DatabaseError::Other(Box::new(err))
+    }
+}
+
 #[cfg(unix)]
 fn create_private_dir(dir: &Path) -> Result<(), std::io::Error> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -141,10 +147,4 @@ fn create_private_dir(dir: &Path) -> Result<(), std::io::Error> {
 #[cfg(not(unix))]
 fn create_private_file(path: &Path) -> Result<std::fs::File, std::io::Error> {
     std::fs::File::create(path)
-}
-
-impl From<FileDatabaseError> for DatabaseError {
-    fn from(err: FileDatabaseError) -> Self {
-        DatabaseError::Other(Box::new(err))
-    }
 }

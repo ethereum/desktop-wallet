@@ -17,12 +17,21 @@ use crate::{
     },
 };
 
-pub(crate) mod db;
+pub mod db;
+
+pub const SIMPLE_SIGNER_TAG: &str = "simple-signer";
 
 /// A [`Signer`] backed by a local private key, persisted through the [`Database`] the build
 /// context supplies.
 pub struct SimpleSigner {
     signer: PrivateKeySigner,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("persisted signer {persisted} does not match {given}")]
+struct SignerMismatch {
+    persisted: String,
+    given: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,8 +43,6 @@ pub enum SimpleSignerError {
     #[error("typed data error: {0}")]
     TypedData(#[from] alloy_dyn_abi::Error),
 }
-
-pub(crate) const SIMPLE_SIGNER_TAG: &str = "simple-signer";
 
 inventory::submit! {
     Factory::new(SIMPLE_SIGNER_TAG, |ctx: BuildContext| {
@@ -82,38 +89,6 @@ impl SimpleSigner {
     pub fn address(&self) -> Address {
         self.signer.address()
     }
-}
-
-/// Rebuilds `signer` from `ctx.db` through the factory, and records its tag once that has
-/// succeeded, so a signer that cannot be recovered leaves no tag behind for a later
-/// [`try_build_signer`] to trip over.
-///
-/// Callers that submit on-chain authorization must do this first: otherwise a
-/// [`SimpleSigner::from_key`] (or any signer that has not stored what it needs)
-/// can land a 7702 delegation that cannot be recovered after restart.
-pub(crate) async fn persist_and_rebuild(
-    signer: &dyn Signer,
-    ctx: BuildContext,
-) -> Result<(), FactoryError> {
-    let rebuilt = try_build_signer(signer.tag(), ctx.clone()).await?;
-    if rebuilt.id() != signer.id() {
-        return Err(FactoryError::Other(Box::new(SignerMismatch {
-            persisted: rebuilt.id().to_string(),
-            given: signer.id().to_string(),
-        })));
-    }
-    ctx.db
-        .put_signer_tag(signer.tag())
-        .await
-        .map_err(|e| FactoryError::Other(Box::new(e)))?;
-    Ok(())
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("persisted signer {persisted} does not match {given}")]
-struct SignerMismatch {
-    persisted: String,
-    given: String,
 }
 
 // The trait is async so that hardware and remote signers can implement it. A local key
@@ -171,6 +146,31 @@ impl From<SimpleSignerError> for SignerError {
     fn from(err: SimpleSignerError) -> Self {
         SignerError::Other(Box::new(err))
     }
+}
+
+/// Rebuilds `signer` from `ctx.db` through the factory, and records its tag once that has
+/// succeeded, so a signer that cannot be recovered leaves no tag behind for a later
+/// [`try_build_signer`] to trip over.
+///
+/// Callers that submit on-chain authorization must do this first: otherwise a
+/// [`SimpleSigner::from_key`] (or any signer that has not stored what it needs)
+/// can land a 7702 delegation that cannot be recovered after restart.
+pub(crate) async fn persist_and_rebuild(
+    signer: &dyn Signer,
+    ctx: BuildContext,
+) -> Result<(), FactoryError> {
+    let rebuilt = try_build_signer(signer.tag(), ctx.clone()).await?;
+    if rebuilt.id() != signer.id() {
+        return Err(FactoryError::Other(Box::new(SignerMismatch {
+            persisted: rebuilt.id().to_string(),
+            given: signer.id().to_string(),
+        })));
+    }
+    ctx.db
+        .put_signer_tag(signer.tag())
+        .await
+        .map_err(|e| FactoryError::Other(Box::new(e)))?;
+    Ok(())
 }
 
 #[cfg(test)]

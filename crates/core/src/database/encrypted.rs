@@ -323,6 +323,12 @@ impl EncryptedDatabase {
     }
 }
 
+impl From<EncryptedDatabaseError> for DatabaseError {
+    fn from(err: EncryptedDatabaseError) -> Self {
+        DatabaseError::Other(Box::new(err))
+    }
+}
+
 #[async_trait::async_trait]
 impl Database for EncryptedDatabase {
     async fn get(&self, key: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, DatabaseError> {
@@ -372,12 +378,6 @@ fn derive_master_key(
         .hash_password_into(password, salt, &mut master.0)
         .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
     Ok(master)
-}
-
-impl From<EncryptedDatabaseError> for DatabaseError {
-    fn from(err: EncryptedDatabaseError) -> Self {
-        DatabaseError::Other(Box::new(err))
-    }
 }
 
 #[cfg(test)]

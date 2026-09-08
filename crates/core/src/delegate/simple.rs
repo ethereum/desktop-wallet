@@ -15,29 +15,6 @@ use crate::{
     signer::{Signer, SignerError, SignerId},
 };
 
-/// `SimpleDelegate` is a 7702-compatible delegate contract loosely based on Safe's
-/// [`SafeLite`](https://github.com/5afe/safe-eip7702/blob/main/safe-eip7702-contracts/contracts/experimental/SafeLite.sol)
-/// contract. An address can authorize the `SimpleDelegate` contract with a 7702
-/// authorization, then execute signed batches of calls. This is used for atomic
-/// execution of multiple calls and gasless execution for the signer.
-pub struct SimpleDelegate {
-    network_id: u64,
-    signer: Arc<dyn Signer>,
-    provider: SimpleNetworkEndpoint,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum SimpleDelegateError {
-    #[error("address not authorized")]
-    NotAuthorized,
-    #[error("RPC error: {0}")]
-    Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
-    #[error("signer error: {0}")]
-    Signer(#[from] SignerError),
-    #[error("sol error: {0}")]
-    Sol(#[from] alloy_sol_types::Error),
-}
-
 mod sol {
     use alloy_sol_types::sol;
 
@@ -68,6 +45,29 @@ mod sol {
 }
 
 pub const SIMPLE_DELEGATE_ADDRESS: Address = address!("0xACAe14c5d84EA4a1ddb84bFbDc1a62796677ACcA");
+
+/// `SimpleDelegate` is a 7702-compatible delegate contract loosely based on Safe's
+/// [`SafeLite`](https://github.com/5afe/safe-eip7702/blob/main/safe-eip7702-contracts/contracts/experimental/SafeLite.sol)
+/// contract. An address can authorize the `SimpleDelegate` contract with a 7702
+/// authorization, then execute signed batches of calls. This is used for atomic
+/// execution of multiple calls and gasless execution for the signer.
+pub struct SimpleDelegate {
+    network_id: u64,
+    signer: Arc<dyn Signer>,
+    provider: SimpleNetworkEndpoint,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SimpleDelegateError {
+    #[error("address not authorized")]
+    NotAuthorized,
+    #[error("RPC error: {0}")]
+    Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
+    #[error("signer error: {0}")]
+    Signer(#[from] SignerError),
+    #[error("sol error: {0}")]
+    Sol(#[from] alloy_sol_types::Error),
+}
 
 impl SimpleDelegate {
     /// Creates a new `SimpleDelegate` instance.

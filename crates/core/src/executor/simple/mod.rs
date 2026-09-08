@@ -8,6 +8,7 @@ use alloy_primitives::{Address, B256, Signature};
 use alloy_provider::{Provider, network::EthereumWallet};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
+use db::{SimpleExecutorDatabaseError, SimpleExecutorDb};
 use tracing::info;
 
 use crate::{
@@ -29,8 +30,9 @@ use crate::{
     },
 };
 
-pub(crate) mod db;
-use db::{SimpleExecutorDatabaseError, SimpleExecutorDb};
+mod db;
+
+const SIMPLE_EXECUTOR_TAG: &str = "simple-executor";
 
 /// `SimpleExecutor` is a basic [`Executor`] implementation that uses an signer-based
 /// wallet to execute calls through the `SimpleDelegate` contract.
@@ -40,6 +42,13 @@ pub struct SimpleExecutor {
     provider: SimpleNetworkEndpoint,
     #[allow(unused)]
     db: Arc<dyn Database>,
+}
+
+/// [`EthereumWallet`] needs a [`TxSigner`], so the provider's fill-and-sign path reaches this
+/// executor's signer through here.
+struct TxSignerBridge {
+    signer: Arc<dyn Signer>,
+    address: Address,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,8 +72,6 @@ pub enum SimpleExecutorError {
     #[error("transaction failed with status code")]
     TransactionFailed,
 }
-
-const SIMPLE_EXECUTOR_TAG: &str = "simple-executor";
 
 inventory::submit! {
     Factory::new(SIMPLE_EXECUTOR_TAG, |ctx: BuildContext| {
@@ -252,13 +259,6 @@ impl SimpleExecutor {
     }
 }
 
-/// [`EthereumWallet`] needs a [`TxSigner`], so the provider's fill-and-sign path reaches this
-/// executor's signer through here.
-struct TxSignerBridge {
-    signer: Arc<dyn Signer>,
-    address: Address,
-}
-
 impl TxSignerBridge {
     fn new(signer: Arc<dyn Signer>) -> Self {
         let address = signer_address(signer.as_ref());
@@ -280,6 +280,12 @@ impl TxSigner<Signature> for TxSignerBridge {
             .sign_transaction(tx)
             .await
             .map_err(alloy_signer::Error::other)
+    }
+}
+
+impl From<SimpleExecutorError> for ExecutorError {
+    fn from(err: SimpleExecutorError) -> Self {
+        ExecutorError::Other(Box::new(err))
     }
 }
 
@@ -307,12 +313,6 @@ async fn fill_and_sign(
 
     let tx_envelope = tx.build(wallet).await?;
     Ok(tx_envelope)
-}
-
-impl From<SimpleExecutorError> for ExecutorError {
-    fn from(err: SimpleExecutorError) -> Self {
-        ExecutorError::Other(Box::new(err))
-    }
 }
 
 #[cfg(test)]
