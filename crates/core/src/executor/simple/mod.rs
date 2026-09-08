@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use alloy_consensus::{SignableTransaction, TxEnvelope};
+use alloy_consensus::TxEnvelope;
 use alloy_network::{
     NetworkTransactionBuilder, TransactionBuilder, TransactionBuilder7702, TxSigner,
 };
-use alloy_primitives::{Address, B256, Signature};
+use alloy_primitives::{Address, B256};
 use alloy_provider::{Provider, network::EthereumWallet};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
@@ -14,7 +14,7 @@ use tracing::info;
 use crate::{
     call::Call,
     delegate::simple::{
-        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated, signer_address,
+        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated,
     },
     executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},
     factory::{BuildContext, Factory, FactoryError, try_build_signer},
@@ -42,13 +42,6 @@ pub struct SimpleExecutor {
     provider: SimpleNetworkEndpoint,
     #[allow(unused)]
     db: Arc<dyn Database>,
-}
-
-/// [`EthereumWallet`] needs a [`TxSigner`], so the provider's fill-and-sign path reaches this
-/// executor's signer through here.
-struct TxSignerBridge {
-    signer: Arc<dyn Signer>,
-    address: Address,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -139,7 +132,7 @@ impl SimpleExecutor {
         )
         .await?;
 
-        let wallet = EthereumWallet::new(TxSignerBridge::new(signer));
+        let wallet = EthereumWallet::new(signer);
         Ok(Self {
             delegate,
             wallet,
@@ -172,7 +165,7 @@ impl SimpleExecutor {
         signer: &Arc<dyn Signer>,
         provider: &SimpleNetworkEndpoint,
     ) -> Result<(), SimpleExecutorError> {
-        let delegator = signer_address(signer.as_ref());
+        let delegator = signer.address();
         if is_delegated(delegator, implementation, provider).await? {
             return Ok(());
         }
@@ -194,7 +187,7 @@ impl SimpleExecutor {
         let tx = TransactionRequest::default()
             .to(Address::ZERO)
             .with_authorization_list(vec![auth]);
-        let wallet = EthereumWallet::new(TxSignerBridge::new(signer.clone()));
+        let wallet = EthereumWallet::new(signer.clone());
         let envelope = fill_and_sign(tx, provider, &wallet).await?;
 
         let _ = provider
@@ -256,30 +249,6 @@ impl SimpleExecutor {
 
         let pending_tx = self.provider.provider.send_tx_envelope(envelope).await?;
         Ok(*pending_tx.tx_hash())
-    }
-}
-
-impl TxSignerBridge {
-    fn new(signer: Arc<dyn Signer>) -> Self {
-        let address = signer_address(signer.as_ref());
-        Self { signer, address }
-    }
-}
-
-#[async_trait::async_trait]
-impl TxSigner<Signature> for TxSignerBridge {
-    fn address(&self) -> Address {
-        self.address
-    }
-
-    async fn sign_transaction(
-        &self,
-        tx: &mut dyn SignableTransaction<Signature>,
-    ) -> alloy_signer::Result<Signature> {
-        self.signer
-            .sign_transaction(tx)
-            .await
-            .map_err(alloy_signer::Error::other)
     }
 }
 

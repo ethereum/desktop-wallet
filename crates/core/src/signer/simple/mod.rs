@@ -91,8 +91,6 @@ impl SimpleSigner {
     }
 }
 
-// The trait is async so that hardware and remote signers can implement it. A local key
-// needs no I/O, so every method here calls alloy's sync variant directly.
 #[async_trait::async_trait]
 impl Signer for SimpleSigner {
     fn tag(&self) -> &'static str {
@@ -101,6 +99,10 @@ impl Signer for SimpleSigner {
 
     fn id(&self) -> SignerId {
         SignerId::Address(self.address())
+    }
+
+    fn address(&self) -> Address {
+        self.signer.address()
     }
 
     async fn personal_sign(&self, message: &[u8]) -> Result<Signature, SignerError> {

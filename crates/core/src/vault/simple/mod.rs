@@ -6,9 +6,7 @@ use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
 use alloy_sol_types::{SolCall, sol};
 
 use crate::{
-    delegate::simple::{
-        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, signer_address,
-    },
+    delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
     factory::try_build_signer,
     prelude::*,
     signer::{
@@ -156,7 +154,7 @@ impl SimpleVault {
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         let nonce = provider
             .provider
-            .get_transaction_count(signer_address(signer))
+            .get_transaction_count(signer.address())
             .await?;
         let auth =
             SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
