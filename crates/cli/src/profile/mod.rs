@@ -135,7 +135,9 @@ async fn create(
     println!("{}", record.words());
     println!("--------------------------------");
     println!();
-    println!("Anyone with these words can access and move all your funds. Keep them secret and safe.");
+    println!(
+        "Anyone with these words can access and move all your funds. Keep them secret and safe."
+    );
     Ok(())
 }
 
