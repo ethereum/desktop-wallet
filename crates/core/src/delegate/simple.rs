@@ -12,7 +12,7 @@ use alloy_sol_types::{Eip712Domain, SolCall, eip712_domain};
 use crate::{
     network::endpoint::NetworkEndpoint,
     prelude::*,
-    signer::{Signer, SignerError, SignerId},
+    signer::{Signer, SignerError},
 };
 
 /// `SimpleDelegate` is a 7702-compatible delegate contract loosely based on Safe's
@@ -80,7 +80,7 @@ impl SimpleDelegate {
         implementation: Address,
         provider: SimpleNetworkEndpoint,
     ) -> Result<Self, SimpleDelegateError> {
-        if !is_delegated(signer_address(signer.as_ref()), implementation, &provider).await? {
+        if !is_delegated(signer.address(), implementation, &provider).await? {
             return Err(SimpleDelegateError::NotAuthorized);
         }
 
@@ -117,7 +117,7 @@ impl SimpleDelegate {
 
     #[must_use]
     pub fn address(&self) -> Address {
-        signer_address(self.signer.as_ref())
+        self.signer.address()
     }
 
     /// Signs a batch of calls to be executed by the `SimpleVault` contract. Returns
@@ -174,14 +174,6 @@ impl SimpleDelegate {
             chain_id: self.network_id,
             verifying_contract: self.address(),
         }
-    }
-}
-
-/// A [`SignerId`] variant without an address would need a different delegate, since 7702
-/// delegation is a property of an EOA.
-pub(crate) fn signer_address(signer: &dyn Signer) -> Address {
-    match signer.id() {
-        SignerId::Address(address) => address,
     }
 }
 

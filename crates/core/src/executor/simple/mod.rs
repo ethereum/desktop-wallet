@@ -13,7 +13,7 @@ use tracing::info;
 use crate::{
     call::Call,
     delegate::simple::{
-        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated, signer_address,
+        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated,
     },
     executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},
     factory::{BuildContext, Factory, FactoryError, try_build_signer},
@@ -165,7 +165,7 @@ impl SimpleExecutor {
         signer: &Arc<dyn Signer>,
         provider: &SimpleNetworkEndpoint,
     ) -> Result<(), SimpleExecutorError> {
-        let delegator = signer_address(signer.as_ref());
+        let delegator = signer.address();
         if is_delegated(delegator, implementation, provider).await? {
             return Ok(());
         }
@@ -261,7 +261,7 @@ struct TxSignerBridge {
 
 impl TxSignerBridge {
     fn new(signer: Arc<dyn Signer>) -> Self {
-        let address = signer_address(signer.as_ref());
+        let address = signer.address();
         Self { signer, address }
     }
 }

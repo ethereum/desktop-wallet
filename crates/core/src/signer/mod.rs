@@ -11,8 +11,7 @@ pub enum SignerId {
     Address(Address),
 }
 
-/// A trait representing a key that can sign messages. The trait cannot be used to directly
-/// access any secret material, and no method that returns it may be added.
+/// A trait representing a key that can sign messages.
 #[async_trait::async_trait]
 pub trait Signer: Send + Sync {
     /// The registered [`crate::factory::Factory`] tag this signer is rebuilt from.
@@ -20,16 +19,15 @@ pub trait Signer: Send + Sync {
 
     fn id(&self) -> SignerId;
 
+    /// Returns the address associated with this signer.
+    fn address(&self) -> Address;
+
     /// Signs a message per [EIP-191].
     ///
     /// [EIP-191]: https://eips.ethereum.org/EIPS/eip-191
     async fn personal_sign(&self, message: &[u8]) -> Result<Signature, SignerError>;
 
     /// Signs structured data per [EIP-712].
-    ///
-    /// Takes [`TypedData`] rather than a generic `T: SolStruct`, because the types arrive at
-    /// runtime in an `eth_signTypedData_v4` request, and because a generic method would not
-    /// be callable on a `dyn Signer`.
     ///
     /// [EIP-712]: https://eips.ethereum.org/EIPS/eip-712
     async fn sign_typed_data(&self, data: &TypedData) -> Result<Signature, SignerError>;
@@ -42,12 +40,7 @@ pub trait Signer: Send + Sync {
     ) -> Result<Signature, SignerError>;
 
     /// Signs an [EIP-7702] authorization, delegating the signer's address to the implementation
-    /// contract it names. Separate from [`Signer::sign_transaction`] because a delegation
-    /// changes what the account is rather than what it does once.
-    ///
-    /// Returns only the signature, so the caller keeps the authorization it built. An
-    /// implementation that returned a whole [`alloy_eips::eip7702::SignedAuthorization`]
-    /// could substitute the implementation address, chain or nonce it was asked to sign for.
+    /// contract it names.
     ///
     /// [EIP-7702]: https://eips.ethereum.org/EIPS/eip-7702
     async fn sign_authorization(
