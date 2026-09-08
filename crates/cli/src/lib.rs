@@ -8,6 +8,7 @@ mod database;
 mod network;
 mod profile;
 mod session;
+mod store;
 mod unlock;
 mod utils;
 
@@ -57,7 +58,7 @@ impl Cli {
             Command::Profile(args) => args.run(&self.global).await?,
             Command::Database(args) => args.run(&self.global)?,
             Command::Network(args) => args.run(&self.global).await?,
-            Command::Unlock => unlock::run_unlock(&self.global).await?,
+            Command::Unlock => unlock::run_unlock(&self.global)?,
             Command::Lock => unlock::run_lock()?,
         }
 

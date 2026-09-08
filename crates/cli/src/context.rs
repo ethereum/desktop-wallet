@@ -12,7 +12,7 @@ impl GlobalArgs {
     /// Unlocks the wallet and opens the network store, creating it if needed.
     pub async fn network_writer(&self) -> anyhow::Result<Context> {
         Ok(Context {
-            networks: super::unlock::network_store(&self.data_dir).await?,
+            networks: super::store::network_store(&self.data_dir).await?,
         })
     }
 }

@@ -7,12 +7,10 @@ use edw_core::{
     seed::{Mnemonic, SeedRecord, WordCount, assert_network, scan_used, store_seed},
 };
 
-use crate::{GlobalArgs, unlock};
-
-const NETWORK_SUBDIR: &str = "network";
+use crate::{GlobalArgs, store, unlock};
 
 /// Data-dir folders that are not profiles and cannot be used as profile names.
-const RESERVED_DATA_SUBDIRS: &[&str] = &[NETWORK_SUBDIR];
+const RESERVED_DATA_SUBDIRS: &[&str] = &["network"];
 
 fn is_reserved_data_subdir(name: &str) -> bool {
     RESERVED_DATA_SUBDIRS
@@ -27,8 +25,8 @@ pub(crate) enum Command {
     /// Creates a profile from a new BIP-39 seed.
     Create {
         name: String,
-        /// Preset slug or chain id (`sepolia`, `local`, `1`, …).
-        #[arg(long)]
+        /// Preset slug or chain id (`sepolia`, `local`, `1`, …). Defaults to mainnet (`1`).
+        #[arg(long, default_value = "1")]
         network: String,
         /// BIP-44 account' / profile index. Defaults to 0.
         #[arg(long, default_value_t = 0)]
@@ -119,7 +117,7 @@ async fn create(
 
     std::fs::create_dir_all(&path).context("error creating profile directory")?;
     if let Err(error) = async {
-        let db = unlock::profile_store(name, &global.data_dir).await?;
+        let db = store::profile_store(name, &global.data_dir).await?;
         store_seed(db.as_ref(), &record).await?;
         Ok::<_, anyhow::Error>(())
     }
@@ -129,11 +127,15 @@ async fn create(
         return Err(error);
     }
 
-    println!("Write these words down. They are shown once.");
+    println!(
+        "IMPORTANT: Write these words down and securely store them offline. They are shown once."
+    );
     println!();
+    println!("--------------------------------");
     println!("{}", record.words());
+    println!("--------------------------------");
     println!();
-    println!("Anyone with these words can take the funds in this profile.");
+    println!("Anyone with these words can access and move all your funds. Keep them secret and safe.");
     Ok(())
 }
 
@@ -157,7 +159,7 @@ async fn import(
 
     std::fs::create_dir_all(&path).context("error creating profile directory")?;
     let result = async {
-        let db = unlock::profile_store(name, &global.data_dir).await?;
+        let db = store::profile_store(name, &global.data_dir).await?;
         store_seed(db.as_ref(), &record).await?;
         let scan = scan_used(&record, &provider).await?;
         Ok::<_, anyhow::Error>(scan)
@@ -172,6 +174,7 @@ async fn import(
         }
     };
 
+    // TODO: this is just printed for now, real workflow should store in profile encrypted storage
     println!(
         "Imported profile `{name}` on chain {} (profile index {}).",
         network_id.0, profile_index
@@ -188,11 +191,11 @@ async fn resolve_network_id(input: &str, global: &GlobalArgs) -> Result<NetworkI
         return Ok(preset.network_id());
     }
 
-    let store = unlock::try_network_store(&global.data_dir).await?;
-    let Some(store) = store else {
+    let db = store::try_network_store(&global.data_dir).await?;
+    let Some(db) = db else {
         anyhow::bail!("unknown network `{input}`");
     };
-    let networks = store.get_networks().await?;
+    let networks = db.get_networks().await?;
     networks
         .iter()
         .find(|network| {
@@ -240,6 +243,5 @@ mod tests {
         assert!(is_reserved_data_subdir("NETWORK"));
         assert!(is_reserved_data_subdir("NeTwOrK"));
         assert!(!is_reserved_data_subdir("alice"));
-        assert_eq!(RESERVED_DATA_SUBDIRS, &[NETWORK_SUBDIR]);
     }
 }

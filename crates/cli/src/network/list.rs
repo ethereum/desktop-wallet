@@ -1,7 +1,7 @@
 use clap::Args;
 use edw_core::network::db::NetworkDb;
 
-use crate::{GlobalArgs, unlock, utils::table::table};
+use crate::{GlobalArgs, store, utils::table::table};
 
 #[derive(Args, Debug)]
 pub struct NetworkListArgs {
@@ -12,12 +12,12 @@ pub struct NetworkListArgs {
 
 impl NetworkListArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let Some(store) = unlock::try_network_store(&global.data_dir).await? else {
+        let Some(db) = store::try_network_store(&global.data_dir).await? else {
             println!("No networks configured.");
             println!("Add one with `edw network add <network> --rpc-url <url>`.");
             return Ok(());
         };
-        let networks = store.get_networks().await?;
+        let networks = db.get_networks().await?;
 
         if networks.is_empty() {
             println!("No networks configured.");
