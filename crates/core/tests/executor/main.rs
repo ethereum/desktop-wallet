@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use alloy_node_bindings::Anvil;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_signer_local::PrivateKeySigner;
@@ -11,8 +12,7 @@ use edw_core::{
     signer::{Signer, simple::SimpleSigner},
 };
 use tracing::info;
-
-mod common;
+use tracing_subscriber::EnvFilter;
 
 /// How long a test waits for a submitted call to be mined.
 const MINING_TIMEOUT: Duration = Duration::from_secs(30);
@@ -26,9 +26,11 @@ sol!(
 #[tokio::test]
 #[ignore = "run with `cargo test -- --ignored`"]
 async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
-    common::init_tracing();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("info"))
+        .try_init();
 
-    let anvil = common::devnet();
+    let anvil = Anvil::new().prague().spawn();
     let rpc_url = anvil.endpoint();
     let signer = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
     let executor_signer = PrivateKeySigner::from_slice(
@@ -38,11 +40,10 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
             .to_bytes(),
     )?;
 
-    let provider = Arc::new(
-        ProviderBuilder::new()
-            .wallet(signer.clone())
-            .connect_http(rpc_url.parse()?),
-    );
+    let provider = ProviderBuilder::new()
+        .wallet(signer.clone())
+        .connect_http(rpc_url.parse()?)
+        .erased();
 
     //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
@@ -59,7 +60,7 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     let executor = SimpleExecutor::new_with_implementation(
         executor_signer,
         delegate_address,
-        provider.clone(),
+        provider.clone().into(),
         executor_db,
     )
     .await?;
