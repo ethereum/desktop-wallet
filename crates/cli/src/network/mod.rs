@@ -30,7 +30,7 @@ impl Command {
             Command::Add(args) => args.run(global).await,
             Command::Endpoint(args) => args.run(global).await,
             Command::Status { id_or_preset: _ } => {
-                println!("Unimplemented.");
+                println!("Unimplemented");
                 Ok(())
             }
         }

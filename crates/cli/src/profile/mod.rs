@@ -9,7 +9,7 @@ use clap::Subcommand;
 use edw_core::{
     database::file::FileDatabase,
     executor::simple::SimpleExecutor,
-    network::{alloy::SimpleNetworkEndpoint, presets::NetworkPreset},
+    network::alloy::SimpleNetworkEndpoint,
     profile::simple::SimpleProfile,
 };
 
@@ -63,7 +63,6 @@ async fn create(name: &str, global: &GlobalArgs) -> Result<(), anyhow::Error> {
     let rpc_url = global
         .rpc_url
         .as_deref()
-        .or_else(|| NetworkPreset::LocalTestnet.default_rpc_url())
         .context("no RPC endpoint; pass --rpc-url")?;
     let provider = SimpleNetworkEndpoint::new_http(rpc_url.parse()?);
     let db = Arc::new(profile_db(name, &global.data_dir)?);

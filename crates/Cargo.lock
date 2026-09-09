@@ -1830,6 +1830,7 @@ dependencies = [
  "alloy-signer-local",
  "alloy-sol-types",
  "alloy-transport",
+ "anyhow",
  "argon2",
  "async-trait",
  "chacha20poly1305",
