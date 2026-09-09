@@ -28,7 +28,7 @@ mod db;
 mod kv_adapter;
 
 const TORNADOCASH_VAULT_TAG: &str = "tornadocash";
-const TORNADOCASH_DB_SCOPE: &[u8] = b"tornadocash_kvstore";
+const TORNADOCASH_KV_SCOPE: &[u8] = b"kohaku_tornadocash_kvstore";
 
 pub struct TcVault {
     network_id: u64,
@@ -62,7 +62,7 @@ impl TcVault {
         let provider = provider.provider;
         let syncer = Arc::new(RpcSyncer::new(provider.clone()));
 
-        let store = Arc::new(KvAdapter(db.clone().scoped(TORNADOCASH_DB_SCOPE)));
+        let store = Arc::new(KvAdapter(db.clone().scoped(TORNADOCASH_KV_SCOPE)));
         let circuit = Circuit::from_remote().await?;
 
         let tornado_provider =
