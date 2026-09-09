@@ -3,6 +3,10 @@ name = "edw-core"
 version = "0.0.1"
 edition = "2024"
 
+[features]
+default = ["tornadocash"]
+tornadocash = ["dep:kohaku-tornadocash"]
+
 [dependencies]
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -35,6 +39,11 @@ alloy-network = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-dyn-abi = { workspace = true, features = ["eip712"] }
 alloy-signer-local = { workspace = true }
+
+kohaku-tornadocash = { workspace = true, features = [
+    "parallel",
+], optional = true }
+rand = "0.10.2"
 
 [dev-dependencies]
 serde_json = { workspace = true }

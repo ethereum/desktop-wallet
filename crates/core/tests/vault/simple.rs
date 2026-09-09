@@ -1,0 +1,160 @@
+use std::{sync::Arc, time::Duration};
+
+use alloy_network::TransactionBuilder7702;
+use alloy_node_bindings::Anvil;
+use alloy_primitives::{Address, U256};
+use alloy_provider::{Provider, ProviderBuilder};
+use alloy_rpc_types_eth::TransactionRequest;
+use alloy_signer_local::PrivateKeySigner;
+use alloy_sol_types::sol;
+use edw_core::{
+    asset::AssetId,
+    database::{Database, memory::MemoryDatabase},
+    executor::{Executor, simple::SimpleExecutor},
+    signer::{Signer, simple::SimpleSigner},
+    vault::{Vault, VaultId, simple::SimpleVault},
+};
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+
+/// How long a test waits for a submitted call to be mined.
+const MINING_TIMEOUT: Duration = Duration::from_secs(30);
+
+sol!(
+    #[sol(rpc)]
+    SimpleDelegateContract,
+    "../../contracts/out/SimpleDelegate.sol/SimpleDelegate.json",
+);
+
+#[tokio::test]
+#[ignore = "run with `cargo test -- --ignored`"]
+async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("info"))
+        .try_init();
+
+    let anvil = Anvil::new().prague().spawn();
+    let rpc_url = anvil.endpoint();
+    let signer = PrivateKeySigner::from_slice(&anvil.first_key().to_bytes())?;
+    let vault_signer = PrivateKeySigner::random();
+    let executor_signer = PrivateKeySigner::from_slice(
+        &anvil
+            .nth_key(1)
+            .ok_or("Failed to get executor signer")?
+            .to_bytes(),
+    )?;
+
+    let provider = ProviderBuilder::new()
+        .wallet(signer.clone())
+        .connect_http(rpc_url.parse()?)
+        .erased();
+
+    //? Deploy the SimpleDelegate contract
+    let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
+    let implementation_addr = *delegate_contract.address();
+    info!(
+        "Deployed SimpleDelegate contract at: {:?}",
+        implementation_addr
+    );
+
+    //? Create SimpleExecutor
+    let executor_db: Arc<dyn Database> = Arc::new(MemoryDatabase::default());
+    let executor_signer: Arc<dyn Signer> =
+        Arc::new(SimpleSigner::new(executor_signer.credential().clone(), &executor_db).await?);
+    let executor = SimpleExecutor::new_with_implementation(
+        executor_signer,
+        implementation_addr,
+        provider.clone().into(),
+        executor_db,
+    )
+    .await?;
+    info!("Created SimpleExecutor with ID {:?}", executor.id());
+
+    //? Create and authorize SimpleVault
+    let (vault_signer, vault_db) = signer_with_db(&vault_signer).await?;
+    let auth = SimpleVault::authorize_implementation(
+        vault_signer.as_ref(),
+        implementation_addr,
+        &provider.clone().into(),
+    )
+    .await?;
+
+    let tx = TransactionRequest::default()
+        .to(signer.address())
+        .with_authorization_list(vec![auth]);
+    provider.send_transaction(tx).await?.get_receipt().await?;
+    info!("Authorized SimpleVault");
+
+    let vault = SimpleVault::new_with_implementation(
+        vault_signer,
+        implementation_addr,
+        provider.clone().into(),
+        vault_db,
+    )
+    .await?;
+    info!("Created SimpleVault with ID {:?}", vault.id());
+
+    //? Deposit into the vault
+    info!("Depositing into the vault...");
+    let deposit_asset = AssetId::Native;
+    let deposit_amount = U256::from(10000);
+    let deposit_calls = vault.deposit(&deposit_asset, deposit_amount).await?;
+
+    let deposit_call = executor.execute(&deposit_calls).await?;
+    executor.await_call(deposit_call, MINING_TIMEOUT).await?;
+    info!("Deposit completed successfully.");
+
+    //? Verify balance
+    info!("Verifying balance after deposit...");
+    let balance = vault.balance(&deposit_asset).await?;
+    assert_eq!(
+        balance, deposit_amount,
+        "Expected vault balance to match deposited amount"
+    );
+
+    //? Withdraw
+    info!("Withdrawing from the vault...");
+    let withdraw_amount = U256::from(1234);
+    let withdraw_target = Address::from_slice(&[1; 20]);
+    let target_balance_before = provider.get_balance(withdraw_target).await?;
+
+    let withdraw_calls = vault
+        .withdraw(
+            &VaultId::Address(withdraw_target),
+            &deposit_asset,
+            withdraw_amount,
+        )
+        .await?;
+
+    let withdraw_call = executor.execute(&withdraw_calls).await?;
+    executor.await_call(withdraw_call, MINING_TIMEOUT).await?;
+    info!("Withdrawal completed successfully.");
+
+    //? Verify balance after withdrawal
+    info!("Verifying balance after withdrawal...");
+    let balance_after_withdrawal = vault.balance(&deposit_asset).await?;
+    assert_eq!(
+        balance_after_withdrawal,
+        deposit_amount - withdraw_amount,
+        "Expected vault balance to match after withdrawal"
+    );
+
+    //? Verify that the withdraw target received the funds
+    let target_balance = provider.get_balance(withdraw_target).await?;
+    assert_eq!(
+        target_balance,
+        target_balance_before + withdraw_amount,
+        "Expected withdraw target to receive the funds"
+    );
+
+    Ok(())
+}
+
+/// A signer paired with the database it persists to, as the executor and vault expect.
+async fn signer_with_db(
+    key: &PrivateKeySigner,
+) -> Result<(Arc<dyn Signer>, Arc<dyn Database>), Box<dyn std::error::Error>> {
+    let db: Arc<dyn Database> = Arc::new(MemoryDatabase::default());
+    let signer: Arc<dyn Signer> = Arc::new(SimpleSigner::new(key.credential().clone(), &db).await?);
+    Ok((signer, db))
+}

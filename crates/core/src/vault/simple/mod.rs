@@ -179,13 +179,14 @@ impl Vault for SimpleVault {
             AssetId::Erc20(token) => Ok(self.balance_erc20(*token).await?),
         }
     }
+}
 
-    async fn deposit(
-        &self,
-        _from: Address,
-        asset: &AssetId,
-        amount: U256,
-    ) -> Result<Vec<Call>, VaultError> {
+impl SimpleVault {
+    pub fn address(&self) -> Address {
+        self.delegate.address()
+    }
+
+    pub async fn deposit(&self, asset: &AssetId, amount: U256) -> Result<Vec<Call>, VaultError> {
         let calls = match asset {
             AssetId::Native => self.deposit_native(amount),
             AssetId::Erc20(token) => self.deposit_erc20(*token, amount),
@@ -193,13 +194,12 @@ impl Vault for SimpleVault {
         Ok(calls)
     }
 
-    async fn withdraw(
+    pub async fn withdraw(
         &self,
         to: &VaultId,
         asset: &AssetId,
         amount: U256,
     ) -> Result<Vec<Call>, VaultError> {
-        #[allow(irrefutable_let_patterns)]
         let VaultId::Address(address) = to else {
             return Err(VaultError::UnsupportedVaultId(to.clone()));
         };
@@ -209,12 +209,6 @@ impl Vault for SimpleVault {
             AssetId::Erc20(token) => self.withdraw_erc20(*address, *token, amount).await?,
         };
         Ok(calls)
-    }
-}
-
-impl SimpleVault {
-    fn address(&self) -> Address {
-        self.delegate.address()
     }
 
     async fn balance_native(&self) -> Result<U256, SimpleVaultError> {
