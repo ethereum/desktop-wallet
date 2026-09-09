@@ -27,12 +27,12 @@ impl NetworkListArgs {
                 vec![
                     network.name.clone(),
                     network.network_id.0.to_string(),
-                    network.native_token.clone(),
+                    network.native_asset.clone(),
                 ]
             })
             .collect::<Vec<_>>();
 
-        table(&["", "NAME", "NETWORK ID", "TOKEN"], &rows);
+        table(&["NAME", "NETWORK ID", "TOKEN"], &rows);
         Ok(())
     }
 }

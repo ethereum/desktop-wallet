@@ -1,5 +1,5 @@
 use clap::Args;
-use edw_core::network::{Network, NetworkId, db::NetworkDb};
+use edw_core::network::{Network, db::NetworkDb};
 
 use crate::GlobalArgs;
 
@@ -16,22 +16,11 @@ pub struct NetworkAddArgs {
 }
 
 impl NetworkAddArgs {
-    fn resolve_network(&self) -> Network {
-        // TODO: resolve presets
-        // TODO: use self
-        Network {
-            name: self.name.clone().unwrap_or("NetworkName".to_string()),
-            endpoints: vec![],
-            native_token: "eth".to_string(),
-            network_id: NetworkId(1),
-        }
-    }
-
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let context = global.gather().await?;
         let mut networks = context.networks.get_networks().await?;
 
-        let incoming = self.resolve_network();
+        let incoming = Network::from_preset(&self.id_or_preset)?;
 
         if let Some(index) = networks
             .iter()

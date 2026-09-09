@@ -15,6 +15,6 @@ pub struct NetworkId(pub u64);
 pub struct Network {
     pub network_id: NetworkId,
     pub name: String,
-    pub native_token: String,
+    pub native_asset: String,
     pub endpoints: Vec<NetworkEndpointConfig>,
 }
