@@ -7,10 +7,8 @@ use std::{
 use anyhow::Context;
 use clap::Subcommand;
 use edw_core::{
-    database::file::FileDatabase,
-    executor::simple::SimpleExecutor,
-    network::alloy::SimpleNetworkEndpoint,
-    profile::simple::SimpleProfile,
+    database::file::FileDatabase, executor::simple::SimpleExecutor,
+    network::alloy::SimpleNetworkEndpoint, profile::simple::SimpleProfile,
 };
 
 use crate::GlobalArgs;

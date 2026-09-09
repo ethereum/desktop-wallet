@@ -1,11 +1,5 @@
 use crate::network::{Network, NetworkId};
 
-pub struct NetworkPreset {
-    pub network_id: NetworkId,
-    pub name: &'static str,
-    pub native_asset: &'static str,
-}
-
 pub const NETWORK_PRESETS: &[NetworkPreset] = &[
     NetworkPreset {
         network_id: NetworkId(1),
@@ -24,6 +18,12 @@ pub const NETWORK_PRESETS: &[NetworkPreset] = &[
     },
 ];
 
+pub struct NetworkPreset {
+    pub network_id: NetworkId,
+    pub name: &'static str,
+    pub native_asset: &'static str,
+}
+
 impl Network {
     #[must_use]
     pub fn presets() -> &'static [NetworkPreset] {
@@ -33,7 +33,9 @@ impl Network {
     pub fn from_preset(name_or_id: &str) -> Result<Self, anyhow::Error> {
         let preset = NETWORK_PRESETS
             .iter()
-            .find(|p| p.name.eq_ignore_ascii_case(name_or_id) || p.network_id.0.to_string() == name_or_id)
+            .find(|p| {
+                p.name.eq_ignore_ascii_case(name_or_id) || p.network_id.0.to_string() == name_or_id
+            })
             .ok_or_else(|| anyhow::anyhow!("No preset found for name or id: {name_or_id}"))?;
 
         Ok(Self {
