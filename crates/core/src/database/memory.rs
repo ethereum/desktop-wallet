@@ -19,14 +19,8 @@ impl MemoryDatabase {
         Self::default()
     }
 
-    /// Every key currently held, in unspecified order.
-    ///
-    /// [`Database`] has no iteration, so this is the seam tests use to inspect what a
-    /// backend actually stored.
-    ///
-    /// # Errors
-    /// Returns an error if the store's lock is poisoned.
-    pub fn keys(&self) -> Result<Vec<Vec<u8>>, DatabaseError> {
+    #[cfg(test)]
+    pub(crate) fn keys(&self) -> Result<Vec<Vec<u8>>, DatabaseError> {
         let store = self
             .store
             .lock()

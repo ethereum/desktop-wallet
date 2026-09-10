@@ -414,9 +414,13 @@ Proposed standards to adopt or adjust as the code lands:
   `wallet-keys`/`wallet-vault` PR.
 - **Only-RPC egress + no secrets in logs + no telemetry** (principles 2, 11). Enforce with a
   review check and, where feasible, a test/lint that fails on unexpected network hosts.
-- **Testing:** `wallet-core` logic should carry unit tests; derivation should have committed
-  known-answer vectors; user-visible flows should be driven live in the running app before
-  "done."
+- **Rust style:** follow the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
+  for public surface. Prefer small, reviewable changes. Comments explain non-obvious intent,
+  not what the next line does.
+- **Testing:** unit tests sit next to the code they exercise and may inspect internals.
+  Integration tests (`crates/*/tests`) cover public behavior only: one property per test,
+  helpers grouped at the top of the file. Derivation should have committed known-answer
+  vectors; user-visible flows should be driven live in the running app before "done."
 - **CI (`EDW-001`, v0.1.0):** build + clippy + test on macOS/Linux/Windows; deny warnings in
   `wallet-core`; dependency audit (`cargo audit`/`cargo deny`) given the supply-chain
   principle.

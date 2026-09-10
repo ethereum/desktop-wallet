@@ -180,7 +180,7 @@ mod tests {
     use super::*;
     use crate::{database::memory::MemoryDatabase, test_support::mocked_provider};
 
-    /// Building a [`SimpleSigner`] needs no chain, so the queue is never drawn on.
+    /// Building a [`SimpleSigner`] needs no chain.
     fn provider() -> crate::network::alloy::SimpleNetworkEndpoint {
         mocked_provider(&Asserter::new())
     }
