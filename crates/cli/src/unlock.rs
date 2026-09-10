@@ -1,15 +1,13 @@
 use std::{
     fs,
-    io::{BufRead, IsTerminal, Write},
-    os::unix::fs::OpenOptionsExt,
+    io::{BufRead, IsTerminal},
     path::{Path, PathBuf},
 };
 
 use anyhow::Context;
-use edw_core::database::encrypted::EncryptedDatabase;
 use zeroize::Zeroizing;
 
-use crate::{GlobalArgs, session};
+use crate::{GlobalArgs, session, store};
 
 /// Where a script may pass the decryption password.
 ///
@@ -17,20 +15,26 @@ use crate::{GlobalArgs, session};
 /// An environment variable is readable by anything running as the user, so this exists for
 /// automation and the terminal session is what interactive use should rely on.
 const PASSWORD_ENV: &str = "EDW_DECRYPTION_PASSWORD";
-const UNLOCK_FILE: &str = ".unlock";
 
-fn unlock_path(data_dir: &Path) -> PathBuf {
-    data_dir.join(UNLOCK_FILE)
+pub(crate) const UNLOCK_DIR: &str = "unlock";
+
+pub(crate) fn unlock_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join(UNLOCK_DIR)
 }
 
-/// Ensures this data dir has a wallet password and returns it.
+/// Whether an encrypted store already exists, checked before anything can create one.
+pub(crate) fn is_initialized(dir: &Path) -> bool {
+    fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
+}
+
+/// Ensures this data dir has a wallet credential and returns the password.
 ///
-/// First run writes `{data_dir}/.unlock`. Later calls
-/// verify against that file before any `EncryptedDatabase` is opened.
+/// First run creates `{data_dir}/unlock/` as an [`edw_core::database::encrypted::EncryptedDatabase`].
+/// Later calls unlock that store. Profile and network stores are not created here.
 ///
 /// # Errors
 /// Wrong password, I/O, or an empty password on first run.
-pub(crate) fn ensure_unlocked(data_dir: &Path) -> Result<Zeroizing<String>, anyhow::Error> {
+pub(crate) async fn ensure_unlocked(data_dir: &Path) -> Result<Zeroizing<String>, anyhow::Error> {
     let (provided, persist_session) = match env_password()? {
         Some(password) => (Some(password), false),
         None => match session::load() {
@@ -39,56 +43,42 @@ pub(crate) fn ensure_unlocked(data_dir: &Path) -> Result<Zeroizing<String>, anyh
         },
     };
 
-    let password = ensure_unlocked_inner(data_dir, provided)?;
+    let password = ensure_unlocked_inner(data_dir, provided).await?;
     if persist_session {
         let _ = session::store(&password);
     }
     Ok(password)
 }
 
-fn ensure_unlocked_inner(
+async fn ensure_unlocked_inner(
     data_dir: &Path,
     provided: Option<Zeroizing<String>>,
 ) -> Result<Zeroizing<String>, anyhow::Error> {
-    let path = unlock_path(data_dir);
-    if path.exists() {
-        let blob = fs::read(&path).with_context(|| format!("error reading {}", path.display()))?;
-        let password = match provided {
-            Some(password) => password,
-            None => prompt("Decryption password: ")?,
-        };
-        EncryptedDatabase::check_password_verifier(&blob, password.as_bytes())
-            .context("incorrect password")?;
-        return Ok(password);
-    }
-
+    let dir = unlock_dir(data_dir);
+    let initialized = is_initialized(&dir);
     let password = match provided {
         Some(password) => {
-            if password.is_empty() {
+            if !initialized && password.is_empty() {
                 anyhow::bail!("the decryption password cannot be empty; nothing was created");
             }
             password
         }
-        None => setup(data_dir)?,
+        None => {
+            if initialized {
+                prompt("Decryption password: ")?
+            } else {
+                setup(data_dir)?
+            }
+        }
     };
-    write_unlock_file(data_dir, &password)?;
-    Ok(password)
-}
 
-fn write_unlock_file(data_dir: &Path, password: &str) -> Result<(), anyhow::Error> {
-    fs::create_dir_all(data_dir)
-        .with_context(|| format!("error creating {}", data_dir.display()))?;
-    let blob = EncryptedDatabase::create_password_verifier(password.as_bytes())?;
-    let path = unlock_path(data_dir);
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-        .with_context(|| format!("error creating {}", path.display()))?;
-    file.write_all(&blob)
-        .with_context(|| format!("error writing {}", path.display()))?;
-    Ok(())
+    let opened = store::open_store(&dir, password.as_bytes()).await;
+    if initialized {
+        drop(opened.context("incorrect password")?);
+    } else {
+        drop(opened?);
+    }
+    Ok(password)
 }
 
 fn env_password() -> Result<Option<Zeroizing<String>>, anyhow::Error> {
@@ -146,12 +136,12 @@ pub(crate) fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
     ))
 }
 
-pub(crate) fn run_unlock(global: &GlobalArgs) -> Result<(), anyhow::Error> {
-    let path = unlock_path(&global.data_dir);
-    let existed = path.exists();
+pub(crate) async fn run_unlock(global: &GlobalArgs) -> Result<(), anyhow::Error> {
+    let dir = unlock_dir(&global.data_dir);
+    let existed = is_initialized(&dir);
     let was_unlocked = session::load().is_some();
 
-    ensure_unlocked(&global.data_dir)?;
+    drop(ensure_unlocked(&global.data_dir).await?);
 
     if !existed {
         println!("Wallet password set for {}.", global.data_dir.display());
@@ -182,40 +172,43 @@ pub(crate) fn run_lock() -> Result<(), anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use edw_core::database::{Database, file::FileDatabase};
-
     use super::*;
 
     fn temp_data_dir() -> tempfile::TempDir {
         tempfile::tempdir().expect("temp dir")
     }
 
-    #[test]
-    fn first_unlock_writes_only_the_verifier_file() {
+    #[tokio::test]
+    async fn first_unlock_writes_only_the_unlock_store() {
         let dir = temp_data_dir();
         let password = Zeroizing::new(String::from("test-password"));
-        ensure_unlocked_inner(dir.path(), Some(password)).expect("first run");
+        ensure_unlocked_inner(dir.path(), Some(password))
+            .await
+            .expect("first run");
 
-        assert!(unlock_path(dir.path()).exists());
+        assert!(is_initialized(&unlock_dir(dir.path())));
         assert!(!dir.path().join("network").exists());
         let entries: Vec<_> = fs::read_dir(dir.path())
             .expect("list")
             .map(|e| e.expect("entry").file_name())
             .collect();
-        assert_eq!(entries, vec![std::ffi::OsString::from(UNLOCK_FILE)]);
+        assert_eq!(entries, vec![std::ffi::OsString::from(UNLOCK_DIR)]);
     }
 
-    #[test]
-    fn second_unlock_accepts_the_same_password_and_rejects_another() {
+    #[tokio::test]
+    async fn second_unlock_accepts_the_same_password_and_rejects_another() {
         let dir = temp_data_dir();
         let password = Zeroizing::new(String::from("test-password"));
-        ensure_unlocked_inner(dir.path(), Some(password.clone())).expect("first run");
+        ensure_unlocked_inner(dir.path(), Some(password.clone()))
+            .await
+            .expect("first run");
 
-        ensure_unlocked_inner(dir.path(), Some(password)).expect("same password");
+        ensure_unlocked_inner(dir.path(), Some(password))
+            .await
+            .expect("same password");
 
         let err = ensure_unlocked_inner(dir.path(), Some(Zeroizing::new(String::from("nope"))))
+            .await
             .expect_err("wrong password");
         assert!(err.to_string().contains("incorrect password"));
     }
@@ -224,21 +217,20 @@ mod tests {
     async fn a_new_store_uses_the_wallet_password() {
         let dir = temp_data_dir();
         let password = Zeroizing::new(String::from("test-password"));
-        ensure_unlocked_inner(dir.path(), Some(password.clone())).expect("first run");
+        ensure_unlocked_inner(dir.path(), Some(password.clone()))
+            .await
+            .expect("first run");
 
-        // Drive a new EncryptedDatabase with the already-verified password.
-        let backend: Arc<dyn Database> =
-            Arc::new(FileDatabase::open(dir.path().join("alice").join("db")).expect("open"));
-        EncryptedDatabase::open_or_create(backend, password.as_bytes())
+        crate::store::open_store(&dir.path().join("alice").join("db"), password.as_bytes())
             .await
             .expect("create with wallet password");
 
-        assert!(unlock_path(dir.path()).exists());
         let listed: Vec<_> = fs::read_dir(dir.path())
             .expect("list")
             .map(|e| e.expect("entry").file_name())
             .collect();
-        assert!(listed.iter().any(|n| n == UNLOCK_FILE));
+        assert!(listed.iter().any(|n| n == UNLOCK_DIR));
+        assert!(listed.iter().any(|n| n == "alice"));
         assert!(!listed.iter().any(|n| n == "network"));
     }
 }

@@ -14,13 +14,32 @@ use zeroize::Zeroizing;
 use crate::{
     database::Database,
     network::{NetworkId, SimpleNetworkEndpoint, endpoint::NetworkEndpoint},
+    seed::db::SeedDb,
 };
 
 pub(crate) mod db;
-use db::SeedDb;
 
 const SCAN_BATCH: u32 = 5;
 const CHANGE: u32 = 0;
+
+/// A BIP-39 mnemonic. Zeroized on drop. Not `Debug`, `Clone`, or `Serialize`.
+pub struct Mnemonic {
+    phrase: Zeroizing<String>,
+}
+
+/// Used HD indexes found by [`scan_used`]. Not persisted by this module.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanResult {
+    pub used: BTreeMap<u32, Address>,
+    pub next_index: u32,
+}
+
+/// Derivation identity for one named profile. Not `Debug`, `Clone`, or `Serialize`.
+pub struct SeedRecord {
+    mnemonic: Mnemonic,
+    pub network_id: NetworkId,
+    pub profile_index: u32,
+}
 
 /// How many BIP-39 words to generate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,18 +48,28 @@ pub enum WordCount {
     TwentyFour,
 }
 
-impl WordCount {
-    const fn words(self) -> usize {
-        match self {
-            Self::Twelve => 12,
-            Self::TwentyFour => 24,
-        }
-    }
-}
-
-/// A BIP-39 mnemonic. Zeroized on drop. Not `Debug`, `Clone`, or `Serialize`.
-pub struct Mnemonic {
-    phrase: Zeroizing<String>,
+#[derive(Debug, thiserror::Error)]
+pub enum SeedError {
+    #[error("invalid BIP-39 mnemonic")]
+    InvalidMnemonic,
+    #[error("mnemonic must be 12 or 24 words, got {count}")]
+    UnsupportedWordCount { count: usize },
+    #[error("failed to generate a mnemonic: {0}")]
+    Generate(String),
+    #[error("derivation failed: {0}")]
+    Derivation(String),
+    #[error("no seed is stored")]
+    MissingSeed,
+    #[error("RPC chain {found} does not match the profile's network {}", expected.0)]
+    NetworkMismatch { expected: NetworkId, found: u64 },
+    #[error("address index overflow")]
+    IndexOverflow,
+    #[error(transparent)]
+    Database(crate::database::DatabaseError),
+    #[error("serialization error: {0}")]
+    Serialization(postcard::Error),
+    #[error("RPC error: {0}")]
+    Rpc(#[from] alloy_transport::TransportError),
 }
 
 impl Mnemonic {
@@ -81,13 +110,6 @@ impl Mnemonic {
     }
 }
 
-/// Derivation identity for one named profile. Not `Debug`, `Clone`, or `Serialize`.
-pub struct SeedRecord {
-    mnemonic: Mnemonic,
-    pub network_id: NetworkId,
-    pub profile_index: u32,
-}
-
 impl SeedRecord {
     #[must_use]
     pub fn new(mnemonic: Mnemonic, network_id: NetworkId, profile_index: u32) -> Self {
@@ -105,11 +127,13 @@ impl SeedRecord {
     }
 }
 
-/// Used HD indexes found by [`scan_used`]. Not persisted by this module.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScanResult {
-    pub used: BTreeMap<u32, Address>,
-    pub next_index: u32,
+impl WordCount {
+    const fn words(self) -> usize {
+        match self {
+            Self::Twelve => 12,
+            Self::TwentyFour => 24,
+        }
+    }
 }
 
 /// Path: `m/44'/60'/{profile_index}'/0/{j}`. Change is always 0.
@@ -206,30 +230,6 @@ async fn is_address_used(
     let balance = provider.provider.get_balance(address).await?;
     let code = provider.provider.get_code_at(address).await?;
     Ok(nonce > 0 || !balance.is_zero() || !code.is_empty())
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum SeedError {
-    #[error("invalid BIP-39 mnemonic")]
-    InvalidMnemonic,
-    #[error("mnemonic must be 12 or 24 words, got {count}")]
-    UnsupportedWordCount { count: usize },
-    #[error("failed to generate a mnemonic: {0}")]
-    Generate(String),
-    #[error("derivation failed: {0}")]
-    Derivation(String),
-    #[error("no seed is stored")]
-    MissingSeed,
-    #[error("RPC chain {found} does not match the profile's network {}", expected.0)]
-    NetworkMismatch { expected: NetworkId, found: u64 },
-    #[error("address index overflow")]
-    IndexOverflow,
-    #[error(transparent)]
-    Database(crate::database::DatabaseError),
-    #[error("serialization error: {0}")]
-    Serialization(postcard::Error),
-    #[error("RPC error: {0}")]
-    Rpc(#[from] alloy_transport::TransportError),
 }
 
 #[cfg(test)]

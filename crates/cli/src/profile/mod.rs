@@ -3,20 +3,14 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use clap::Subcommand;
 use edw_core::{
-    network::{NetworkId, SimpleNetworkEndpoint, db::NetworkDb, presets::NetworkPreset},
+    network::{Network, NetworkId, SimpleNetworkEndpoint, db::NetworkDb},
     seed::{Mnemonic, SeedRecord, WordCount, assert_network, scan_used, store_seed},
 };
 
 use crate::{GlobalArgs, store, unlock};
 
 /// Data-dir folders that are not profiles and cannot be used as profile names.
-const RESERVED_DATA_SUBDIRS: &[&str] = &["network"];
-
-fn is_reserved_data_subdir(name: &str) -> bool {
-    RESERVED_DATA_SUBDIRS
-        .iter()
-        .any(|reserved| name.eq_ignore_ascii_case(reserved))
-}
+const RESERVED_DATA_SUBDIRS: &[&str] = &["network", "unlock"];
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
@@ -189,12 +183,11 @@ async fn import(
 }
 
 async fn resolve_network_id(input: &str, global: &GlobalArgs) -> Result<NetworkId, anyhow::Error> {
-    if let Some(preset) = NetworkPreset::from_input(input) {
-        return Ok(preset.network_id());
+    if let Ok(preset) = Network::from_preset(input) {
+        return Ok(preset.network_id);
     }
 
-    let db = store::try_network_store(&global.data_dir).await?;
-    let Some(db) = db else {
+    let Some(db) = store::try_network_store(&global.data_dir).await? else {
         anyhow::bail!("unknown network `{input}`");
     };
     let networks = db.get_networks().await?;
@@ -213,11 +206,8 @@ fn rpc_provider(
 ) -> Result<SimpleNetworkEndpoint, anyhow::Error> {
     let url = if let Some(url) = &global.rpc_url {
         url.clone()
-    } else if network_id == NetworkPreset::LocalTestnet.network_id() {
-        NetworkPreset::LocalTestnet
-            .default_rpc_url()
-            .context("local testnet has no default RPC")?
-            .to_owned()
+    } else if network_id.0 == 31_337 {
+        "http://localhost:8545".to_owned()
     } else {
         anyhow::bail!("no RPC endpoint; pass --rpc-url");
     };
@@ -231,6 +221,12 @@ fn assert_usable_profile_name(name: &str) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+fn is_reserved_data_subdir(name: &str) -> bool {
+    RESERVED_DATA_SUBDIRS
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
+}
+
 fn profile_path(name: &str, data_dir: &Path) -> PathBuf {
     data_dir.join(name)
 }
@@ -240,10 +236,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn network_is_a_reserved_data_subdir() {
+    fn network_and_unlock_are_reserved_data_subdirs() {
         assert!(is_reserved_data_subdir("network"));
         assert!(is_reserved_data_subdir("NETWORK"));
         assert!(is_reserved_data_subdir("NeTwOrK"));
+        assert!(is_reserved_data_subdir("unlock"));
+        assert!(is_reserved_data_subdir("UNLOCK"));
         assert!(!is_reserved_data_subdir("alice"));
     }
 }

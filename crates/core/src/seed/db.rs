@@ -9,13 +9,6 @@ use crate::{
 
 const SEED_KEY: &[u8] = b"seed";
 
-#[derive(Serialize, Deserialize)]
-struct StoredSeed {
-    phrase: String,
-    network_id: NetworkId,
-    profile_index: u32,
-}
-
 pub(crate) trait SeedDb: Database {
     async fn get_seed(&self) -> Result<SeedRecord, SeedError> {
         let Some(bytes) = self.get(SEED_KEY).await? else {
@@ -40,6 +33,13 @@ pub(crate) trait SeedDb: Database {
         self.put(SEED_KEY, &bytes).await?;
         Ok(())
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredSeed {
+    phrase: String,
+    network_id: NetworkId,
+    profile_index: u32,
 }
 
 impl<D: Database + ?Sized> SeedDb for D {}
