@@ -17,27 +17,15 @@ use edw_core::{
     signer::{Signer, SignerId, simple::SimpleSigner},
 };
 
-/// The EIP-712 example key, and the address it derives to.
 const KEY: [u8; 32] = hex!("c85ef7d79691fe79573b1a7064c19c1a9819ebdbd1faaab1a8ec92344438aaf4");
 const SIGNER_ADDRESS: Address = address!("0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826");
-
-/// The `Mail` example from <https://eips.ethereum.org/EIPS/eip-712>.
 const EIP712_MAIL: &str = include_str!("../fixtures/eip712_mail.json");
-
-/// The signature EIP-712 publishes as the `eth_signTypedData` result for that example.
 const EIP712_SIGNATURE: [u8; 65] = hex!(
     "4355c47d63924e8a72e509b65029052eb6c299d53a04e167c5775fd466751c9d\
      07299936d304c153f6443dfa05f40ff007d72911b6f72307f996231605b91562\
      1c"
 );
-
 const MESSAGE: &[u8] = b"Hello, Bob!";
-
-/// The `eth_sign` result for [`MESSAGE`] under [`KEY`], derived from the [EIP-191] preimage
-/// `"\x19Ethereum Signed Message:\n" || len || message` and cross-checked against
-/// `cast wallet sign`.
-///
-/// [EIP-191]: https://eips.ethereum.org/EIPS/eip-191
 const EIP191_SIGNATURE: [u8; 65] = hex!(
     "d088abb597a29a536423146c15e05a9f18af763823eb041bbb6dea6f6e560f5c\
      45ad634d5594f14191f5f978f7745331fce28c53a348a06ecca512fbc06f65d4\
@@ -49,11 +37,14 @@ async fn signer_from(key: SigningKey) -> SimpleSigner {
     SimpleSigner::new(key, &db).await.expect("build signer")
 }
 
-/// A [`SimpleSigner`] and a plain alloy signer holding the same random key.
 async fn signer_pair() -> (SimpleSigner, PrivateKeySigner) {
     let reference = PrivateKeySigner::random();
     let ours = signer_from(reference.credential().clone()).await;
     (ours, reference)
+}
+
+fn provider() -> SimpleNetworkEndpoint {
+    SimpleNetworkEndpoint::new_http("http://localhost:8545".parse().expect("valid url"))
 }
 
 #[tokio::test]
@@ -109,7 +100,6 @@ async fn sign_typed_data_matches_alloy() {
     );
 }
 
-/// The published `eth_signTypedData` result for the fixture.
 #[tokio::test]
 async fn sign_typed_data_matches_the_eip712_published_vector() {
     let signer = signer_from(SigningKey::from_slice(&KEY).expect("valid key")).await;
@@ -173,9 +163,4 @@ async fn a_signer_rebuilt_from_the_database_is_the_same_signer() {
         .expect("rebuild through the factory");
 
     assert_eq!(rebuilt.id(), original.id());
-}
-
-/// `BuildContext` carries an endpoint that this signer never uses.
-fn provider() -> SimpleNetworkEndpoint {
-    SimpleNetworkEndpoint::new_http("http://localhost:8545".parse().expect("valid url"))
 }
