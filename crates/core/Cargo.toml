@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = ["tornadocash"]
-tornadocash = ["dep:kohaku-tornadocash"]
+tornadocash = ["dep:kohaku-tornadocash", "dep:kohaku-kv-store"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -43,6 +43,7 @@ alloy-signer-local = { workspace = true }
 kohaku-tornadocash = { workspace = true, features = [
     "parallel",
 ], optional = true }
+kohaku-kv-store = { workspace = true, optional = true }
 rand = "0.10.2"
 
 [dev-dependencies]

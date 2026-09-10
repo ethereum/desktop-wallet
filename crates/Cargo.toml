@@ -44,7 +44,8 @@ hkdf = "0.12"
 sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 
-kohaku-tornadocash = { git = "https://github.com/Robert-MacWha/kohaku-rs.git" }
+kohaku-tornadocash = { git = "https://github.com/ethereum/kohaku-rs.git" }
+kohaku-kv-store = { git = "https://github.com/ethereum/kohaku-rs.git" }
 
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }

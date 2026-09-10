@@ -60,13 +60,18 @@ impl TcVault {
     ) -> Result<Self, TcVaultError> {
         let network_id = provider.network_id().await?;
         let provider = provider.provider;
-        let syncer = Arc::new(RpcSyncer::new(provider.clone()));
+        let syncer = RpcSyncer::new(provider.clone());
 
-        let store = Arc::new(KvAdapter(db.clone().scoped(TORNADOCASH_KV_SCOPE)));
+        let store = KvAdapter(db.clone().scoped(TORNADOCASH_KV_SCOPE));
         let circuit = Circuit::from_remote().await?;
 
-        let tornado_provider =
-            TornadoProvider::new(provider.clone(), store, syncer.clone(), syncer, circuit);
+        let tornado_provider = TornadoProvider::new(
+            provider.clone(),
+            store.into(),
+            syncer.clone().into(),
+            syncer.into(),
+            circuit,
+        );
 
         Ok(Self {
             network_id,

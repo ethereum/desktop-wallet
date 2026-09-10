@@ -1,11 +1,11 @@
-use kohaku_tornadocash::kv::KvStore;
+use kohaku_kv_store::backend::KvStoreBackend;
 
 use crate::database::Database;
 
 pub struct KvAdapter<T>(pub T);
 
 #[async_trait::async_trait]
-impl<T: Database> KvStore for KvAdapter<T> {
+impl<T: Database> KvStoreBackend for KvAdapter<T> {
     async fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         let x = self.0.get(key).await.ok()??;
         Some(x.to_vec())
