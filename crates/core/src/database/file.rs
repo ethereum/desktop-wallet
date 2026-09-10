@@ -9,18 +9,10 @@ use zeroize::Zeroizing;
 
 use super::{Database, DatabaseError};
 
-/// A directory-backed [`Database`], storing each record in its own file.
+/// Directory-backed [`Database`] with one file per record.
 ///
-/// One file per key keeps a write proportional to the record rather than to the whole store,
-/// and keeps a torn write confined to the record being written.
-///
-/// On Unix the directory is created `0700` and each record `0600`, matching the convention
-/// established by Geth and Bitcoin Core. Encryption does not make a world-readable store
-/// acceptable: the ciphertext is still an offline password-guessing target, so the fewer
-/// local accounts that can copy it, the better.
-///
-/// This secures nothing on its own: wrap it in [`super::encrypted::EncryptedDatabase`] before
-/// storing anything sensitive.
+/// On Unix the directory is `0700` and each record `0600`. This is not encryption: wrap it
+/// in [`super::encrypted::EncryptedDatabase`] before storing anything sensitive.
 pub struct FileDatabase {
     dir: PathBuf,
 }
@@ -32,26 +24,16 @@ pub enum FileDatabaseError {
 }
 
 impl FileDatabase {
-    /// Opens the store rooted at `dir`, creating the directory if it does not exist.
-    ///
-    /// An existing directory has its permissions tightened rather than being rejected, since a
-    /// store left readable by a permissive umask is a defect to repair, not a reason to refuse
-    /// to start.
-    ///
-    /// # Errors
-    /// Returns an error if the directory cannot be created or its permissions cannot be set.
+    /// Opens the store rooted at `dir`, creating it if needed. An existing directory has its
+    /// permissions tightened rather than being rejected.
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, FileDatabaseError> {
         let dir = dir.as_ref().to_path_buf();
         create_private_dir(&dir)?;
         Ok(Self { dir })
     }
 
-    /// Names a record's file by the hash of its key, so that a key of any length or byte
-    /// content maps to a valid fixed-length filename.
-    ///
-    /// This is not confidentiality: a hash of a guessable key is guessable. Key privacy comes
-    /// from [`super::encrypted::EncryptedDatabase`], which blinds keys before they reach a
-    /// backend.
+    /// Hash of the key as a filename. Not confidentiality: blinding happens in
+    /// [`super::encrypted::EncryptedDatabase`].
     fn key_path(&self, key: &[u8]) -> PathBuf {
         let digest = Sha256::digest(key);
         self.dir.join(hex::encode(digest))
@@ -74,9 +56,8 @@ impl Database for FileDatabase {
         let path = self.key_path(key);
         let tmp = path.with_extension("tmp");
 
-        // Flush the replacement before publishing it, so the rename cannot expose a file whose
-        // contents are still buffered. The mode is set at creation rather than after, so the
-        // record is never briefly world-readable.
+        // Flush before rename so a published file is complete; set the mode at creation so
+        // the record is never briefly world-readable.
         let write = || -> Result<(), std::io::Error> {
             let file = create_private_file(&tmp)?;
             std::io::Write::write_all(&mut &file, value)?;
@@ -147,4 +128,84 @@ fn create_private_dir(dir: &Path) -> Result<(), std::io::Error> {
 #[cfg(not(unix))]
 fn create_private_file(path: &Path) -> Result<std::fs::File, std::io::Error> {
     std::fs::File::create(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+    use crate::test_support::TempDir;
+
+    fn record_files(dir: &Path) -> Vec<PathBuf> {
+        let mut paths: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[tokio::test]
+    async fn put_writes_one_file_per_key() {
+        let dir = TempDir::new();
+        let db = FileDatabase::open(dir.path()).unwrap();
+        db.put(b"first", b"one").await.unwrap();
+        db.put(b"second", b"two").await.unwrap();
+        assert_eq!(record_files(dir.path()).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn rewriting_one_key_does_not_change_other_files() {
+        let dir = TempDir::new();
+        let db = FileDatabase::open(dir.path()).unwrap();
+        db.put(b"first", b"one").await.unwrap();
+        db.put(b"second", b"two").await.unwrap();
+
+        let before: Vec<_> = record_files(dir.path())
+            .iter()
+            .map(|p| std::fs::read(p).unwrap())
+            .collect();
+        db.put(b"first", b"one again").await.unwrap();
+        let after: Vec<_> = record_files(dir.path())
+            .iter()
+            .map(|p| std::fs::read(p).unwrap())
+            .collect();
+
+        let changed = before.iter().filter(|bytes| !after.contains(bytes)).count();
+        assert_eq!(changed, 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn new_store_is_not_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new();
+        let db = FileDatabase::open(dir.path()).unwrap();
+        db.put(b"pk", b"secret").await.unwrap();
+
+        let dir_mode = std::fs::metadata(dir.path()).unwrap().permissions().mode();
+        assert_eq!(dir_mode & 0o777, 0o700);
+
+        for record in record_files(dir.path()) {
+            let mode = std::fs::metadata(&record).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{record:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn existing_permissive_directory_is_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new();
+        std::fs::create_dir_all(dir.path()).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        FileDatabase::open(dir.path()).unwrap();
+
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
 }

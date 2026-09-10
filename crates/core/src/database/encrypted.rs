@@ -1,28 +1,11 @@
 //! Encryption at rest for any [`Database`].
 //!
-//! [`EncryptedDatabase`] is a decorator: it wraps an arbitrary backend and encrypts every
-//! record written through it. Encryption is therefore a property of the storage seam rather
-//! than of each repository that happens to remember to ask for it, and this module is the
-//! only place in the workspace that performs cryptography on stored data.
+//! [`EncryptedDatabase`] wraps a backend and encrypts every record. A random data key is
+//! wrapped by credential slots in the header (`argon2id-password` today). Record keys and
+//! blinded storage keys are derived from it with HKDF-SHA256; values are sealed with
+//! XChaCha20-Poly1305. Changing a password rewraps one slot and leaves records untouched.
 //!
-//! The scheme, versioned by [`RECORD_VERSION`]:
-//!
-//! - The root of trust is the user's password. Argon2id (64 MiB, 3 passes) stretches it into
-//!   a master key. No OS keychain or secure enclave is involved.
-//! - Every record gets its own key and its own blinded storage key, both derived from the
-//!   master key with HKDF-SHA256 over the record's full logical key. Because a
-//!   [`super::scoped::ScopedDatabase`] prefix is part of that logical key, each vault and
-//!   executor lands in a keyspace that is cryptographically isolated rather than merely
-//!   prefixed: a record lifted from one scope will not decrypt in another.
-//! - Values are sealed with XChaCha20-Poly1305 under a random 192-bit nonce, with the
-//!   version and logical key bound in as associated data.
-//! - Storage keys are blinded, so a backend never sees a logical key name. This hides the
-//!   names only. Record count and ciphertext length are not hidden: a backend storing one
-//!   file per record discloses how many records exist, and a length of
-//!   `1 + 24 + plaintext + 16` distinguishes a 32-byte signing key from a 20-byte address.
-//!   Closing that would need fixed-size padding and a layout that does not leak cardinality.
-//!   The cost of blinding is that prefix iteration over the backend is not possible; the
-//!   [`Database`] trait exposes no such operation.
+//! The scheme and its known costs are in `spec/01-architecture.md`.
 
 use std::sync::Arc;
 
@@ -38,52 +21,91 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use super::{Database, DatabaseError};
 
-/// Format version of both the header and every record blob.
-const RECORD_VERSION: u8 = 1;
+/// Header and ciphertext format version. New slot kinds use [`StoredSlot::kind`], not a bump.
+const STORE_VERSION: u8 = 2;
 
-/// Plaintext key the header lives under. It must stay unblinded: it is read before any key
-/// material exists.
+/// Unblinded key for the header, which must be readable before any key material exists.
 const HEADER_KEY: &[u8] = b"edw:keystore:v1";
+
 const HEADER_MAGIC: [u8; 8] = *b"EDWSTORE";
 
 const RECORD_KEY_INFO: &[u8] = b"edw:record-key:v1";
+
 const STORAGE_KEY_INFO: &[u8] = b"edw:storage-key:v1";
-const VERIFIER_KEY: &[u8] = b"edw:verifier:v1";
-const VERIFIER_PLAINTEXT: &[u8] = b"edw:unlocked:v1";
+
+const RECORD_AAD_DOMAIN: &[u8] = b"edw:record:";
+
+const SLOT_AAD_DOMAIN: &[u8] = b"edw:slot:";
+
+/// Persisted kind tag for [`PasswordKeySource`]. Renaming it orphans existing stores.
+const PASSWORD_SLOT_KIND: &str = "argon2id-password";
 
 const SALT_LEN: usize = 16;
+
 const KEY_LEN: usize = 32;
+
 const NONCE_LEN: usize = 24;
 
-/// Argon2id cost parameters. 64 MiB and 3 passes, as specced in `spec/01-architecture.md`.
+/// Argon2id costs from `spec/01-architecture.md`: 64 MiB, 3 passes, one lane.
 const ARGON2_M_COST: u32 = 64 * 1024;
+
 const ARGON2_T_COST: u32 = 3;
+
 const ARGON2_P_COST: u32 = 1;
 
-/// A password-derived master key. Deliberately not `Debug`, `Clone`, or `Serialize`: it must
-/// not be copyable into a log line or a stored record.
+/// A credential that can wrap and recover the store's [`DataKey`].
+///
+/// [`PasswordKeySource`] is the only implementation today. The trait is async so a hardware
+/// token can be a second kind without a redesign.
+#[async_trait::async_trait]
+pub(crate) trait KeySource: Send + Sync {
+    fn kind(&self) -> &'static str;
+
+    async fn wrap(&self, data_key: &DataKey) -> Result<StoredSlot, EncryptedDatabaseError>;
+
+    async fn unwrap(&self, slot: &StoredSlot) -> Result<DataKey, EncryptedDatabaseError>;
+}
+
+/// Root key for record derivation.
+///
+/// Deliberately not `Debug`, `Clone`, or `Serialize`.
 #[derive(ZeroizeOnDrop)]
-struct MasterKey([u8; KEY_LEN]);
+pub(crate) struct DataKey([u8; KEY_LEN]);
+
+/// One way of recovering the [`DataKey`], as persisted in the header.
+///
+/// `params` are opaque except to the named `kind`, so unknown slots can be skipped at unlock.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct StoredSlot {
+    kind: String,
+    params: Vec<u8>,
+    wrapped: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Argon2idParams {
+    m_cost: u32,
+    t_cost: u32,
+    p_cost: u32,
+    salt: Vec<u8>,
+}
+
+/// Recovers the data key by stretching a password with Argon2id.
+pub(crate) struct PasswordKeySource {
+    password: Zeroizing<Vec<u8>>,
+}
 
 #[derive(Serialize, Deserialize)]
 struct KeystoreHeader {
     magic: [u8; 8],
     version: u8,
-    m_cost: u32,
-    t_cost: u32,
-    p_cost: u32,
-    salt: Vec<u8>,
-    verifier: Vec<u8>,
+    slots: Vec<StoredSlot>,
 }
 
 /// Encrypts every record written to an inner [`Database`].
-///
-/// Construct with [`EncryptedDatabase::create`] for a fresh store, or
-/// [`EncryptedDatabase::unlock`] for an existing one.
 pub struct EncryptedDatabase {
     db: Arc<dyn Database>,
-    master: MasterKey,
-    salt: Vec<u8>,
+    data_key: DataKey,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -98,7 +120,7 @@ pub enum EncryptedDatabaseError {
     NotInitialized,
     #[error("record is corrupt or was written for a different key")]
     Corrupt,
-    #[error("unsupported format version {0}, expected {RECORD_VERSION}")]
+    #[error("unsupported format version {0}, expected {STORE_VERSION}")]
     UnsupportedVersion(u8),
     #[error("header declares key-derivation parameters this build does not accept")]
     UnsupportedParameters,
@@ -106,131 +128,169 @@ pub enum EncryptedDatabaseError {
     EmptyPassword,
     #[error("key derivation failed")]
     KeyDerivation,
+    #[error("no slot of kind {0} in this store")]
+    NoMatchingSlot(&'static str),
     #[error("header serialization error: {0}")]
     Serialization(#[from] postcard::Error),
 }
 
-impl EncryptedDatabase {
-    /// Initializes a fresh encrypted store over `db`, writing its header.
-    ///
-    /// The caller owns the password buffer's lifetime, including wiping it; this does not
-    /// take ownership and cannot zeroize it.
-    ///
-    /// # Errors
-    /// Returns [`EncryptedDatabaseError::AlreadyInitialized`] if `db` already holds a header,
-    /// so an existing store is never silently re-keyed and its records orphaned, or
-    /// [`EncryptedDatabaseError::EmptyPassword`] if `password` is empty.
-    pub async fn create(
-        db: Arc<dyn Database>,
-        password: &[u8],
-    ) -> Result<Self, EncryptedDatabaseError> {
+impl DataKey {
+    fn random() -> Self {
+        let mut key = [0u8; KEY_LEN];
+        OsRng.fill_bytes(&mut key);
+        Self(key)
+    }
+
+    fn from_slice(bytes: &[u8]) -> Result<Self, EncryptedDatabaseError> {
+        let key: [u8; KEY_LEN] = bytes
+            .try_into()
+            .map_err(|_| EncryptedDatabaseError::Corrupt)?;
+        Ok(Self(key))
+    }
+
+    pub(crate) fn expose(&self) -> &[u8; KEY_LEN] {
+        &self.0
+    }
+}
+
+impl PasswordKeySource {
+    pub(crate) fn new(password: &[u8]) -> Result<Self, EncryptedDatabaseError> {
         if password.is_empty() {
             return Err(EncryptedDatabaseError::EmptyPassword);
         }
-        if db.get(HEADER_KEY).await?.is_some() {
-            return Err(EncryptedDatabaseError::AlreadyInitialized);
-        }
+        Ok(Self {
+            password: Zeroizing::new(password.to_vec()),
+        })
+    }
+}
 
+#[async_trait::async_trait]
+impl KeySource for PasswordKeySource {
+    fn kind(&self) -> &'static str {
+        PASSWORD_SLOT_KIND
+    }
+
+    async fn wrap(&self, data_key: &DataKey) -> Result<StoredSlot, EncryptedDatabaseError> {
         let mut salt = vec![0u8; SALT_LEN];
         OsRng.fill_bytes(&mut salt);
-        let master =
-            derive_master_key(password, &salt, ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST)?;
 
-        let store = Self {
-            db,
-            master,
-            salt: salt.clone(),
-        };
-        let verifier = store.seal(VERIFIER_KEY, VERIFIER_PLAINTEXT)?;
+        let wrapping_key = derive_wrapping_key(
+            &self.password,
+            &salt,
+            ARGON2_M_COST,
+            ARGON2_T_COST,
+            ARGON2_P_COST,
+        )?;
+        let wrapped = seal_with(
+            &wrapping_key,
+            &slot_associated_data(PASSWORD_SLOT_KIND),
+            data_key.expose(),
+        )?;
 
-        let header = KeystoreHeader {
-            magic: HEADER_MAGIC,
-            version: RECORD_VERSION,
+        let params = Argon2idParams {
             m_cost: ARGON2_M_COST,
             t_cost: ARGON2_T_COST,
             p_cost: ARGON2_P_COST,
             salt,
-            verifier,
         };
-        store
-            .db
-            .put(HEADER_KEY, &postcard::to_stdvec(&header)?)
-            .await?;
-        Ok(store)
+        Ok(StoredSlot {
+            kind: PASSWORD_SLOT_KIND.to_string(),
+            params: postcard::to_stdvec(&params)?,
+            wrapped,
+        })
     }
 
-    /// Unlocks an existing encrypted store over `db`.
-    ///
-    /// # Errors
-    /// Returns [`EncryptedDatabaseError::InvalidPassword`] when the header's verifier fails
-    /// its authentication tag, so a wrong password is rejected up front rather than on the
-    /// first read of a real record. Returns
-    /// [`EncryptedDatabaseError::UnsupportedParameters`] if the header's key-derivation
-    /// parameters are not the ones this version writes, which is how a corrupt or tampered
-    /// header is rejected before any expensive work is done.
-    pub async fn unlock(
-        db: Arc<dyn Database>,
-        password: &[u8],
-    ) -> Result<Self, EncryptedDatabaseError> {
-        if password.is_empty() {
-            return Err(EncryptedDatabaseError::EmptyPassword);
-        }
+    async fn unwrap(&self, slot: &StoredSlot) -> Result<DataKey, EncryptedDatabaseError> {
+        let params: Argon2idParams = postcard::from_bytes(&slot.params)?;
 
-        let Some(bytes) = db.get(HEADER_KEY).await? else {
-            return Err(EncryptedDatabaseError::NotInitialized);
-        };
-        let header: KeystoreHeader = postcard::from_bytes(&bytes)?;
-
-        if header.magic != HEADER_MAGIC {
-            return Err(EncryptedDatabaseError::Corrupt);
-        }
-        if header.version != RECORD_VERSION {
-            return Err(EncryptedDatabaseError::UnsupportedVersion(header.version));
-        }
-        // The header is untrusted input: it is plaintext, so anything able to write the store
-        // can choose these. Argon2's own bounds are far too loose to lean on (`MAX_M_COST` is
-        // `u32::MAX` KiB), so an unchecked header turns a corrupt or hostile file into an
-        // out-of-memory abort or an unbounded hang. Only the parameters this version writes
-        // are accepted; a future cost change travels with a version bump.
-        if header.m_cost != ARGON2_M_COST
-            || header.t_cost != ARGON2_T_COST
-            || header.p_cost != ARGON2_P_COST
-            || header.salt.len() != SALT_LEN
+        // Header params are untrusted. Argon2's own bounds allow multi-GiB / unbounded
+        // hashing, so only the costs this version writes are accepted.
+        if params.m_cost != ARGON2_M_COST
+            || params.t_cost != ARGON2_T_COST
+            || params.p_cost != ARGON2_P_COST
+            || params.salt.len() != SALT_LEN
         {
             return Err(EncryptedDatabaseError::UnsupportedParameters);
         }
 
-        let master = derive_master_key(
-            password,
-            &header.salt,
-            header.m_cost,
-            header.t_cost,
-            header.p_cost,
+        let wrapping_key = derive_wrapping_key(
+            &self.password,
+            &params.salt,
+            params.m_cost,
+            params.t_cost,
+            params.p_cost,
         )?;
-        let store = Self {
-            db,
-            master,
-            salt: header.salt,
-        };
+        let plaintext = open_with(
+            &wrapping_key,
+            &slot_associated_data(PASSWORD_SLOT_KIND),
+            &slot.wrapped,
+        )
+        .map_err(|_| EncryptedDatabaseError::InvalidPassword)?;
 
-        store
-            .open(VERIFIER_KEY, &header.verifier)
-            .map_err(|_| EncryptedDatabaseError::InvalidPassword)?;
-        Ok(store)
+        DataKey::from_slice(&plaintext)
+    }
+}
+
+impl EncryptedDatabase {
+    /// Initializes a fresh encrypted store over `db`.
+    ///
+    /// The caller retains the password and is responsible for wiping it.
+    pub async fn create(
+        db: Arc<dyn Database>,
+        password: &[u8],
+    ) -> Result<Self, EncryptedDatabaseError> {
+        Self::create_with(db, &PasswordKeySource::new(password)?).await
     }
 
-    /// Unlocks an existing store, or initializes one if `db` holds no header.
+    /// Unlocks an existing encrypted store over `db`.
+    pub async fn unlock(
+        db: Arc<dyn Database>,
+        password: &[u8],
+    ) -> Result<Self, EncryptedDatabaseError> {
+        Self::unlock_with(db, &PasswordKeySource::new(password)?).await
+    }
+
+    pub(crate) async fn create_with(
+        db: Arc<dyn Database>,
+        source: &dyn KeySource,
+    ) -> Result<Self, EncryptedDatabaseError> {
+        if db.get(HEADER_KEY).await?.is_some() {
+            return Err(EncryptedDatabaseError::AlreadyInitialized);
+        }
+
+        let data_key = DataKey::random();
+        let header = KeystoreHeader {
+            magic: HEADER_MAGIC,
+            version: STORE_VERSION,
+            slots: vec![source.wrap(&data_key).await?],
+        };
+        db.put(HEADER_KEY, &postcard::to_stdvec(&header)?).await?;
+
+        Ok(Self { db, data_key })
+    }
+
+    /// Tries every slot of `source`'s kind, so a second credential of the same kind is not
+    /// shadowed.
+    pub(crate) async fn unlock_with(
+        db: Arc<dyn Database>,
+        source: &dyn KeySource,
+    ) -> Result<Self, EncryptedDatabaseError> {
+        let header = read_header(&db).await?;
+
+        let mut last_error = EncryptedDatabaseError::NoMatchingSlot(source.kind());
+        for slot in header.slots.iter().filter(|s| s.kind == source.kind()) {
+            match source.unwrap(slot).await {
+                Ok(data_key) => return Ok(Self { db, data_key }),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
+    }
+
+    /// Unlocks `db`, or creates a store if it has no header.
     ///
-    /// # Warning
-    /// The two cases are told apart only by whether a header is present, and the store carries
-    /// no integrity protection over its collection of records. If the header is lost or
-    /// deleted, this initializes a fresh store over the top: the existing records survive on
-    /// disk but become permanently unreadable, and the result reports itself as empty rather
-    /// than as damaged. Prefer [`EncryptedDatabase::create`] and
-    /// [`EncryptedDatabase::unlock`] at call sites that know which one they mean. See EDW-023.
-    ///
-    /// # Errors
-    /// See [`EncryptedDatabase::create`] and [`EncryptedDatabase::unlock`].
+    /// A missing header is treated as empty: leftover records become unreadable. Prefer
+    /// [`Self::create`] or [`Self::unlock`] when the intent is known.
     pub async fn open_or_create(
         db: Arc<dyn Database>,
         password: &[u8],
@@ -242,7 +302,28 @@ impl EncryptedDatabase {
         }
     }
 
-    /// Derives the blinded key this logical key is stored under in the backend.
+    /// Rewraps the password slot under `new_password`. Other slot kinds stay enrolled.
+    pub async fn change_password(&self, new_password: &[u8]) -> Result<(), EncryptedDatabaseError> {
+        let source = PasswordKeySource::new(new_password)?;
+        let slot = source.wrap(&self.data_key).await?;
+
+        let mut header = read_header(&self.db).await?;
+        header
+            .slots
+            .retain(|existing| existing.kind != PASSWORD_SLOT_KIND);
+        header.slots.push(slot);
+        self.db
+            .put(HEADER_KEY, &postcard::to_stdvec(&header)?)
+            .await?;
+        Ok(())
+    }
+
+    /// Kind tag of each header slot, in index order.
+    pub async fn slot_kinds(&self) -> Result<Vec<String>, EncryptedDatabaseError> {
+        let header = read_header(&self.db).await?;
+        Ok(header.slots.into_iter().map(|slot| slot.kind).collect())
+    }
+
     fn storage_key(&self, key: &[u8]) -> Result<Vec<u8>, EncryptedDatabaseError> {
         let mut out = vec![0u8; KEY_LEN];
         self.expand(STORAGE_KEY_INFO, key, &mut out)?;
@@ -261,65 +342,18 @@ impl EncryptedDatabase {
         key: &[u8],
         out: &mut [u8],
     ) -> Result<(), EncryptedDatabaseError> {
-        let hkdf = Hkdf::<Sha256>::new(Some(&self.salt), &self.master.0);
+        // No HKDF salt: the data key is already uniformly random.
+        let hkdf = Hkdf::<Sha256>::new(None, self.data_key.expose());
         hkdf.expand_multi_info(&[domain, key], out)
             .map_err(|_| EncryptedDatabaseError::KeyDerivation)
     }
 
     fn seal(&self, key: &[u8], value: &[u8]) -> Result<Vec<u8>, EncryptedDatabaseError> {
-        let record_key = self.record_key(key)?;
-        let cipher = XChaCha20Poly1305::new_from_slice(record_key.as_ref())
-            .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
-
-        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-        let aad = associated_data(key);
-        let ciphertext = cipher
-            .encrypt(
-                &nonce,
-                Payload {
-                    msg: value,
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| EncryptedDatabaseError::Corrupt)?;
-
-        let mut blob = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
-        blob.push(RECORD_VERSION);
-        blob.extend_from_slice(&nonce);
-        blob.extend_from_slice(&ciphertext);
-        Ok(blob)
+        seal_with(&*self.record_key(key)?, &associated_data(key), value)
     }
 
     fn open(&self, key: &[u8], blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, EncryptedDatabaseError> {
-        let Some((&version, rest)) = blob.split_first() else {
-            return Err(EncryptedDatabaseError::Corrupt);
-        };
-        if version != RECORD_VERSION {
-            return Err(EncryptedDatabaseError::UnsupportedVersion(version));
-        }
-        if rest.len() < NONCE_LEN {
-            return Err(EncryptedDatabaseError::Corrupt);
-        }
-        let (nonce, ciphertext) = rest.split_at(NONCE_LEN);
-        let nonce: [u8; NONCE_LEN] = nonce
-            .try_into()
-            .map_err(|_| EncryptedDatabaseError::Corrupt)?;
-
-        let record_key = self.record_key(key)?;
-        let cipher = XChaCha20Poly1305::new_from_slice(record_key.as_ref())
-            .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
-
-        let aad = associated_data(key);
-        let plaintext = cipher
-            .decrypt(
-                &XNonce::from(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| EncryptedDatabaseError::Corrupt)?;
-        Ok(Zeroizing::new(plaintext))
+        open_with(&*self.record_key(key)?, &associated_data(key), blob)
     }
 }
 
@@ -351,63 +385,424 @@ impl Database for EncryptedDatabase {
     }
 }
 
-/// Binds the format version and the record's logical key into the AEAD tag, so a ciphertext
-/// cannot be replayed under a different key even if key derivation were weakened.
+async fn read_header(db: &Arc<dyn Database>) -> Result<KeystoreHeader, EncryptedDatabaseError> {
+    let Some(bytes) = db.get(HEADER_KEY).await? else {
+        return Err(EncryptedDatabaseError::NotInitialized);
+    };
+    let header: KeystoreHeader = postcard::from_bytes(&bytes)?;
+
+    if header.magic != HEADER_MAGIC {
+        return Err(EncryptedDatabaseError::Corrupt);
+    }
+    if header.version != STORE_VERSION {
+        return Err(EncryptedDatabaseError::UnsupportedVersion(header.version));
+    }
+    Ok(header)
+}
+
 fn associated_data(key: &[u8]) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(1 + key.len());
-    aad.push(RECORD_VERSION);
-    aad.extend_from_slice(key);
+    associated_data_in(RECORD_AAD_DOMAIN, key)
+}
+
+fn slot_associated_data(kind: &str) -> Vec<u8> {
+    associated_data_in(SLOT_AAD_DOMAIN, kind.as_bytes())
+}
+
+/// Domain-separates record AAD from slot AAD. Without the prefix, an unscoped record named
+/// `argon2id-password` would share AAD with the password slot.
+fn associated_data_in(domain: &[u8], context: &[u8]) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(1 + domain.len() + context.len());
+    aad.push(STORE_VERSION);
+    aad.extend_from_slice(domain);
+    aad.extend_from_slice(context);
     aad
 }
 
-fn derive_master_key(
+fn seal_with(
+    key: &[u8; KEY_LEN],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, EncryptedDatabaseError> {
+    let cipher = XChaCha20Poly1305::new_from_slice(key)
+        .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
+
+    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| EncryptedDatabaseError::Corrupt)?;
+
+    let mut blob = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
+    blob.push(STORE_VERSION);
+    blob.extend_from_slice(&nonce);
+    blob.extend_from_slice(&ciphertext);
+    Ok(blob)
+}
+
+fn open_with(
+    key: &[u8; KEY_LEN],
+    aad: &[u8],
+    blob: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, EncryptedDatabaseError> {
+    let Some((&version, rest)) = blob.split_first() else {
+        return Err(EncryptedDatabaseError::Corrupt);
+    };
+    if version != STORE_VERSION {
+        return Err(EncryptedDatabaseError::UnsupportedVersion(version));
+    }
+    if rest.len() < NONCE_LEN {
+        return Err(EncryptedDatabaseError::Corrupt);
+    }
+    let (nonce, ciphertext) = rest.split_at(NONCE_LEN);
+    let nonce: [u8; NONCE_LEN] = nonce
+        .try_into()
+        .map_err(|_| EncryptedDatabaseError::Corrupt)?;
+
+    let cipher = XChaCha20Poly1305::new_from_slice(key)
+        .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
+    let plaintext = cipher
+        .decrypt(
+            &XNonce::from(nonce),
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
+        .map_err(|_| EncryptedDatabaseError::Corrupt)?;
+    Ok(Zeroizing::new(plaintext))
+}
+
+fn derive_wrapping_key(
     password: &[u8],
     salt: &[u8],
     m_cost: u32,
     t_cost: u32,
     p_cost: u32,
-) -> Result<MasterKey, EncryptedDatabaseError> {
+) -> Result<Zeroizing<[u8; KEY_LEN]>, EncryptedDatabaseError> {
     let params = Params::new(m_cost, t_cost, p_cost, Some(KEY_LEN))
         .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    //? Hash directly into the MasterKey. Deriving into a local and moving it would leave an
-    //? un-zeroized copy of the key on the stack.
-    let mut master = MasterKey([0u8; KEY_LEN]);
+    // Hash into the zeroizing buffer so a derived-then-moved key is not left on the stack.
+    let mut wrapping_key = Zeroizing::new([0u8; KEY_LEN]);
     argon2
-        .hash_password_into(password, salt, &mut master.0)
+        .hash_password_into(password, salt, wrapping_key.as_mut())
         .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
-    Ok(master)
+    Ok(wrapping_key)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::HashSet,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+
+    use uuid::Uuid;
+
     use super::*;
-    use crate::database::memory::MemoryDatabase;
+    use crate::database::{memory::MemoryDatabase, scoped::ScopedDatabaseExt};
 
-    /// Tests that a value written to an [`EncryptedDatabase`] is not stored in
-    /// plaintext in its underlying storage.
+    const PASSWORD: &[u8] = b"correct horse battery staple";
+    const NEXT_PASSWORD: &[u8] = b"a different passphrase entirely";
+
+    fn memory() -> Arc<MemoryDatabase> {
+        Arc::new(MemoryDatabase::new())
+    }
+
+    async fn create(backend: &Arc<MemoryDatabase>) -> EncryptedDatabase {
+        EncryptedDatabase::create(backend.clone(), PASSWORD)
+            .await
+            .unwrap()
+    }
+
+    async fn write_header(backend: &Arc<MemoryDatabase>, header: &KeystoreHeader) {
+        let inner: Arc<dyn Database> = backend.clone();
+        inner
+            .put(HEADER_KEY, &postcard::to_stdvec(header).unwrap())
+            .await
+            .unwrap();
+    }
+
+    async fn header(backend: &Arc<MemoryDatabase>) -> KeystoreHeader {
+        let inner: Arc<dyn Database> = backend.clone();
+        read_header(&inner).await.unwrap()
+    }
+
+    async fn push_slot(backend: &Arc<MemoryDatabase>, slot: StoredSlot) {
+        let mut header = header(backend).await;
+        header.slots.push(slot);
+        write_header(backend, &header).await;
+    }
+
+    async fn prepend_slot(backend: &Arc<MemoryDatabase>, slot: StoredSlot) {
+        let mut header = header(backend).await;
+        header.slots.insert(0, slot);
+        write_header(backend, &header).await;
+    }
+
+    fn future_slot() -> StoredSlot {
+        StoredSlot {
+            kind: "some-future-token".to_string(),
+            params: vec![0xde, 0xad],
+            wrapped: vec![0x00; 64],
+        }
+    }
+
+    async fn record_blobs(backend: &Arc<MemoryDatabase>) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut records = Vec::new();
+        for key in backend.keys().unwrap() {
+            if key == HEADER_KEY {
+                continue;
+            }
+            let value = backend.get(&key).await.unwrap().unwrap();
+            records.push((key, value.to_vec()));
+        }
+        records.sort();
+        records
+    }
+
+    fn keys_of(backend: &Arc<MemoryDatabase>) -> HashSet<Vec<u8>> {
+        backend.keys().unwrap().into_iter().collect()
+    }
+
+    fn sole_new_key(before: &HashSet<Vec<u8>>, after: &HashSet<Vec<u8>>) -> Vec<u8> {
+        let mut added = after.difference(before);
+        let key = added.next().expect("a write should add one key").clone();
+        assert!(added.next().is_none(), "a write added more than one key");
+        key
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
     #[tokio::test]
-    async fn test_encrypted_db_encrypts() {
-        let password: &[u8] = b"password";
-        let key: &[u8] = b"key";
-        let value: &[u8] = b"value";
+    async fn backend_does_not_store_plaintext_or_logical_keys() {
+        let backend = memory();
+        let store: Arc<dyn Database> = Arc::new(create(&backend).await);
+        let vault_id = Uuid::new_v4();
 
-        let memory_db = Arc::new(MemoryDatabase::new());
-        let db = EncryptedDatabase::create(memory_db.clone(), password)
+        store.put(b"vaults", b"index").await.unwrap();
+        store
+            .clone()
+            .scoped(vault_id.as_bytes())
+            .put(b"pk", b"secret")
             .await
             .unwrap();
 
-        db.put(key, value).await.unwrap();
+        for key in backend.keys().unwrap() {
+            assert_ne!(key.as_slice(), b"pk");
+            assert_ne!(key.as_slice(), b"vaults");
+            assert!(!contains(&key, vault_id.as_bytes()));
+            let value = backend.get(&key).await.unwrap().unwrap();
+            assert_ne!(&*value, b"secret");
+            assert_ne!(&*value, b"index");
+        }
+    }
 
-        //? Asserts that the value can be retrieved from the encrypted db.
-        assert_eq!(*db.get(key).await.unwrap().unwrap(), value);
+    #[tokio::test]
+    async fn ciphertext_does_not_decrypt_in_another_scope() {
+        let backend = memory();
+        let store: Arc<dyn Database> = Arc::new(create(&backend).await);
+        let first = store.clone().scoped(Uuid::new_v4().as_bytes());
+        let second = store.scoped(Uuid::new_v4().as_bytes());
 
-        //? Asserts that the plaintext value does not exist in the underlying memory db.
-        let memory_keys = memory_db.keys().unwrap();
-        for memory_key in memory_keys {
-            assert_ne!(memory_key, key);
-            assert_ne!(*memory_db.get(&memory_key).await.unwrap().unwrap(), value);
+        let before = keys_of(&backend);
+        first.put(b"pk", b"first secret").await.unwrap();
+        let first_slot = sole_new_key(&before, &keys_of(&backend));
+
+        let after_first = keys_of(&backend);
+        second.put(b"pk", b"second secret").await.unwrap();
+        let second_slot = sole_new_key(&after_first, &keys_of(&backend));
+
+        let lifted = backend.get(&first_slot).await.unwrap().unwrap().to_vec();
+        backend.put(&second_slot, &lifted).await.unwrap();
+
+        assert!(second.get(b"pk").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn repeated_writes_produce_distinct_ciphertexts() {
+        let backend = memory();
+        let store = create(&backend).await;
+
+        let before = keys_of(&backend);
+        store.put(b"pk", b"secret").await.unwrap();
+        let slot = sole_new_key(&before, &keys_of(&backend));
+
+        let first = backend.get(&slot).await.unwrap().unwrap().to_vec();
+        store.put(b"pk", b"secret").await.unwrap();
+        let second = backend.get(&slot).await.unwrap().unwrap().to_vec();
+
+        assert_ne!(first, second);
+    }
+
+    #[tokio::test]
+    async fn tampered_record_fails_to_open() {
+        let backend = memory();
+        let store = create(&backend).await;
+
+        let before = keys_of(&backend);
+        store.put(b"pk", b"secret").await.unwrap();
+        let slot = sole_new_key(&before, &keys_of(&backend));
+
+        let mut blob = backend.get(&slot).await.unwrap().unwrap().to_vec();
+        let last = blob.len() - 1;
+        blob[last] ^= 0x01;
+        backend.put(&slot, &blob).await.unwrap();
+
+        assert!(store.get(b"pk").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn change_password_does_not_rewrite_records() {
+        let backend = memory();
+        let db = create(&backend).await;
+        db.put(b"pk", b"secret").await.unwrap();
+        let before = record_blobs(&backend).await;
+
+        db.change_password(NEXT_PASSWORD).await.unwrap();
+
+        assert_eq!(record_blobs(&backend).await, before);
+    }
+
+    #[tokio::test]
+    async fn change_password_unlocks_with_the_new_password() {
+        let backend = memory();
+        let db = create(&backend).await;
+        db.put(b"pk", b"secret").await.unwrap();
+        db.change_password(NEXT_PASSWORD).await.unwrap();
+        drop(db);
+
+        let reopened = EncryptedDatabase::unlock(backend, NEXT_PASSWORD)
+            .await
+            .unwrap();
+        assert_eq!(&*reopened.get(b"pk").await.unwrap().unwrap(), b"secret");
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_the_old_password() {
+        let backend = memory();
+        let db = create(&backend).await;
+        db.change_password(NEXT_PASSWORD).await.unwrap();
+        drop(db);
+
+        let err = EncryptedDatabase::unlock(backend, PASSWORD)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, EncryptedDatabaseError::InvalidPassword));
+    }
+
+    #[tokio::test]
+    async fn either_password_slot_unlocks_the_store() {
+        let backend = memory();
+        let db = create(&backend).await;
+        db.put(b"pk", b"secret").await.unwrap();
+
+        let extra = PasswordKeySource::new(NEXT_PASSWORD)
+            .unwrap()
+            .wrap(&db.data_key)
+            .await
+            .unwrap();
+        push_slot(&backend, extra).await;
+        drop(db);
+
+        for password in [PASSWORD, NEXT_PASSWORD] {
+            let opened = EncryptedDatabase::unlock(backend.clone(), password)
+                .await
+                .unwrap();
+            assert_eq!(&*opened.get(b"pk").await.unwrap().unwrap(), b"secret");
+        }
+    }
+
+    #[tokio::test]
+    async fn change_password_keeps_other_slot_kinds() {
+        let backend = memory();
+        let db = create(&backend).await;
+        push_slot(&backend, future_slot()).await;
+
+        db.change_password(NEXT_PASSWORD).await.unwrap();
+
+        assert_eq!(
+            db.slot_kinds().await.unwrap(),
+            vec!["some-future-token", PASSWORD_SLOT_KIND],
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_slot_kind_does_not_block_unlock() {
+        let backend = memory();
+        let db = create(&backend).await;
+        db.put(b"pk", b"secret").await.unwrap();
+        drop(db);
+
+        prepend_slot(&backend, future_slot()).await;
+
+        let opened = EncryptedDatabase::unlock(backend, PASSWORD).await.unwrap();
+        assert_eq!(&*opened.get(b"pk").await.unwrap().unwrap(), b"secret");
+    }
+
+    #[tokio::test]
+    async fn store_with_no_readable_slot_reports_no_matching_slot() {
+        let backend = memory();
+        let db = create(&backend).await;
+        drop(db);
+
+        let mut header = header(&backend).await;
+        header.slots[0].kind = "some-future-token".to_string();
+        write_header(&backend, &header).await;
+
+        let err = EncryptedDatabase::unlock(backend, PASSWORD)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            err,
+            EncryptedDatabaseError::NoMatchingSlot(PASSWORD_SLOT_KIND)
+        ));
+    }
+
+    #[tokio::test]
+    async fn unwrap_rejects_parameters_this_build_did_not_write() {
+        let source = PasswordKeySource::new(PASSWORD).unwrap();
+        let cases = [
+            (ARGON2_M_COST + 1, ARGON2_T_COST, ARGON2_P_COST, SALT_LEN),
+            (ARGON2_M_COST, ARGON2_T_COST + 1, ARGON2_P_COST, SALT_LEN),
+            (ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST + 1, SALT_LEN),
+            (ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, SALT_LEN - 1),
+        ];
+
+        for (m_cost, t_cost, p_cost, salt_len) in cases {
+            let slot = StoredSlot {
+                kind: PASSWORD_SLOT_KIND.to_string(),
+                params: postcard::to_stdvec(&Argon2idParams {
+                    m_cost,
+                    t_cost,
+                    p_cost,
+                    salt: vec![0; salt_len],
+                })
+                .unwrap(),
+                wrapped: vec![0; 64],
+            };
+
+            let started = Instant::now();
+            let err = source.unwrap(&slot).await.err().unwrap();
+            assert!(
+                matches!(err, EncryptedDatabaseError::UnsupportedParameters),
+                "{err:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_millis(500),
+                "parameters were hashed before they were rejected"
+            );
         }
     }
 }

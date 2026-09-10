@@ -8,13 +8,10 @@ pub trait ScopedDatabaseExt {
     fn scoped(self, prefix: &[u8]) -> ScopedDatabase;
 }
 
-/// Confines an inner [`Database`] to a keyspace, so each vault and executor in a profile
-/// reads and writes under its own scope.
+/// Confines an inner [`Database`] to a keyspace.
 ///
-/// Scoping alone is namespacing, not isolation. Layer this over an
-/// [`super::encrypted::EncryptedDatabase`] to get the cryptographic half: the scope becomes
-/// part of the logical key, which feeds per-record key derivation and the AEAD's associated
-/// data, so records cannot be moved between scopes.
+/// Scoping alone is namespacing. Layered over [`super::encrypted::EncryptedDatabase`], the
+/// prefix is part of the logical key, so records cannot be moved between scopes.
 pub struct ScopedDatabase {
     db: Arc<dyn Database>,
     prefix: Vec<u8>,
