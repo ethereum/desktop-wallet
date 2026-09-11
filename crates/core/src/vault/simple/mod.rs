@@ -182,11 +182,12 @@ impl Vault for SimpleVault {
 }
 
 impl SimpleVault {
+    #[must_use]
     pub fn address(&self) -> Address {
         self.delegate.address()
     }
 
-    pub async fn deposit(&self, asset: &AssetId, amount: U256) -> Result<Vec<Call>, VaultError> {
+    pub fn deposit(&self, asset: &AssetId, amount: U256) -> Result<Vec<Call>, VaultError> {
         let calls = match asset {
             AssetId::Native => self.deposit_native(amount),
             AssetId::Erc20(token) => self.deposit_erc20(*token, amount),

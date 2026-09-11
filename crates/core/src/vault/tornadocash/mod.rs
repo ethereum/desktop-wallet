@@ -11,7 +11,7 @@ use kohaku_tornadocash::{
         tornado_provider::TornadoProvider,
     },
 };
-use rand::SeedableRng;
+use rand::CryptoRng;
 
 use crate::{
     asset::AssetId,
@@ -51,6 +51,8 @@ pub enum TcVaultError {
     Tc(#[from] kohaku_tornadocash::provider::tornado_provider::TornadoProviderError),
     #[error("Transport error: {0}")]
     Transport(#[from] alloy_transport::TransportError),
+    #[error("Database error: {0}")]
+    Database(#[from] crate::database::DatabaseError),
 }
 
 impl TcVault {
@@ -105,36 +107,43 @@ impl Vault for TcVault {
 
 impl TcVault {
     /// Deposits into the given tornadocash pool.
-    pub async fn deposit(&self, pool: Pool) -> Result<Vec<Call>, TcVaultError> {
-        let (call, note) = self.provider.lock().await.deposit(pool, &mut rand::rng())?;
-        self.db.append_note(&note).await;
+    pub async fn deposit(
+        &self,
+        pool: Pool,
+        rng: &mut impl CryptoRng,
+    ) -> Result<Vec<Call>, TcVaultError> {
+        let (call, note) = self.provider.lock().await.deposit(pool, rng)?;
+        self.db.append_note(note).await?;
 
         Ok(vec![Call::new(call.target, call.data, call.value)])
     }
 
     /// Withdraws from the given tornadocash pool to the given address.
-    pub async fn withdraw(&self, to: Address, note: Pool) -> Result<Vec<Call>, TcVaultError> {
-        let notes = self.db.notes().await;
+    pub async fn withdraw(
+        &self,
+        to: Address,
+        note: Pool,
+        rng: &mut impl CryptoRng,
+    ) -> Result<Vec<Call>, TcVaultError> {
+        let notes = self.db.notes().await?;
         let note = notes
             .iter()
             .find(|n| Pool::from_note(n) == Some(note))
             .ok_or_else(|| TcVaultError::NoNotesForPool(note))?;
 
-        let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)
-            .expect("failed to seed RNG from OS");
         let call = self
             .provider
             .lock()
             .await
-            .withdraw(note, to, None, None, None, &mut rng)
+            .withdraw(note, to, None, None, None, rng)
             .await?;
 
         Ok(vec![Call::new(call.target, call.data, call.value)])
     }
 
     /// Returns all notes managed by this vault.
-    pub async fn notes(&self) -> Vec<Note> {
-        self.db.notes().await
+    pub async fn notes(&self) -> Result<Vec<Note>, TcVaultError> {
+        Ok(self.db.notes().await?)
     }
 
     async fn pools_for_asset(&self, asset: &AssetId) -> Result<Vec<Pool>, TcVaultError> {
@@ -144,9 +153,9 @@ impl TcVault {
         let pools: Vec<_> = self
             .db
             .notes()
-            .await
+            .await?
             .iter()
-            .filter_map(|n| Pool::from_note(n))
+            .filter_map(Pool::from_note)
             .filter(|n| n.chain_id == chain_id)
             .filter(|n| n.asset == asset)
             .collect();
@@ -163,6 +172,10 @@ impl From<TcVaultError> for VaultError {
 
 /// Returns the tornadocash asset corresponding to a given `asset` on a given
 /// `network_id`, or an error if no such asset exists.
+#[expect(
+    clippy::result_large_err,
+    reason = "internal-only fn allowed large error type"
+)]
 fn asset_to_tc_asset(network_id: u64, asset: &AssetId) -> Result<Asset, TcVaultError> {
     POOLS
         .iter()

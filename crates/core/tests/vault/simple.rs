@@ -98,7 +98,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     info!("Depositing into the vault...");
     let deposit_asset = AssetId::Native;
     let deposit_amount = U256::from(10000);
-    let deposit_calls = vault.deposit(&deposit_asset, deposit_amount).await?;
+    let deposit_calls = vault.deposit(&deposit_asset, deposit_amount)?;
 
     let deposit_call = executor.execute(&deposit_calls).await?;
     executor.await_call(deposit_call, MINING_TIMEOUT).await?;
