@@ -3,19 +3,12 @@
 **Status:** draft
 **Owner:** unassigned
 **Milestone:** open, see [Open questions](#open-questions)
-**Related:** [EDW-005 (#30)](https://github.com/ethereum/desktop-wallet/issues/30),
-[EDW-006 (#32)](https://github.com/ethereum/desktop-wallet/issues/32),
-[EDW-013 (#39)](https://github.com/ethereum/desktop-wallet/issues/39),
-[EDW-014 (#40)](https://github.com/ethereum/desktop-wallet/issues/40),
-[EDW-019 (#46)](https://github.com/ethereum/desktop-wallet/issues/46),
-[EDW-021 (#31)](https://github.com/ethereum/desktop-wallet/issues/31),
-[`01-architecture.md`](../01-architecture.md)
+**Related:** [`01-architecture.md`](../01-architecture.md)
 
 ## Problem
 
-Three issues say a flow must work "end to end on a testnet" (EDW-013, EDW-014, EDW-019), and
-nothing says which testnet, at which block, with which hardfork. There is no environment
-behind those words yet.
+Several flows are required to work "end to end on a testnet", and nothing says which testnet, at
+which block, with which hardfork. There is no environment behind those words yet.
 
 The concrete version of the gap is already in the repo. The anvil-backed tests pass in CI,
 where nix pins foundry, and fail on a contributor machine whose foundry defaults to a
@@ -48,10 +41,10 @@ the same environment, so they are merged.
 | **live**   | Sepolia, nightly                                                       | real providers and services, rate limits, reorgs, mock drift              | no           |
 
 Both are selected the same way a user selects a network, through the runtime endpoint and
-chain-ID configuration EDW-005 already requires, so the environments exercise the shipping
+chain-ID configuration the wallet already requires, so the environments exercise the shipping
 code path rather than a test-only one.
 
-**Why a fork rather than a bare chain.** The shielded pools EDW-013 targets are mainnet
+**Why a fork rather than a bare chain.** The shielded pools the wallet targets are mainnet
 deployments; their testnet equivalents have no meaningful anonymity set, and in some cases no
 deployment at all. Forking mainnet gets the real contracts, real token behavior including the
 non-standard ERC-20s, and real historical state for the chunked `eth_getLogs` sync.
@@ -84,10 +77,10 @@ pinned block and diverge after it.
 
 Three things are proposed, in order:
 
-1. **The mock surface is EDW-021's enumeration.** That issue already requires every outbound
-   host to be listed in one place, with what it sees about the user. That list is exactly the
-   set of things needing fakes here, so the two pieces of work are one piece. Nothing can be
-   mocked that has not been enumerated.
+1. **The mock surface is the outbound-host enumeration.** Every host the app can reach is
+   already required to be listed in one place, with what it sees about the user. That list is
+   exactly the set of things needing fakes here, so the two pieces of work are one piece.
+   Nothing can be mocked that has not been enumerated.
 2. **Ask whether the service survives before faking it.** Principle 2 holds that anything
    which could come from RPC should, and names indexers specifically. Building a faithful
    fake for a dependency that ought to be removed is wasted effort, and worse, it entrenches
@@ -100,17 +93,17 @@ Three things are proposed, in order:
 
 ### The invariant suite
 
-The centerpiece. A catalog of properties, each an executable test that fails loudly, which an
-agent tries to break and can extend. The existing `no_plaintext_key_material_on_disk` test
-from EDW-003 is the intended shape: it writes a profile through the real repository traits,
-then scans every byte the store produced for key material in several encodings.
+The centerpiece. A catalog of properties, each an executable test that fails loudly, which an agent
+tries to break and can extend. The existing `no_plaintext_key_material_on_disk` test is the intended
+shape: it writes a profile through the real repository traits, then scans every byte the store
+produced for key material in several encodings.
 
 Proposed starting set:
 
 - No plaintext secret material at rest, in any backend, after any flow.
 - No secret material in logs, stdout, or error text, including on failure paths.
-- No outbound connection to a host outside the declared allowlist. EDW-021 already requires
-  this test; here it also runs continuously and per flow.
+- No outbound connection to a host outside the declared allowlist. This test is already
+  required; here it also runs continuously and per flow.
 - No panic reachable from any send or signing path.
 - Value conservation across a round trip: shield then unshield, or deposit then withdraw,
   leaves no unaccounted balance.
@@ -121,8 +114,8 @@ Proposed starting set:
 ### The agent loop
 
 Proposed shape, deliberately narrow at the start: an agent gets the devnet tier, the CLI's
-`--non-interactive` JSON surface from EDW-006, and the invariant suite. It runs flows, tries
-to break an invariant, and when one breaks it opens a PR containing the failing test.
+`--non-interactive` JSON surface, and the invariant suite. It runs flows, tries to break an
+invariant, and when one breaks it opens a PR containing the failing test.
 
 The governing rule: **a finding is a failing test, or it is not a finding.** An agent PR that
 does not include a test that reproduces the issue is closed. This is what keeps the loop from
@@ -147,13 +140,11 @@ This adds no `wallet-core` API. It depends on two surfaces that other issues alr
 and proposes treating them as stable contracts because agents and harnesses will build
 against them:
 
-- **Network selection (EDW-005).** Endpoint and chain ID configurable at runtime, with the
-  profile bound to a chain ID so a mismatched RPC is rejected. Each tier is a configuration,
-  not a build.
-- **The machine surface (EDW-006).** `--non-interactive` JSON output on every command that
-  produces data, and dry-run by default with an explicit `--broadcast`. This is what an agent
-  drives. Proposed: treat its schema as a documented contract, so a harness does not break on
-  incidental output changes.
+- **Network selection.** Endpoint and chain ID configurable at runtime, with the profile bound to a
+  chain ID so a mismatched RPC is rejected. Each tier is a configuration, not a build.
+- **The machine surface.** `--non-interactive` JSON output on every command that produces data, and
+  dry-run by default with an explicit `--broadcast`. This is what an agent drives. Proposed: treat
+  its schema as a documented contract, so a harness does not break on incidental output changes.
 
 What must never cross into an agent environment: mainnet RPC credentials, any key holding
 value, and any credential that is not scoped to the tier it runs in.
@@ -167,8 +158,8 @@ value, and any credential that is not scoped to the tier it runs in.
       endpoint. The fork block is recorded in the repo rather than passed by hand.
 - [ ] The anvil-backed tests run against that fixture and no longer depend on the ambient
       foundry default. The pre-Prague failure does not recur.
-- [ ] Every third-party service the app can reach is either eliminated per principle 2 or has
-      a recorded fixture, and the set matches EDW-021's enumeration rather than being tracked
+- [ ] Every third-party service the app can reach is either eliminated per principle 2 or has a
+      recorded fixture, and the set matches the outbound-host enumeration rather than being tracked
       separately.
 - [ ] The invariant suite exists as a named, runnable target, with at least the starting set
       above, and runs in CI on every PR.
@@ -177,7 +168,7 @@ value, and any credential that is not scoped to the tier it runs in.
 - [ ] An agent environment has no credential or key that reaches beyond its tier, enforced
       rather than documented.
 - [ ] Egress from any tier is confined to a declared allowlist, and a connection outside it
-      fails the run. This is the EDW-021 test wired to the environment.
+      fails the run. This is the egress-allowlist test wired to the environment.
 - [ ] The contribution rules state that an agent-authored PR must include a reproducing test,
       and that agent PRs are subject to the existing security-review gate.
 
@@ -219,19 +210,19 @@ Nothing here is user-visible, so no GUI verification applies.
 
 ## Open questions
 
-1. **Milestone.** The devnet tier arguably belongs in v0.1.0, since EDW-013, EDW-014 and
-   EDW-019 all depend on "end to end on a testnet" and the pre-Prague failure is present
-   today. The live tier and the recorded service fixtures read as v0.2.0. Proposal: split on
-   that line rather than scheduling the whole thing at once.
+1. **Milestone.** The devnet tier arguably belongs in v0.1.0, since several v0.1.0 flows depend on
+   "end to end on a testnet" and the pre-Prague failure is present today. The live tier and the
+   recorded service fixtures read as v0.2.0. Proposal: split on that line rather than scheduling the
+   whole thing at once.
 2. **Who runs the agents, and where.** Local, CI-hosted, or a dedicated machine. This decides
    how much of the containment above is enforced by infrastructure versus convention.
 3. **Whether the materialized fork is practical.** Producing the dump needs archive access
    once, which is a smaller ask than needing it per run, but the dump has to stay a workable
    size and replay faithfully. Proposed as a timeboxed spike before the shape is committed to,
    with a live fork as the fallback if it does not hold up.
-4. **Which third-party services survive EDW-021.** This decides what needs a recorded fixture
-   and what needs deleting instead, and it gates the work in
-   [Third-party services](#third-party-services).
+4. **Which third-party services survive the enumeration.** This decides what needs a recorded
+   fixture and what needs deleting instead, and it gates the work in [Third-party
+   services](#third-party-services).
 5. **Where vulnerability findings go** before they are fixed, given this is a public
    repository.
 6. **Whether the invariant suite becomes a public conformance artifact.** As a reference
