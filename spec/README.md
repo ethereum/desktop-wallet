@@ -26,12 +26,12 @@ here.
 The spec is deliberately layered from stable-and-small at the top to detailed-and-growing
 at the bottom. Higher layers change rarely; lower layers churn.
 
-| Layer                        | Doc                                    | Changes      | Owned by                               |
-| ---------------------------- | -------------------------------------- | ------------ | -------------------------------------- |
-| **Vision / principles**      | `00-vision.md`                         | Rarely       | Whole team, decided together           |
-| **Architecture / contracts** | `01-architecture.md`                   | Occasionally | Whoever owns the core; reviewed by all |
-| **Feature specs**            | one file per feature under `features/` | Per feature  | The dev/pair who owns the feature      |
-| **Issues / tasks**           | GitHub Issues                          | Constantly   | Individual devs                        |
+| Layer                        | Doc                  | Changes      | Owned by                               |
+| ---------------------------- | -------------------- | ------------ | -------------------------------------- |
+| **Vision / principles**      | `00-vision.md`       | Rarely       | Whole team, decided together           |
+| **Architecture / contracts** | `01-architecture.md` | Occasionally | Whoever owns the core; reviewed by all |
+| **Feature specs**            | in the GitHub issue  | Per feature  | The dev/pair who owns the feature      |
+| **Issues / tasks**           | GitHub Issues        | Constantly   | Individual devs                        |
 
 **The rule that makes parallel work possible: interfaces before implementations.** Before
 work fans out on any feature, the `wallet-core` API surface it needs (the function/trait
@@ -44,16 +44,10 @@ to become a parallel one if the feature requires it.
 ## Writing a feature spec
 
 When an issue is bigger than "obvious from the title," write a short feature spec before
-coding. Put it in `spec/features/<short-name>.md`. Keep it to one page. Template:
+coding, and write it in the GitHub issue itself so the spec and the work stay in one place.
+Keep it to one page. Template:
 
 ```markdown
-# Feature: <name>
-
-**Status:** draft | agreed | in-progress | shipped
-**Owner:** <name>
-**Milestone:** v<x.y.z>
-**Related:** links to issues, related specs in this directory, prior art
-
 ## Problem
 
 What user-facing or security problem does this solve? Who has it? (Anchor to a
@@ -87,6 +81,9 @@ should look at. Any privacy-signaling implication.
 
 Unit tests in wallet-core; what must be verified live in the GUI.
 ```
+
+Owner, milestone and status are GitHub's assignee, milestone and issue state, so the spec
+does not repeat them. Link related issues and prior art the way you would on any issue.
 
 The **acceptance criteria** section is the most important part: it's what lets a feature
 be marked "done" without the author adjudicating, and it's what a reviewer checks against.
@@ -124,15 +121,3 @@ Every issue is assigned to a release milestone. A good issue:
 5. If behavior is user-visible, it's been driven live in the running app (not just
    unit-tested).
 6. Docs updated if the change affects the public API or user flows.
-
----
-
-## The most common first-timer mistakes this structure prevents
-
-- **Splitting by layer instead of by outcome.** "You do all UI, you do all crypto" creates
-  constant blocking. Issues here are vertical slices through core→UI that each deliver one
-  observable behavior.
-- **Thin tickets that require the author to explain them.** Acceptance criteria fix this.
-- **Building the fun stuff before the load-bearing stuff.** Issues are ordered by dependency
-  and risk: the scary, hard-to-change foundations (secret storage, the derivation tree with
-  its interop obligation, the core API shape) come first.

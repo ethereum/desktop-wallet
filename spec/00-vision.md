@@ -156,8 +156,7 @@ Violating one is a blocking review comment.
 ## In scope for v1
 
 The capabilities in scope, phased across releases. This lists _what_ is in v1; _how_ each
-is built (protocols, dependencies, mechanisms) lives in the architecture and the feature
-specs, not here.
+is built (protocols, dependencies, mechanisms) lives in the architecture, not here.
 
 - **Foundation:** a formalized core API, convenient re-unlock without re-entering the
   password every session, transaction history, contract-call sends, accurate fee estimation
