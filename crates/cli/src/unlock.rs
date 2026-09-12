@@ -6,7 +6,13 @@ use std::{
 };
 
 use anyhow::Context;
-use edw_core::database::{Database, encrypted::EncryptedDatabase, file::FileDatabase};
+use clap::Args;
+use edw_core::{
+    database::{
+        Database, encrypted::EncryptedDatabase, file::FileDatabase, scoped::ScopedDatabaseExt,
+    },
+    network::{SupportedNetwork, db::NetworkDb},
+};
 use zeroize::Zeroizing;
 
 use crate::{GlobalArgs, session};
@@ -18,8 +24,15 @@ use crate::{GlobalArgs, session};
 /// automation and the terminal session is what interactive use should rely on.
 const PASSWORD_ENV: &str = "EDW_DECRYPTION_PASSWORD";
 
-pub(crate) fn network_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("network")
+#[derive(Args, Debug)]
+pub(crate) struct UnlockArgs {
+    /// Network to unlock. Unlocks this network and locks every other.
+    #[arg(long, default_value = "mainnet")]
+    pub(crate) network: SupportedNetwork,
+}
+
+pub(crate) fn network_dir(data_dir: &Path, network: SupportedNetwork) -> PathBuf {
+    data_dir.join(network.slug())
 }
 
 /// Whether an encrypted store already exists, checked before anything can create one.
@@ -27,56 +40,110 @@ pub(crate) fn is_initialized(dir: &Path) -> bool {
     fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
 
-pub(crate) async fn network_store(data_dir: &Path) -> Result<Arc<dyn Database>, anyhow::Error> {
-    let dir = network_dir(data_dir);
+pub(crate) fn locked_error() -> anyhow::Error {
+    anyhow::anyhow!("wallet is locked; run `edw unlock --network <mainnet|sepolia|local>`")
+}
+
+pub(crate) async fn open_existing_store(
+    data_dir: &Path,
+    network: SupportedNetwork,
+    password: &[u8],
+) -> Result<Arc<dyn Database>, anyhow::Error> {
+    let dir = network_dir(data_dir, network);
+    if !is_initialized(&dir) {
+        anyhow::bail!(
+            "no wallet instance for {network} at {}; run `edw unlock --network {network}`",
+            dir.display()
+        );
+    }
+    let backend: Arc<dyn Database> = Arc::new(
+        FileDatabase::open(&dir)
+            .with_context(|| format!("error opening the store at {}", dir.display()))?,
+    );
+    Ok(Arc::new(
+        EncryptedDatabase::unlock(backend, password)
+            .await
+            .context("error unlocking the store")?,
+    ))
+}
+
+async fn network_store(
+    data_dir: &Path,
+    network: SupportedNetwork,
+) -> Result<session::Session, anyhow::Error> {
+    let data_dir = session::canonical_data_dir(data_dir);
+    let dir = network_dir(&data_dir, network);
     let initialized = is_initialized(&dir);
-    let (password, prompted) = password(initialized, &dir)?;
+    let password = password(initialized, &dir, network, &data_dir)?;
 
     let backend: Arc<dyn Database> = Arc::new(
         FileDatabase::open(&dir)
             .with_context(|| format!("error opening the store at {}", dir.display()))?,
     );
 
-    let store = if initialized {
-        EncryptedDatabase::unlock(backend, password.as_bytes())
-            .await
-            .context("error unlocking the store")?
+    let store: Arc<dyn Database> = if initialized {
+        Arc::new(
+            EncryptedDatabase::unlock(backend, password.as_bytes())
+                .await
+                .context("error unlocking the store")?,
+        )
     } else {
-        EncryptedDatabase::create(backend, password.as_bytes())
-            .await
-            .context("error creating the store")?
+        Arc::new(
+            EncryptedDatabase::create(backend, password.as_bytes())
+                .await
+                .context("error creating the store")?,
+        )
     };
 
-    if prompted {
-        let _ = session::store(&password);
+    let prefs = store.scoped(b"preferences");
+    if prefs.get_network().await?.is_none() {
+        prefs
+            .put_network(&network.preferences())
+            .await
+            .context("error seeding network preferences")?;
     }
 
-    Ok(Arc::new(store))
+    Ok(session::Session {
+        data_dir,
+        network,
+        password,
+    })
 }
 
-/// The decryption password, and whether it came from a prompt rather than an existing source.
-fn password(initialized: bool, dir: &Path) -> Result<(Zeroizing<String>, bool), anyhow::Error> {
+/// The decryption password.
+fn password(
+    initialized: bool,
+    dir: &Path,
+    network: SupportedNetwork,
+    data_dir: &Path,
+) -> Result<Zeroizing<String>, anyhow::Error> {
     if let Some(value) = std::env::var_os(PASSWORD_ENV) {
         let value = value
             .into_string()
             .map_err(|_| anyhow::anyhow!("{PASSWORD_ENV} is not valid UTF-8"))?;
-        return Ok((Zeroizing::new(value), false));
+        return Ok(Zeroizing::new(value));
     }
 
-    if let Some(password) = session::load() {
-        return Ok((password, false));
+    if let Some(session) = session::load()
+        && session.network == network
+        && session.data_dir == data_dir
+    {
+        return Ok(session.password);
     }
 
     if initialized {
-        Ok((prompt("Decryption password: ")?, true))
+        Ok(prompt("Decryption password: ")?)
     } else {
-        Ok((setup(dir)?, true))
+        Ok(setup(dir, network)?)
     }
 }
 
 /// Walks a first run through choosing a decryption password.
-fn setup(dir: &Path) -> Result<Zeroizing<String>, anyhow::Error> {
-    println!("No encrypted store exists at {}.", dir.display());
+fn setup(dir: &Path, network: SupportedNetwork) -> Result<Zeroizing<String>, anyhow::Error> {
+    println!(
+        "No wallet instance exists for {network} at {}.",
+        dir.display()
+    );
     println!("A decryption password must be set up before anything can be stored.");
     println!("There is no recovery path if it is lost: the data is encrypted under it alone.");
 
@@ -119,26 +186,42 @@ fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
     ))
 }
 
-pub(crate) async fn run_unlock(global: &GlobalArgs) -> Result<(), anyhow::Error> {
-    let dir = network_dir(&global.data_dir);
+pub(crate) async fn run_unlock(
+    global: &GlobalArgs,
+    args: &UnlockArgs,
+) -> Result<(), anyhow::Error> {
+    let data_dir = session::canonical_data_dir(&global.data_dir);
+    let network = args.network;
+    let dir = network_dir(&data_dir, network);
     let existed = is_initialized(&dir);
-    let was_unlocked = session::load().is_some();
+    let previous = session::load();
+    let was_same = previous
+        .as_ref()
+        .is_some_and(|s| s.network == network && s.data_dir == data_dir);
+    let previous_network = previous.as_ref().map(|s| s.network);
 
-    drop(network_store(&global.data_dir).await?);
+    let sess = network_store(&data_dir, network).await?;
 
     if !existed {
         println!("Encrypted store created at {}.", dir.display());
     }
 
-    if was_unlocked {
-        println!("Already unlocked for this terminal.");
-    } else if session::available() {
-        println!("Unlocked for this terminal. Run `edw lock` to end the session.");
-    } else {
-        println!(
-            "Password accepted, but this terminal cannot hold a session, so the next command \
-             will ask again. A session needs a controlling terminal and XDG_RUNTIME_DIR."
-        );
+    match session::store(&sess) {
+        Ok(()) => {
+            if was_same {
+                println!("Already unlocked for {network}.");
+            } else if let Some(previous) = previous_network.filter(|n| *n != network) {
+                println!(
+                    "Unlocked {network}; {previous} is now locked. Run `edw lock` to lock the wallet."
+                );
+            } else {
+                println!("Unlocked {network}. Run `edw lock` to lock the wallet.");
+            }
+        }
+        Err(error) => {
+            println!("Password accepted, but a session could not be saved: {error:#}");
+            println!("The next command will require `edw unlock` again.");
+        }
     }
 
     Ok(())

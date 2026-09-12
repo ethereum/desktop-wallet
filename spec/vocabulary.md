@@ -63,7 +63,7 @@ This should be properly formatted to the users **locale**
 ## Network
 
 A network, sometimes referred to as "chain" aims to track a specific network id.
-Networks are configured wallet-wide.
+Each supported network is a separate wallet instance: its own directory, decryption password, and profiles. Unlocking selects one instance; there is no wallet-wide network list.
 
 ### Endpoint
 

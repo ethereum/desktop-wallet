@@ -1,30 +1,17 @@
-use super::{Network, NetworkId};
+use super::Network;
 use crate::database::{Database, DatabaseError};
 
 #[async_trait::async_trait]
 pub trait NetworkDb: Database {
-    async fn get_networks(&self) -> Result<Vec<Network>, NetworkDatabaseError> {
-        let Some(bytes) = self.get(b"networks").await? else {
-            return Ok(vec![]);
-        };
-        Ok(postcard::from_bytes(&bytes)?)
-    }
-
-    async fn put_networks(&self, networks: &[Network]) -> Result<(), NetworkDatabaseError> {
-        self.put(b"networks", &postcard::to_stdvec(networks)?)
-            .await?;
-        Ok(())
-    }
-
-    async fn get_active(&self) -> Result<Option<NetworkId>, NetworkDatabaseError> {
-        let Some(bytes) = self.get(b"active").await? else {
+    async fn get_network(&self) -> Result<Option<Network>, NetworkDatabaseError> {
+        let Some(bytes) = self.get(b"network").await? else {
             return Ok(None);
         };
         Ok(Some(postcard::from_bytes(&bytes)?))
     }
 
-    async fn put_active(&self, id: NetworkId) -> Result<(), NetworkDatabaseError> {
-        self.put(b"active", &postcard::to_stdvec(&id)?).await?;
+    async fn put_network(&self, network: &Network) -> Result<(), NetworkDatabaseError> {
+        self.put(b"network", &postcard::to_stdvec(network)?).await?;
         Ok(())
     }
 }

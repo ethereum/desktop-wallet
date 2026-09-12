@@ -31,6 +31,18 @@ pub trait SimpleProfileDb: Database {
         self.put(b"vaults", &bytes).await?;
         Ok(())
     }
+
+    async fn list_profiles(&self) -> Result<Vec<String>, SimpleProfileDatabaseError> {
+        let Some(bytes) = self.get(b"index").await? else {
+            return Ok(vec![]);
+        };
+        Ok(postcard::from_bytes(&bytes)?)
+    }
+
+    async fn put_profiles(&self, names: &[String]) -> Result<(), SimpleProfileDatabaseError> {
+        self.put(b"index", &postcard::to_stdvec(names)?).await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1,3 +1,5 @@
+use std::{fmt, str::FromStr};
+
 use crate::network::{Network, NetworkId};
 
 pub const NETWORK_PRESETS: &[NetworkPreset] = &[
@@ -24,6 +26,57 @@ pub struct NetworkPreset {
     pub native_asset: &'static str,
 }
 
+/// Networks this binary can open. Each is a separate store and password.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum SupportedNetwork {
+    #[default]
+    Mainnet,
+    Sepolia,
+    Local,
+}
+
+impl SupportedNetwork {
+    #[must_use]
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Mainnet => "mainnet",
+            Self::Sepolia => "sepolia",
+            Self::Local => "local",
+        }
+    }
+
+    #[must_use]
+    pub fn preferences(self) -> Network {
+        Network::from_preset(self.slug()).unwrap_or_else(|_| Network {
+            network_id: NetworkId(1),
+            name: "Mainnet".to_string(),
+            native_asset: "eth".to_string(),
+            endpoints: vec![],
+        })
+    }
+}
+
+impl fmt::Display for SupportedNetwork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.slug())
+    }
+}
+
+impl FromStr for SupportedNetwork {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "mainnet" => Ok(Self::Mainnet),
+            "sepolia" => Ok(Self::Sepolia),
+            "local" => Ok(Self::Local),
+            _ => Err(anyhow::anyhow!(
+                "unsupported network {s:?}; expected mainnet, sepolia, or local"
+            )),
+        }
+    }
+}
+
 impl Network {
     #[must_use]
     pub fn presets() -> &'static [NetworkPreset] {
@@ -44,5 +97,26 @@ impl Network {
             native_asset: preset.native_asset.to_string(),
             endpoints: vec![],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slugs_round_trip() {
+        assert_eq!(
+            "mainnet".parse::<SupportedNetwork>().ok(),
+            Some(SupportedNetwork::Mainnet)
+        );
+        assert_eq!(
+            "sepolia".parse::<SupportedNetwork>().ok(),
+            Some(SupportedNetwork::Sepolia)
+        );
+        assert_eq!(
+            "local".parse::<SupportedNetwork>().ok(),
+            Some(SupportedNetwork::Local)
+        );
     }
 }
