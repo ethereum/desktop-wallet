@@ -12,7 +12,7 @@ If you are new here, read in this order:
    model, and the principles every decision is judged against. Read once; re-read when a
    decision "feels" ambiguous; the answer is usually a principle here.
 2. **[`01-architecture.md`](./01-architecture.md):** the system decomposition and, most
-   importantly, the **contracts between components** (the `wallet-core` public API). This
+   importantly, the **contracts between components** (the `edw-core` public API). This
    is what lets UI and core work proceed in parallel against a shared interface.
 
 The work itself lives in GitHub Issues, grouped into release milestones. **A milestone is a
@@ -34,7 +34,7 @@ at the bottom. Higher layers change rarely; lower layers churn.
 | **Issues / tasks**           | GitHub Issues        | Constantly   | Individual devs                        |
 
 **The rule that makes parallel work possible: interfaces before implementations.** Before
-work fans out on any feature, the `wallet-core` API surface it needs (the function/trait
+work fans out on any feature, the `edw-core` API surface it needs (the function/trait
 signatures in `01-architecture.md`) is agreed and merged as a stub. Then a UI dev can build
 against the stub while another dev fills it in. Nailing the seam allows a serial project
 to become a parallel one if the feature requires it.
@@ -63,7 +63,7 @@ What this explicitly does NOT do, so reviewers don't expect it.
 
 ## Core / UI contract
 
-The wallet-core API this needs (signatures). New types. What crosses the trust
+The edw-core API this needs (signatures). New types. What crosses the trust
 boundary and what must never cross it.
 
 ## Acceptance criteria
@@ -79,7 +79,7 @@ should look at. Any privacy-signaling implication.
 
 ## Test plan
 
-Unit tests in wallet-core; what must be verified live in the GUI.
+Unit tests in edw-core; what must be verified live in the GUI.
 ```
 
 Owner, milestone and status are GitHub's assignee, milestone and issue state, so the spec
@@ -102,7 +102,7 @@ Every issue is assigned to a release milestone. A good issue:
 
 ### Labels
 
-- **Area:** `core` (wallet-core, security-critical), `ui` (the view layer),
+- **Area:** `core` (edw-core, security-critical), `ui` (the view layer),
   `infra` (CI, build, packaging, release), `docs`, `research` (design not yet settled).
 - **Type:** `feature`, `bug`, `security`, `interface` (defines/changes a core API; review
   bar is highest), `spike` (timeboxed investigation, output is a decision not shipping code).
@@ -114,7 +114,7 @@ Every issue is assigned to a release milestone. A good issue:
 
 1. Acceptance criteria all met.
 2. `cargo build` clean on the whole workspace; `cargo clippy` clean.
-3. Tests added/updated; `wallet-core` logic covered by unit tests.
+3. Tests added/updated; `edw-core` logic covered by unit tests.
 4. For anything touching keys, signing, storage, or the trust boundary: a second person
    reviews specifically for secret handling (see the security-review note in
    `01-architecture.md`).
