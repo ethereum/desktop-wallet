@@ -1,5 +1,5 @@
 {
-  description = "edw devshell";
+  description = "edw flake";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -22,7 +22,7 @@
         overlays = [rust-overlay.overlays.default];
       };
 
-      rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+      rust = pkgs.rust-bin.stable.latest.default.override {
         extensions = [
           "rust-src"
           "llvm-tools"
@@ -30,41 +30,16 @@
         targets = ["wasm32-unknown-unknown"];
       };
 
-      rustfmtNightly = pkgs.rust-bin.nightly.latest.rustfmt;
+      rustfmt = pkgs.rust-bin.nightly.latest.rustfmt;
     in {
+      packages.default = import ./nix/package.nix {inherit pkgs rust;};
+
       devShells = {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            rustfmtNightly
-            rustToolchain
-            rust-analyzer
-            bacon
-            cargo-audit
-            cargo-autoinherit
-            cargo-sort
-
-            foundry
-
-            just
-            nodejs_24
-            pnpm_11
-          ];
-
-          shellHook = ''
-            just
-            alias edw='./crates/bin/target/release/edw'
-          '';
-        };
-
-        ci = pkgs.mkShell {
-          packages = with pkgs; [
-            rustfmtNightly
-            rustToolchain
-            cargo-audit
-
-            foundry
-          ];
-        };
+        default = import ./nix/devshell.nix {inherit pkgs rust rustfmt;} self;
+        ci = import ./nix/ci.nix {inherit pkgs rust rustfmt;} self;
       };
-    });
+    })
+    // {
+      nixosModules.default = import ./nix/module.nix self;
+    };
 }
