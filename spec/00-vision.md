@@ -35,7 +35,7 @@ We intend to raise the bar in two concrete ways:
 The product target for **v1 is the full privacy thesis** below, not a standard EOA wallet.
 The work is **milestone-phased**, where a milestone is a release: each one ships something
 usable and de-risks the next. The first is **v0.1.0**, a walking skeleton that cuts a thin
-slice through the whole thesis (see [`02-backlog.md`](./02-backlog.md)).
+slice through the whole thesis.
 
 ## Who it's for
 
@@ -156,8 +156,7 @@ Violating one is a blocking review comment.
 ## In scope for v1
 
 The capabilities in scope, phased across releases. This lists _what_ is in v1; _how_ each
-is built (protocols, dependencies, mechanisms) lives in the architecture and backlog, not
-here.
+is built (protocols, dependencies, mechanisms) lives in the architecture, not here.
 
 - **Foundation:** a formalized core API, convenient re-unlock without re-entering the
   password every session, transaction history, contract-call sends, accurate fee estimation

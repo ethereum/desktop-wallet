@@ -14,9 +14,10 @@ If you are new here, read in this order:
 2. **[`01-architecture.md`](./01-architecture.md):** the system decomposition and, most
    importantly, the **contracts between components** (the `wallet-core` public API). This
    is what lets UI and core work proceed in parallel against a shared interface.
-3. **[`02-backlog.md`](./02-backlog.md):** the work, broken into milestones and
-   dependency-ordered issues with acceptance criteria. **A milestone is a release** (v0.1.0,
-   v0.2.0), so it means the same thing here that it means on the project board.
+
+The work itself lives in GitHub Issues, grouped into release milestones. **A milestone is a
+release** (v0.1.0, v0.2.0), so it means the same thing on the project board that it means
+here.
 
 ---
 
@@ -25,12 +26,12 @@ If you are new here, read in this order:
 The spec is deliberately layered from stable-and-small at the top to detailed-and-growing
 at the bottom. Higher layers change rarely; lower layers churn.
 
-| Layer                        | Doc                                                    | Changes      | Owned by                               |
-| ---------------------------- | ------------------------------------------------------ | ------------ | -------------------------------------- |
-| **Vision / principles**      | `00-vision.md`                                         | Rarely       | Whole team, decided together           |
-| **Architecture / contracts** | `01-architecture.md`                                   | Occasionally | Whoever owns the core; reviewed by all |
-| **Feature specs**            | one file per feature under `features/`                 | Per feature  | The dev/pair who owns the feature      |
-| **Issues / tasks**           | GitHub Issues (`EDW-###`), seeded from `02-backlog.md` | Constantly   | Individual devs                        |
+| Layer                        | Doc                  | Changes      | Owned by                               |
+| ---------------------------- | -------------------- | ------------ | -------------------------------------- |
+| **Vision / principles**      | `00-vision.md`       | Rarely       | Whole team, decided together           |
+| **Architecture / contracts** | `01-architecture.md` | Occasionally | Whoever owns the core; reviewed by all |
+| **Feature specs**            | in the GitHub issue  | Per feature  | The dev/pair who owns the feature      |
+| **Issues / tasks**           | GitHub Issues        | Constantly   | Individual devs                        |
 
 **The rule that makes parallel work possible: interfaces before implementations.** Before
 work fans out on any feature, the `wallet-core` API surface it needs (the function/trait
@@ -43,16 +44,10 @@ to become a parallel one if the feature requires it.
 ## Writing a feature spec
 
 When an issue is bigger than "obvious from the title," write a short feature spec before
-coding. Put it in `spec/features/<short-name>.md`. Keep it to one page. Template:
+coding, and write it in the GitHub issue itself so the spec and the work stay in one place.
+Keep it to one page. Template:
 
 ```markdown
-# Feature: <name>
-
-**Status:** draft | agreed | in-progress | shipped
-**Owner:** <name>
-**Milestone:** v<x.y.z>
-**Related:** links to issues, related specs in this directory, prior art
-
 ## Problem
 
 What user-facing or security problem does this solve? Who has it? (Anchor to a
@@ -87,6 +82,9 @@ should look at. Any privacy-signaling implication.
 Unit tests in wallet-core; what must be verified live in the GUI.
 ```
 
+Owner, milestone and status are GitHub's assignee, milestone and issue state, so the spec
+does not repeat them. Link related issues and prior art the way you would on any issue.
+
 The **acceptance criteria** section is the most important part: it's what lets a feature
 be marked "done" without the author adjudicating, and it's what a reviewer checks against.
 
@@ -94,8 +92,7 @@ be marked "done" without the author adjudicating, and it's what a reviewer check
 
 ## Issue conventions
 
-Issues are seeded from `02-backlog.md` and assigned to a release milestone. Use the
-**`EDW-###`** ID convention (Ethereum Desktop Wallet). A good issue:
+Every issue is assigned to a release milestone. A good issue:
 
 - **Title** is a user-observable outcome or a concrete deliverable, not a fragment.
   Good: "Send to an ENS name." Bad: "ENS resolver util."
@@ -109,8 +106,8 @@ Issues are seeded from `02-backlog.md` and assigned to a release milestone. Use 
   `infra` (CI, build, packaging, release), `docs`, `research` (design not yet settled).
 - **Type:** `feature`, `bug`, `security`, `interface` (defines/changes a core API; review
   bar is highest), `spike` (timeboxed investigation, output is a decision not shipping code).
-- **Dependency:** use GitHub's "blocked by" / task-list links. Once the backlog lands it
-  will be dependency-ordered; preserve that when you file.
+- **Dependency:** use GitHub's "blocked by" / task-list links. Keep the issue list
+  dependency-ordered when you file.
 - **Onboarding:** `good-first-issue` for well-scoped, low-blast-radius work.
 
 ### Definition of done (applies to every `core`/`ui` issue)
@@ -124,15 +121,3 @@ Issues are seeded from `02-backlog.md` and assigned to a release milestone. Use 
 5. If behavior is user-visible, it's been driven live in the running app (not just
    unit-tested).
 6. Docs updated if the change affects the public API or user flows.
-
----
-
-## The most common first-timer mistakes this structure prevents
-
-- **Splitting by layer instead of by outcome.** "You do all UI, you do all crypto" creates
-  constant blocking. Issues here are vertical slices through core→UI that each deliver one
-  observable behavior.
-- **Thin tickets that require the author to explain them.** Acceptance criteria fix this.
-- **Building the fun stuff before the load-bearing stuff.** The backlog will be ordered by
-  dependency and risk: the scary, hard-to-change foundations (secret storage, the
-  derivation tree with its interop obligation, the core API shape) come first.

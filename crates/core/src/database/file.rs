@@ -119,7 +119,7 @@ fn create_private_file(path: &Path) -> Result<std::fs::File, std::io::Error> {
 }
 
 //? Windows ACLs are not a mode bitmask, so there is no equivalent one-line tightening. A
-//? Windows target needs its own handling before it stores anything sensitive; see EDW-020.
+//? Windows target needs its own handling before it stores anything sensitive.
 #[cfg(not(unix))]
 fn create_private_dir(dir: &Path) -> Result<(), std::io::Error> {
     std::fs::create_dir_all(dir)

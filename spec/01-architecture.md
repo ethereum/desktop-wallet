@@ -316,7 +316,7 @@ encrypt.
 
 #### Encryption at rest
 
-**Decision (EDW-003): the encrypting layer sits at the `Database` seam, as a decorator.**
+**Decision: the encrypting layer sits at the `Database` seam, as a decorator.**
 `EncryptedDatabase` wraps an arbitrary backend and encrypts every record written through it.
 An earlier revision of this document proposed that the repository layer encrypt instead;
 that was rejected, along with moving secrets out to a separate keystore object.
@@ -370,7 +370,7 @@ Known costs, recorded so they are not rediscovered as surprises:
   discloses how many records exist, and ciphertext length is `1 + 24 + plaintext + 16`, so a
   32-byte signing key is distinguishable from a 20-byte address. Whether that matters is a
   threat-model question: hiding it needs fixed-size padding, and hiding the count needs either
-  decoy records or a single-blob layout. Recorded rather than assumed away (EDW-023).
+  decoy records or a single-blob layout. Recorded here rather than assumed away.
 - **Records are individually authenticated; the collection is not.** An attacker with write
   access to the store can delete a record or roll one back to an earlier ciphertext without
   detection. A MAC'd manifest over the record set would close this, and is tracked separately.
@@ -421,8 +421,7 @@ Proposed standards to adopt or adjust as the code lands:
   Integration tests (`crates/*/tests`) cover public behavior only: one property per test,
   helpers grouped at the top of the file. Derivation should have committed known-answer
   vectors; user-visible flows should be driven live in the running app before "done."
-- **CI (`EDW-001`, v0.1.0):** build + clippy + test on macOS/Linux/Windows; deny warnings in
-  `wallet-core`; dependency audit (`cargo audit`/`cargo deny`) given the supply-chain
-  principle.
+- **CI (v0.1.0):** build + clippy + test on macOS/Linux/Windows; deny warnings in `wallet-core`;
+  dependency audit (`cargo audit`/`cargo deny`) given the supply-chain principle.
 - **Security review gate:** any PR touching keys, signing, storage, derivation, mixing, or
   the trust boundary requires a second reviewer signing off specifically on secret handling.
