@@ -64,6 +64,7 @@ This should be properly formatted to the users **locale**
 
 A network, sometimes referred to as "chain" aims to track a specific network id.
 Each supported network is a separate wallet instance: its own directory, decryption password, and profiles. Unlocking selects one instance; there is no wallet-wide network list.
+A **networkConfig** is a named row in that instance (RPC endpoints and other settings). Every networkConfig is forced to the instance chain ID; you can keep several with different names and RPCs.
 
 ### Endpoint
 

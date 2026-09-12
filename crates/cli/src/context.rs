@@ -5,7 +5,7 @@ use edw_core::{
         Database,
         scoped::{ScopedDatabase, ScopedDatabaseExt},
     },
-    network::{Network, SupportedNetwork, db::NetworkDb},
+    network::{NetworkConfig, NetworkId, SupportedNetwork, db::NetworkDb},
 };
 
 use crate::{GlobalArgs, session, unlock};
@@ -30,11 +30,51 @@ impl Context {
             .scoped(format!("profile:{name}").as_bytes())
     }
 
-    pub async fn preferences(&self) -> anyhow::Result<Network> {
-        self.preferences_db()
-            .get_network()
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("missing network preferences; run `edw unlock`"))
+    pub fn chain_id(&self) -> NetworkId {
+        self.network.default_config().network_id
+    }
+
+    pub async fn network_configs(&self) -> anyhow::Result<Vec<NetworkConfig>> {
+        Ok(self.preferences_db().get_network_configs().await?)
+    }
+
+    pub async fn put_network_configs(&self, configs: &[NetworkConfig]) -> anyhow::Result<()> {
+        let chain = self.chain_id();
+        for config in configs {
+            if config.network_id != chain {
+                anyhow::bail!(
+                    "networkConfig `{}` must be chain {}, not {}",
+                    config.name,
+                    chain.0,
+                    config.network_id.0
+                );
+            }
+        }
+        self.preferences_db().put_network_configs(configs).await?;
+        Ok(())
+    }
+
+    pub async fn resolve_config(
+        &self,
+        name: Option<&str>,
+    ) -> anyhow::Result<(usize, Vec<NetworkConfig>)> {
+        let configs = self.network_configs().await?;
+        if configs.is_empty() {
+            anyhow::bail!("no networkConfigs; add one with `edw network add <name>`");
+        }
+        if let Some(name) = name {
+            let index = configs
+                .iter()
+                .position(|config| config.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no networkConfig `{name}`"))?;
+            return Ok((index, configs));
+        }
+        if let Some(active) = self.preferences_db().get_active().await?
+            && let Some(index) = configs.iter().position(|config| config.name == active)
+        {
+            return Ok((index, configs));
+        }
+        Ok((0, configs))
     }
 }
 

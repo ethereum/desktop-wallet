@@ -13,14 +13,14 @@ pub mod presets;
 pub struct NetworkId(pub u64);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Network {
+pub struct NetworkConfig {
     pub network_id: NetworkId,
     pub name: String,
     pub native_asset: String,
     pub endpoints: Vec<NetworkEndpointConfig>,
 }
 
-impl Network {
+impl NetworkConfig {
     #[must_use]
     pub fn http_rpc_url(&self) -> Option<&str> {
         match self.endpoints.first() {

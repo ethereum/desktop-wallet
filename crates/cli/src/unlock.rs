@@ -96,11 +96,16 @@ async fn network_store(
     };
 
     let prefs = store.scoped(b"preferences");
-    if prefs.get_network().await?.is_none() {
+    if prefs.get_network_configs().await?.is_empty() {
+        let config = network.default_config();
         prefs
-            .put_network(&network.preferences())
+            .put_network_configs(std::slice::from_ref(&config))
             .await
-            .context("error seeding network preferences")?;
+            .context("error seeding networkConfigs")?;
+        prefs
+            .put_active(&config.name)
+            .await
+            .context("error seeding the active networkConfig")?;
     }
 
     Ok(session::Session {

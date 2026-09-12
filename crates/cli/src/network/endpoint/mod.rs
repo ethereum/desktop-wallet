@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use edw_core::network::Network;
+use edw_core::network::NetworkConfig;
 
 use crate::{GlobalArgs, network::endpoint::list::NetworkEndpointListArgs};
 
@@ -13,22 +13,26 @@ pub struct NetworkEndpointArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Lists endpoints configured for a network.
+    /// Lists endpoints configured for a networkConfig.
     List(NetworkEndpointListArgs),
 }
 
 impl NetworkEndpointArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let network = global.gather().await?.preferences().await?;
-        self.command.run(&network, global);
+        let context = global.gather().await?;
+        let name = match &self.command {
+            Command::List(args) => args.name.as_deref(),
+        };
+        let (index, configs) = context.resolve_config(name).await?;
+        self.command.run(&configs[index], global);
         Ok(())
     }
 }
 
 impl Command {
-    pub fn run(&self, network: &Network, _global: &GlobalArgs) {
+    pub fn run(&self, config: &NetworkConfig, _global: &GlobalArgs) {
         match self {
-            Self::List(args) => args.run(network),
+            Self::List(args) => args.run(config),
         }
     }
 }

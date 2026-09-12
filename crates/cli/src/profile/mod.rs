@@ -72,9 +72,8 @@ async fn rpc_url(global: &GlobalArgs, context: &Context) -> Result<String, anyho
         return Ok(url.clone());
     }
 
-    context
-        .preferences()
-        .await?
+    let (index, configs) = context.resolve_config(None).await?;
+    configs[index]
         .http_rpc_url()
         .map(str::to_string)
         .context("no RPC endpoint; pass --rpc-url or run `edw network set-rpc <url>`")

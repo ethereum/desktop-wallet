@@ -1,22 +1,25 @@
 use std::{fmt, str::FromStr};
 
-use crate::network::{Network, NetworkId};
+use crate::network::{NetworkConfig, NetworkId, endpoint::NetworkEndpointConfig};
 
 pub const NETWORK_PRESETS: &[NetworkPreset] = &[
     NetworkPreset {
         network_id: NetworkId(1),
         name: "Mainnet",
         native_asset: "eth",
+        rpc_url: "https://ethereum.publicnode.com",
     },
     NetworkPreset {
         network_id: NetworkId(11_155_111),
         name: "Sepolia",
         native_asset: "sepEth",
+        rpc_url: "https://ethereum-sepolia-rpc.publicnode.com",
     },
     NetworkPreset {
         network_id: NetworkId(31_337),
         name: "Local",
         native_asset: "devEth",
+        rpc_url: "http://localhost:8545",
     },
 ];
 
@@ -24,6 +27,7 @@ pub struct NetworkPreset {
     pub network_id: NetworkId,
     pub name: &'static str,
     pub native_asset: &'static str,
+    pub rpc_url: &'static str,
 }
 
 /// Networks this binary can open. Each is a separate store and password.
@@ -45,14 +49,24 @@ impl SupportedNetwork {
         }
     }
 
+    fn preset(self) -> &'static NetworkPreset {
+        NETWORK_PRESETS
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(self.slug()))
+            .unwrap_or(&NETWORK_PRESETS[0])
+    }
+
     #[must_use]
-    pub fn preferences(self) -> Network {
-        Network::from_preset(self.slug()).unwrap_or_else(|_| Network {
-            network_id: NetworkId(1),
-            name: "Mainnet".to_string(),
-            native_asset: "eth".to_string(),
-            endpoints: vec![],
-        })
+    pub fn default_config(self) -> NetworkConfig {
+        let preset = self.preset();
+        NetworkConfig {
+            network_id: preset.network_id,
+            name: "default".to_string(),
+            native_asset: preset.native_asset.to_string(),
+            endpoints: vec![NetworkEndpointConfig::HttpProvider {
+                url: preset.rpc_url.to_string(),
+            }],
+        }
     }
 }
 
@@ -77,7 +91,7 @@ impl FromStr for SupportedNetwork {
     }
 }
 
-impl Network {
+impl NetworkConfig {
     #[must_use]
     pub fn presets() -> &'static [NetworkPreset] {
         NETWORK_PRESETS
@@ -117,6 +131,21 @@ mod tests {
         assert_eq!(
             "local".parse::<SupportedNetwork>().ok(),
             Some(SupportedNetwork::Local)
+        );
+    }
+
+    #[test]
+    fn default_config_is_named_default_and_has_a_public_rpc() {
+        let local = SupportedNetwork::Local.default_config();
+        assert_eq!(local.name, "default");
+        assert_eq!(local.http_rpc_url(), Some("http://localhost:8545"));
+        assert_eq!(
+            SupportedNetwork::Mainnet.default_config().http_rpc_url(),
+            Some("https://ethereum.publicnode.com")
+        );
+        assert_eq!(
+            SupportedNetwork::Sepolia.default_config().http_rpc_url(),
+            Some("https://ethereum-sepolia-rpc.publicnode.com")
         );
     }
 }
