@@ -9,7 +9,6 @@ mod network;
 mod profile;
 mod session;
 mod unlock;
-mod utils;
 
 #[derive(Parser)]
 #[command(name = "edw", about = "Ethereum Desktop Wallet CLI")]
@@ -25,7 +24,7 @@ pub struct Cli {
 pub(crate) struct GlobalArgs {
     #[arg(long, global = true, env = "DATA_DIR", default_value = "./.edw/")]
     pub(crate) data_dir: PathBuf,
-    /// Overrides the active network's endpoint for this invocation.
+    /// Overrides the unlocked network's endpoint for this invocation.
     #[arg(long, global = true, env = "RPC_URL")]
     pub(crate) rpc_url: Option<String>,
 }
@@ -41,12 +40,12 @@ enum Command {
     /// Manages profile databases.
     #[command(subcommand)]
     Database(database::Command),
-    /// Manages configured networks and their endpoints.
+    /// Configures the unlocked network instance.
     #[command(subcommand)]
     Network(network::Command),
-    /// Unlocks the wallet for this terminal session.
-    Unlock,
-    /// Locks the wallet, ending this terminal's session.
+    /// Unlocks one network; any other network is locked.
+    Unlock(unlock::UnlockArgs),
+    /// Locks the wallet.
     Lock,
 }
 
@@ -57,7 +56,7 @@ impl Cli {
             Command::Profile(args) => args.run(&self.global).await?,
             Command::Database(args) => args.run(&self.global).await?,
             Command::Network(args) => args.run(&self.global).await?,
-            Command::Unlock => unlock::run_unlock(&self.global).await?,
+            Command::Unlock(args) => unlock::run_unlock(&self.global, args).await?,
             Command::Lock => unlock::run_lock()?,
         }
 

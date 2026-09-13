@@ -1,25 +1,22 @@
-use std::{
-    fs::create_dir_all,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::Context as _;
 use clap::Subcommand;
 use edw_core::{
-    database::file::FileDatabase, executor::simple::SimpleExecutor,
-    network::alloy::SimpleNetworkEndpoint, profile::simple::SimpleProfile,
+    executor::simple::SimpleExecutor,
+    network::alloy::SimpleNetworkEndpoint,
+    profile::simple::{SimpleProfile, db::SimpleProfileDb},
 };
 
-use crate::GlobalArgs;
+use crate::{GlobalArgs, context::Context};
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    /// Lists profile directories.
+    /// List profiles.
     List,
-    /// Creates a new profile with a random executor.
+    /// Create a profile with a random executor.
     Create { name: String },
-    /// Lists the balance of a profile.
+    /// Show a profile's balance.
     Balance { name: String },
 }
 
@@ -37,47 +34,47 @@ impl Command {
 }
 
 async fn list(global: &GlobalArgs) -> Result<(), anyhow::Error> {
-    let mut entries = match tokio::fs::read_dir(&global.data_dir).await {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-
-    while let Some(entry) = entries.next_entry().await? {
-        if entry.file_type().await?.is_dir() {
-            println!("{}", entry.file_name().to_string_lossy());
-        }
+    let context = global.gather().await?;
+    for name in context.profiles_index_db().list_profiles().await? {
+        println!("{name}");
     }
-
     Ok(())
 }
 
 async fn create(name: &str, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-    let profile_path = profile_path(name, &global.data_dir);
-    if !profile_path.exists() {
-        create_dir_all(&profile_path).context("error creating profile directory")?;
+    if name.is_empty() {
+        anyhow::bail!("profile name cannot be empty");
     }
 
-    let rpc_url = global
-        .rpc_url
-        .as_deref()
-        .context("no RPC endpoint; pass --rpc-url")?;
+    let context = global.gather().await?;
+    let index = context.profiles_index_db();
+    let mut names = index.list_profiles().await?;
+    if names.iter().any(|existing| existing == name) {
+        anyhow::bail!("profile `{name}` already exists");
+    }
+
+    let rpc_url = rpc_url(global, &context).await?;
     let provider = SimpleNetworkEndpoint::new_http(rpc_url.parse()?);
-    let db = Arc::new(profile_db(name, &global.data_dir)?);
+    let db: Arc<dyn edw_core::database::Database> = Arc::new(context.profile_db(name));
 
     SimpleProfile::new(provider, db, |ctx| async move {
         SimpleExecutor::new_with_random(ctx.provider, ctx.db).await
     })
     .await?;
 
+    names.push(name.to_string());
+    index.put_profiles(&names).await?;
     Ok(())
 }
 
-fn profile_db(name: &str, data_dir: &Path) -> Result<FileDatabase, anyhow::Error> {
-    let db_path = profile_path(name, data_dir).join("db");
-    FileDatabase::open(db_path).context("error opening profile database")
-}
+async fn rpc_url(global: &GlobalArgs, context: &Context) -> Result<String, anyhow::Error> {
+    if let Some(url) = &global.rpc_url {
+        return Ok(url.clone());
+    }
 
-fn profile_path(name: &str, data_dir: &Path) -> PathBuf {
-    data_dir.join(name)
+    let (index, configs) = context.resolve_config(None).await?;
+    configs[index]
+        .http_rpc_url()
+        .map(str::to_string)
+        .context("no RPC endpoint; pass --rpc-url or run `edw network set-rpc <url>`")
 }

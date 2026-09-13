@@ -2,7 +2,10 @@ use clap::Subcommand;
 
 use crate::{
     GlobalArgs,
-    network::{add::NetworkAddArgs, endpoint::NetworkEndpointArgs, list::NetworkListArgs},
+    network::{
+        add::{NetworkAddArgs, NetworkSetRpcArgs},
+        endpoint::NetworkEndpointArgs,
+    },
 };
 
 pub mod add;
@@ -12,12 +15,14 @@ pub mod status;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Lists the configured networks
-    List(NetworkListArgs),
-    /// Add a new network
+    /// Show this network's networkConfigs.
+    View,
+    /// Add a named networkConfig for this chain.
     Add(NetworkAddArgs),
+    /// Set the HTTP RPC URL on a networkConfig.
+    SetRpc(NetworkSetRpcArgs),
     /// View network status, latest reported block-height, etc
-    Status { id_or_preset: Option<String> },
+    Status,
     /// Manage network endpoints
     #[command(external_subcommand = false)]
     Endpoint(NetworkEndpointArgs),
@@ -26,10 +31,11 @@ pub enum Command {
 impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match &self {
-            Command::List(args) => args.run(global).await,
+            Command::View => list::run(global).await,
             Command::Add(args) => args.run(global).await,
+            Command::SetRpc(args) => args.run(global).await,
             Command::Endpoint(args) => args.run(global).await,
-            Command::Status { id_or_preset: _ } => {
+            Command::Status => {
                 println!("Unimplemented");
                 Ok(())
             }

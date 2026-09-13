@@ -4,7 +4,7 @@ pub use crate::{
     database::{Database, DatabaseError},
     executor::{Executor, ExecutorError, ExecutorId},
     factory::{BuildContext, Factory, FactoryError},
-    network::{Network, SimpleNetworkEndpoint},
+    network::{NetworkConfig, SimpleNetworkEndpoint},
     profile::{Profile, ProfileError},
     vault::{Vault, VaultError, VaultId},
 };

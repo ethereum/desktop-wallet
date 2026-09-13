@@ -1,38 +1,25 @@
-use clap::Args;
 use edw_core::network::db::NetworkDb;
 
-use crate::{GlobalArgs, utils::table::table};
+use crate::GlobalArgs;
 
-#[derive(Args, Debug)]
-pub struct NetworkListArgs {
-    /// Prints endpoint URLs in full, including any credentials they carry.
-    #[arg(long)]
-    show_urls: bool,
-}
+pub async fn run(global: &GlobalArgs) -> Result<(), anyhow::Error> {
+    let context = global.gather().await?;
+    let configs = context.network_configs().await?;
+    let active = context.preferences_db().get_active().await?;
 
-impl NetworkListArgs {
-    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let context = global.gather().await?;
-        let networks = context.networks.get_networks().await?;
-
-        if networks.is_empty() {
-            println!("No networks configured.");
-            println!("Add one with `edw network add <network> --rpc-url <url>`.");
-            return Ok(());
-        }
-
-        let rows = networks
-            .iter()
-            .map(|network| {
-                vec![
-                    network.name.clone(),
-                    network.network_id.0.to_string(),
-                    network.native_asset.clone(),
-                ]
-            })
-            .collect::<Vec<_>>();
-
-        table(&["NAME", "NETWORK ID", "TOKEN"], &rows);
-        Ok(())
+    if configs.is_empty() {
+        println!("No networkConfigs.");
+        println!("Add one with `edw network add <name>`.");
+        return Ok(());
     }
+
+    for config in &configs {
+        let mark = if active.as_deref() == Some(config.name.as_str()) {
+            "*"
+        } else {
+            " "
+        };
+        println!("{mark} {} (chain {})", config.name, config.network_id.0);
+    }
+    Ok(())
 }
