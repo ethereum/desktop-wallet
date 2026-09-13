@@ -1,5 +1,5 @@
 use std::{
-    env, fs,
+    fs,
     io::Write,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
@@ -42,22 +42,11 @@ pub(crate) fn canonical_data_dir(path: &Path) -> PathBuf {
 
 fn directory() -> Option<PathBuf> {
     #[cfg(test)]
-    if let Some(dir) = TEST_DIR.with(|slot| slot.borrow().clone())
-        && fs::create_dir_all(&dir).is_ok()
-        && fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).is_ok()
-    {
+    if let Some(dir) = TEST_DIR.with(|slot| slot.borrow().clone()) {
         return Some(dir);
     }
 
-    let tmp = env::var_os("TMPDIR").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    [env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from), Some(tmp)]
-        .into_iter()
-        .flatten()
-        .map(|root| root.join("edw"))
-        .find(|dir| {
-            fs::create_dir_all(dir).is_ok()
-                && fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).is_ok()
-        })
+    std::env::var_os("XDG_RUNTIME_DIR").map(|dir| PathBuf::from(dir).join("edw"))
 }
 
 fn path() -> Option<PathBuf> {
@@ -95,7 +84,11 @@ pub(crate) fn load() -> Option<Session> {
 }
 
 pub(crate) fn store(session: &Session) -> Result<(), anyhow::Error> {
-    let directory = directory().context("no writable runtime directory for a session")?;
+    let directory = directory().context("XDG_RUNTIME_DIR is not set, so no session can be held")?;
+    fs::create_dir_all(&directory)
+        .with_context(|| format!("error creating {}", directory.display()))?;
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+
     let path = directory.join("session");
     let mut file = fs::OpenOptions::new()
         .write(true)

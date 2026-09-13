@@ -2,26 +2,29 @@ use std::{fmt, str::FromStr};
 
 use crate::network::{NetworkConfig, NetworkId, endpoint::NetworkEndpointConfig};
 
-pub const NETWORK_PRESETS: &[NetworkPreset] = &[
-    NetworkPreset {
-        network_id: NetworkId(1),
-        name: "Mainnet",
-        native_asset: "eth",
-        rpc_url: "https://ethereum.publicnode.com",
-    },
-    NetworkPreset {
-        network_id: NetworkId(11_155_111),
-        name: "Sepolia",
-        native_asset: "sepEth",
-        rpc_url: "https://ethereum-sepolia-rpc.publicnode.com",
-    },
-    NetworkPreset {
-        network_id: NetworkId(31_337),
-        name: "Local",
-        native_asset: "devEth",
-        rpc_url: "http://localhost:8545",
-    },
-];
+// Placeholder public RPCs for the walking skeleton. Shipping every new
+// instance's traffic to one host is a principle-3 risk (the provider can
+// correlate addresses). Replace before any real use.
+const MAINNET: NetworkPreset = NetworkPreset {
+    network_id: NetworkId(1),
+    name: "Mainnet",
+    native_asset: "eth",
+    rpc_url: "https://ethereum.publicnode.com",
+};
+const SEPOLIA: NetworkPreset = NetworkPreset {
+    network_id: NetworkId(11_155_111),
+    name: "Sepolia",
+    native_asset: "sepEth",
+    rpc_url: "https://ethereum-sepolia-rpc.publicnode.com",
+};
+const LOCAL: NetworkPreset = NetworkPreset {
+    network_id: NetworkId(31_337),
+    name: "Local",
+    native_asset: "devEth",
+    rpc_url: "http://localhost:8545",
+};
+
+pub const NETWORK_PRESETS: &[NetworkPreset] = &[MAINNET, SEPOLIA, LOCAL];
 
 pub struct NetworkPreset {
     pub network_id: NetworkId,
@@ -49,11 +52,12 @@ impl SupportedNetwork {
         }
     }
 
-    fn preset(self) -> &'static NetworkPreset {
-        NETWORK_PRESETS
-            .iter()
-            .find(|p| p.name.eq_ignore_ascii_case(self.slug()))
-            .unwrap_or(&NETWORK_PRESETS[0])
+    const fn preset(self) -> &'static NetworkPreset {
+        match self {
+            Self::Mainnet => &MAINNET,
+            Self::Sepolia => &SEPOLIA,
+            Self::Local => &LOCAL,
+        }
     }
 
     #[must_use]
@@ -80,7 +84,7 @@ impl FromStr for SupportedNetwork {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
+        match s.to_ascii_lowercase().as_str() {
             "mainnet" => Ok(Self::Mainnet),
             "sepolia" => Ok(Self::Sepolia),
             "local" => Ok(Self::Local),
@@ -131,6 +135,30 @@ mod tests {
         assert_eq!(
             "local".parse::<SupportedNetwork>().ok(),
             Some(SupportedNetwork::Local)
+        );
+        assert_eq!(
+            "Mainnet".parse::<SupportedNetwork>().ok(),
+            Some(SupportedNetwork::Mainnet)
+        );
+        assert_eq!(
+            "SEPOLIA".parse::<SupportedNetwork>().ok(),
+            Some(SupportedNetwork::Sepolia)
+        );
+    }
+
+    #[test]
+    fn default_config_matches_the_variant() {
+        assert_eq!(
+            SupportedNetwork::Mainnet.default_config().network_id,
+            NetworkId(1)
+        );
+        assert_eq!(
+            SupportedNetwork::Sepolia.default_config().network_id,
+            NetworkId(11_155_111)
+        );
+        assert_eq!(
+            SupportedNetwork::Local.default_config().network_id,
+            NetworkId(31_337)
         );
     }
 
