@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use zeroize::Zeroizing;
 
 pub mod encrypted;
@@ -20,4 +22,19 @@ pub trait Database: Send + Sync {
 pub enum DatabaseError {
     #[error(transparent)]
     Other(Box<dyn std::error::Error + Send + Sync>),
+}
+
+#[async_trait::async_trait]
+impl<T: Database + ?Sized> Database for Arc<T> {
+    async fn get(&self, key: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, DatabaseError> {
+        (**self).get(key).await
+    }
+
+    async fn put(&self, key: &[u8], value: &[u8]) -> Result<(), DatabaseError> {
+        (**self).put(key, value).await
+    }
+
+    async fn delete(&self, key: &[u8]) -> Result<(), DatabaseError> {
+        (**self).delete(key).await
+    }
 }

@@ -1,9 +1,11 @@
 use alloy_primitives::{Address, U256};
 use serde::{Deserialize, Serialize};
 
-use crate::{asset::AssetId, call::Call};
+use crate::asset::AssetId;
 
 pub mod simple;
+#[cfg(feature = "tornadocash")]
+pub mod tornadocash;
 
 /// A trait representing a store of assets. Assets can be deposited into and withdrawn from a vault,
 /// and the vault can track the total balance of assets it holds.
@@ -14,29 +16,12 @@ pub trait Vault: Send + Sync {
 
     /// Returns the total balance of the given asset in the vault.
     async fn balance(&self, asset: &AssetId) -> Result<U256, VaultError>;
-
-    /// Returns a list of [`Call`]s that, when executed from the `from` address, will deposit
-    /// the specified `amount` of the given `asset_id` into the vault.
-    async fn deposit(
-        &self,
-        from: Address,
-        asset: &AssetId,
-        amount: U256,
-    ) -> Result<Vec<Call>, VaultError>;
-
-    /// Returns a list of [`Call`]s that, when executed from any address, will withdraw the specified `amount` of
-    /// the given `asset_id` to the given `to` location.
-    async fn withdraw(
-        &self,
-        to: &VaultId,
-        asset: &AssetId,
-        amount: U256,
-    ) -> Result<Vec<Call>, VaultError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VaultId {
     Address(Address),
+    Other { tag: String, id: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -52,6 +37,7 @@ impl std::fmt::Display for VaultId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VaultId::Address(addr) => write!(f, "addr:{addr:}"),
+            VaultId::Other { tag, id } => write!(f, "{tag}:{id}"),
         }
     }
 }
