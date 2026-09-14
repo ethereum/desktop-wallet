@@ -244,8 +244,7 @@ pub async fn generate_as_profile(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::database::memory::MemoryDatabase;
-    use crate::profile::simple::db::SimpleProfileDb;
+    use crate::{database::memory::MemoryDatabase, profile::simple::db::SimpleProfileDb};
 
     const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     const SECOND_FIXTURE: &str =

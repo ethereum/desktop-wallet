@@ -1,6 +1,11 @@
 use std::{future::Future, sync::Arc};
 
 use alloy_primitives::U256;
+pub use bootstrap::{
+    ProfileBootstrapError, bootstrap_profile, create_next_profile, next_profile_index,
+    profile_scope, rename_profile, resolve_profile, set_profile_name,
+};
+pub use db::ProfileRecord;
 use db::{SimpleProfileDatabaseError, SimpleProfileDb};
 use futures::future::try_join_all;
 use uuid::Uuid;
@@ -12,12 +17,6 @@ use crate::{
     profile::{Profile, ProfileError},
     vault::{Vault, VaultError},
 };
-
-pub use bootstrap::{
-    ProfileBootstrapError, bootstrap_profile, create_next_profile, next_profile_index,
-    profile_scope, rename_profile, resolve_profile, set_profile_name,
-};
-pub use db::ProfileRecord;
 
 pub mod bootstrap;
 pub mod db;
