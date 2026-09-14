@@ -2,9 +2,17 @@
 
 This document aims to outline used vocabulary, and its definitions.
 
+## Mnemonic
+
+A 12- or 24-word BIP39 English seed phrase stored per network instance, encrypted under that instance's decryption password. Mnemonics are un-named and numbered (`mnemonic 0`, `mnemonic 1`). Index 0 is created on first unlock together with profile 0.
+
+Users name **profiles**, not mnemonics. `edw profile generate` / `import` create a new seed and exactly one profile at a given index (default 0). They do not also create profile 0 when another index is requested. `edw profile add` creates another profile on an existing mnemonic (`--index`, default 0, or `--next` for the smallest unused index). Importing a phrase that is already stored is an error; add a profile on that mnemonic instead.
+
+A **profile** points at a mnemonic by `(mnemonic_index, profile_index)` and does not store the phrase. `profile_index` is the hardened BIP44 account in `m/44'/60'/<profileIndex>'/…`.
+
 ## Profile
 
-A user-facing collection of **signers**, **executors**, and **vaults**. Used to manage and group balances, transactions, history, and other related data.
+A user-facing collection of **signers**, **executors**, and **vaults**. Used to manage and group balances, transactions, history, and other related data. Display names are unique in a network instance. Unnamed index 0 displays as `default`; unnamed later indexes display as `profile #<index>`.
 
 Example:
 

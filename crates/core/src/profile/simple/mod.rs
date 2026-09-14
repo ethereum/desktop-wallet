@@ -13,6 +13,13 @@ use crate::{
     vault::{Vault, VaultError},
 };
 
+pub use bootstrap::{
+    ProfileBootstrapError, bootstrap_profile, create_next_profile, next_profile_index,
+    profile_scope, rename_profile, resolve_profile, set_profile_name,
+};
+pub use db::ProfileRecord;
+
+pub mod bootstrap;
 pub mod db;
 
 pub struct SimpleProfile {

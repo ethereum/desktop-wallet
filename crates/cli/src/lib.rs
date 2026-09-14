@@ -43,7 +43,7 @@ enum Command {
     /// Configures the unlocked network instance.
     #[command(subcommand)]
     Network(network::Command),
-    /// Unlocks one network; any other network is locked.
+    /// Unlocks one network (default mainnet); any other network is locked.
     Unlock(unlock::UnlockArgs),
     /// Locks the wallet.
     Lock,
