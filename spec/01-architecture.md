@@ -105,7 +105,7 @@ crates/
 ├── store/    # encrypted Database: encrypting decorator + backends
 ├── chain/    # EthereumProvider (alloy-based); RPC / light-client / local-VM backends
 ├── registry/ # derivation / address-computation schemes as DATA
-└── privacy/  # privacy vault impls: stealth (ERC-5564), shielded pools (Kohaku)
+└── privacy/  # privacy vault impls: stealth (ERC-5564), shielded pool (kohaku-rs)
 ```
 
 The **facade crate** matters: the UI imports only `edw-core`, so internal restructuring
@@ -195,7 +195,7 @@ Vaults are how the program stores assets. A vault is an abstract collection of a
 - Hardware vaults (e.g. Ledger, Trezor)
 - Remote vaults (e.g. OpenLV)
 - [Stealth Addresses](https://eips.ethereum.org/EIPS/eip-5564)
-- Privacy Protocols (e.g. Tornado Cash, Railgun)
+- Shielded pools (Tornado Cash)
 
 ```rust
 trait Vault {
@@ -405,8 +405,9 @@ The **core** stack below is a proposal that looks low-risk to keep; the
 - **Ethereum:** `alloy` 2.x. **Chain reads:** `helios-ethereum` light client, in-process.
 - **At rest:** XChaCha20-Poly1305 per record under a random data key, itself wrapped by an
   Argon2id (64 MiB / 3-pass) password slot, applied at the `Database` seam. See [Encryption at rest](#encryption-at-rest).
-- **Privacy stack:** Kohaku crates (Rust, git-only 0.1.0, unstable; going native bets on
-  them) for shielded pools; ERC-5564 for stealth.
+- **Privacy stack:** `kohaku-rs` crates (Rust, git-only 0.1.0, unstable; going native bets
+  on them) for the Tornado Cash shielded pool; ERC-5564 for stealth. `kohaku-rs` is the
+  all-Rust destination for the Kohaku port and is the only Kohaku source `edw` depends on.
 
 ## Cross-cutting engineering standards
 
