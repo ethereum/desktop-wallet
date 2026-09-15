@@ -14,6 +14,9 @@ If you are new here, read in this order:
 2. **[`01-architecture.md`](./01-architecture.md):** the system decomposition and, most
    importantly, the **contracts between components** (the `edw-core` public API). This
    is what lets UI and core work proceed in parallel against a shared interface.
+3. **[`02-cli.md`](./02-cli.md):** the command surface, its grammar, and the conventions
+   every command follows. The CLI ships before the GUI and is what a test harness drives,
+   so it is a contract rather than a convenience.
 
 The work itself lives in GitHub Issues, grouped into release milestones. **A milestone is a
 release** (v0.1.0, v0.2.0), so it means the same thing on the project board that it means
@@ -30,6 +33,7 @@ at the bottom. Higher layers change rarely; lower layers churn.
 | ---------------------------- | -------------------- | ------------ | -------------------------------------- |
 | **Vision / principles**      | `00-vision.md`       | Rarely       | Whole team, decided together           |
 | **Architecture / contracts** | `01-architecture.md` | Occasionally | Whoever owns the core; reviewed by all |
+| **CLI surface**              | `02-cli.md`          | Occasionally | Whoever owns the CLI; reviewed by all  |
 | **Feature specs**            | in the GitHub issue  | Per feature  | The dev/pair who owns the feature      |
 | **Issues / tasks**           | GitHub Issues        | Constantly   | Individual devs                        |
 
