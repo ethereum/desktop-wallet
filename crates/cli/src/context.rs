@@ -6,7 +6,7 @@ use edw_core::{
         scoped::{ScopedDatabase, ScopedDatabaseExt},
     },
     mnemonic::{MnemonicRecord, db::MnemonicDb},
-    network::{NetworkConfig, NetworkId, SupportedNetwork, db::NetworkDb},
+    network::{NetworkConfig, NetworkId, SimpleNetworkEndpoint, SupportedNetwork, db::NetworkDb},
     profile::simple::{ProfileRecord, db::SimpleProfileDb, profile_scope},
 };
 
@@ -89,6 +89,23 @@ impl Context {
             return Ok((index, configs));
         }
         Ok((0, configs))
+    }
+
+    pub async fn endpoint(&self, rpc_url: Option<&str>) -> anyhow::Result<SimpleNetworkEndpoint> {
+        let url = if let Some(url) = rpc_url {
+            url.to_string()
+        } else {
+            let (index, configs) = self.resolve_config(None).await?;
+            configs[index]
+                .http_rpc_url()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no RPC endpoint; pass --rpc-url or run `edw network set-rpc <url>`"
+                    )
+                })?
+                .to_string()
+        };
+        Ok(SimpleNetworkEndpoint::new_http(url.parse()?))
     }
 }
 

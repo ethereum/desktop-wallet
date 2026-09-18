@@ -2,7 +2,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 
 use clap::{Args, Subcommand};
 use edw_core::{
-    mnemonic::{self, resolve_mnemonic},
+    mnemonic::{self, resolve_mnemonic, scan::scan_standard_eoas},
     profile::simple::{
         ProfileRecord, bootstrap_profile, db::SimpleProfileDb, next_profile_index, rename_profile,
     },
@@ -146,6 +146,20 @@ async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Er
         profile.profile_index,
         profile.display_name()
     );
+
+    let provider = context.endpoint(global.rpc_url.as_deref()).await?;
+    let parsed = mnemonic.mnemonic()?;
+    let scan = scan_standard_eoas(&parsed, args.index, &provider).await?;
+    if !scan.addresses.is_empty() {
+        let addresses = scan
+            .addresses
+            .iter()
+            .map(|(index, address)| format!("{index}: {address}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("importing addresses {addresses}");
+    }
+    println!("next unused eoa index: {}", scan.next_unused);
     Ok(())
 }
 

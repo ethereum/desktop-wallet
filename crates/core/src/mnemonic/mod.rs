@@ -1,6 +1,8 @@
 use std::{fmt, str::FromStr, sync::Arc};
 
+use alloy_primitives::Address;
 use alloy_signer::k256::ecdsa::SigningKey;
+use alloy_signer_local::PrivateKeySigner;
 use bip32::{DerivationPath, XPrv};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -12,6 +14,7 @@ use crate::{
 };
 
 pub mod db;
+pub mod scan;
 
 const ENGLISH_12: usize = 12;
 const ENGLISH_24: usize = 24;
@@ -47,12 +50,16 @@ pub enum MnemonicError {
         "this phrase is already stored as mnemonic {index}; add another profile with `edw profile add --mnemonic {index} --next`"
     )]
     DuplicatePhrase { index: u32 },
+    #[error("EOA scan exceeded {0} addresses without an unused gap")]
+    ScanLimit(u32),
     #[error(transparent)]
     Database(#[from] MnemonicDatabaseError),
     #[error(transparent)]
     Profile(#[from] crate::profile::simple::ProfileBootstrapError),
     #[error(transparent)]
     ProfileDatabase(#[from] crate::profile::simple::db::SimpleProfileDatabaseError),
+    #[error("rpc error: {0}")]
+    Rpc(#[from] alloy_transport::TransportError),
 }
 
 impl Mnemonic {
@@ -92,6 +99,18 @@ impl Mnemonic {
             "m/44'/{coin}'/{profile_index}'/0/{address_index}",
             coin = 60
         ))
+    }
+
+    /// Standard public address at `m/44'/60'/<profileIndex>'/0/<address_index>`.
+    ///
+    /// `profile_index` defaults to `0` when omitted (`None`).
+    pub fn standard_address(
+        &self,
+        address_index: u32,
+        profile_index: impl Into<Option<u32>>,
+    ) -> Result<Address, MnemonicError> {
+        let key = self.standard_address_key(address_index, profile_index)?;
+        Ok(PrivateKeySigner::from_signing_key(key).address())
     }
 
     /// Stealth spending key at `m/44'/60'/<profileIndex>'/5564'/1'/0`.
