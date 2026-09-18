@@ -23,8 +23,6 @@ pub(crate) enum Command {
     Add(AddArgs),
     /// Set or clear a profile's optional name.
     Rename(RenameArgs),
-    /// Show a profile's balance.
-    Balance { name: String },
 }
 
 #[derive(Args, Debug)]
@@ -79,10 +77,6 @@ impl Command {
             Self::Import(args) => import(global, args).await,
             Self::Add(args) => add(global, args).await,
             Self::Rename(args) => rename(global, args).await,
-            Self::Balance { name } => {
-                println!("Balance lookup for profile `{name}` is not implemented");
-                Ok(())
-            }
         }
     }
 }
