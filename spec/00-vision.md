@@ -116,7 +116,7 @@ The rules that let any contributor make a hundred small decisions the way the te
 Violating one is a blocking review comment.
 
 1. **Secret material never leaves the core.** Keys, seed, and derived private material live
-   in `wallet-core`; the UI requests operations and receives _results_, never raw secrets.
+   in `edw-core`; the UI requests operations and receives _results_, never raw secrets.
 2. **Limit egress.** The app's only outbound network calls are RPC and any _wholly necessary_ or _wholly privacy beningn_ endpoints. Telemetry/analytics/crash-reporting are principle violations, not features.
 3. **Private reads.** Chain reads are trust-minimized _and_ structured so the RPC provider
    cannot trivially correlate a user's addresses.
