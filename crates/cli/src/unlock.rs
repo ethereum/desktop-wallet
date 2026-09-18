@@ -11,7 +11,9 @@ use edw_core::{
     database::{
         Database, encrypted::EncryptedDatabase, file::FileDatabase, scoped::ScopedDatabaseExt,
     },
+    mnemonic,
     network::{SupportedNetwork, db::NetworkDb},
+    profile::simple::{db::SimpleProfileDb, set_profile_name},
 };
 use zeroize::Zeroizing;
 
@@ -26,7 +28,7 @@ const PASSWORD_ENV: &str = "EDW_DECRYPTION_PASSWORD";
 
 #[derive(Args, Debug)]
 pub(crate) struct UnlockArgs {
-    /// Network to unlock. Unlocks this network and locks every other.
+    /// Network to unlock. Defaults to mainnet. Unlocks this network and locks every other.
     #[arg(long, default_value = "mainnet")]
     pub(crate) network: SupportedNetwork,
 }
@@ -41,7 +43,7 @@ pub(crate) fn is_initialized(dir: &Path) -> bool {
 }
 
 pub(crate) fn locked_error() -> anyhow::Error {
-    anyhow::anyhow!("wallet is locked; run `edw unlock --network <mainnet|sepolia|local>`")
+    anyhow::anyhow!("wallet is locked; run `edw unlock`")
 }
 
 pub(crate) async fn open_existing_store(
@@ -70,7 +72,7 @@ pub(crate) async fn open_existing_store(
 async fn network_store(
     data_dir: &Path,
     network: SupportedNetwork,
-) -> Result<session::Session, anyhow::Error> {
+) -> Result<(session::Session, Option<Zeroizing<String>>), anyhow::Error> {
     let data_dir = session::canonical_data_dir(data_dir);
     let dir = network_dir(&data_dir, network);
     let initialized = is_initialized(&dir);
@@ -95,7 +97,7 @@ async fn network_store(
         )
     };
 
-    let prefs = store.scoped(b"preferences");
+    let prefs = store.clone().scoped(b"preferences");
     if prefs.get_network_configs().await?.is_empty() {
         let config = network.default_config();
         prefs
@@ -108,11 +110,23 @@ async fn network_store(
             .context("error seeding the active networkConfig")?;
     }
 
-    Ok(session::Session {
-        data_dir,
-        network,
-        password,
-    })
+    let new_phrase = if initialized {
+        None
+    } else {
+        let record = mnemonic::seed_new_instance(store, false)
+            .await
+            .context("error seeding the default mnemonic")?;
+        Some(Zeroizing::new(record.phrase.clone()))
+    };
+
+    Ok((
+        session::Session {
+            data_dir,
+            network,
+            password,
+        },
+        new_phrase,
+    ))
 }
 
 /// The decryption password.
@@ -205,10 +219,29 @@ pub(crate) async fn run_unlock(
         .is_some_and(|s| s.network == network && s.data_dir == data_dir);
     let previous_network = previous.as_ref().map(|s| s.network);
 
-    let sess = network_store(&data_dir, network).await?;
+    let (sess, new_phrase) = network_store(&data_dir, network).await?;
 
     if !existed {
         println!("Encrypted store created at {}.", dir.display());
+    }
+
+    if let Some(phrase) = new_phrase {
+        println!("Write this recovery phrase down now. It is shown only this once.");
+        println!();
+        println!("{}", phrase.as_str());
+        println!();
+
+        if std::io::stdin().is_terminal() {
+            let store =
+                open_existing_store(&sess.data_dir, sess.network, sess.password.as_bytes()).await?;
+            let profiles = store.clone().scoped(b"profiles").list_profiles().await?;
+            let name = crate::profile::prompt_profile_name(None, &profiles, 0, Some((0, 0)))?;
+            if name.is_some() {
+                set_profile_name(store, 0, 0, name).await?;
+            }
+        }
+
+        println!("Mnemonic 0 and profile 0 were created.");
     }
 
     match session::store(&sess) {

@@ -5,7 +5,9 @@ use edw_core::{
         Database,
         scoped::{ScopedDatabase, ScopedDatabaseExt},
     },
+    mnemonic::{MnemonicRecord, db::MnemonicDb},
     network::{NetworkConfig, NetworkId, SupportedNetwork, db::NetworkDb},
+    profile::simple::{ProfileRecord, db::SimpleProfileDb, profile_scope},
 };
 
 use crate::{GlobalArgs, session, unlock};
@@ -24,10 +26,22 @@ impl Context {
         self.store.clone().scoped(b"profiles")
     }
 
-    pub fn profile_db(&self, name: &str) -> ScopedDatabase {
+    pub fn mnemonics_db(&self) -> ScopedDatabase {
+        self.store.clone().scoped(b"mnemonics")
+    }
+
+    pub fn profile_db(&self, mnemonic_index: u32, profile_index: u32) -> ScopedDatabase {
         self.store
             .clone()
-            .scoped(format!("profile:{name}").as_bytes())
+            .scoped(profile_scope(mnemonic_index, profile_index).as_bytes())
+    }
+
+    pub async fn mnemonics(&self) -> anyhow::Result<Vec<MnemonicRecord>> {
+        Ok(self.mnemonics_db().get_mnemonics().await?)
+    }
+
+    pub async fn profiles(&self) -> anyhow::Result<Vec<ProfileRecord>> {
+        Ok(self.profiles_index_db().list_profiles().await?)
     }
 
     pub fn chain_id(&self) -> NetworkId {
@@ -84,7 +98,7 @@ impl GlobalArgs {
         let data_dir = session::canonical_data_dir(&self.data_dir);
         if session.data_dir != data_dir {
             anyhow::bail!(
-                "wallet is unlocked for {} at {}, not {}; run `edw unlock --network <mainnet|sepolia|local>`",
+                "wallet is unlocked for {} at {}, not {}; run `edw unlock [--network mainnet|sepolia|local]`",
                 session.network,
                 session.data_dir.display(),
                 data_dir.display()
