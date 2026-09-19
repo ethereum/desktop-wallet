@@ -43,13 +43,13 @@
 │   remote (+ stealth / privacy protocols for vaults)                │
 │                                                                    │
 │   Also in edw-core:                                                │
-│   - EthereumProvider  -> chain access; executors submit here       │
-│   - Dapp Sessions     -> expose a provider to connected dapps      │
+│   - NetworkEndpoint   -> chain access; executors submit here       │
+│   - Dapp Sessions     -> expose an EthereumProvider to dapps       │
 │   - Database          -> key/value store, encrypted at the seam    │
 └──────────────────────────────────┬─────────────────────────────────┘
                                    │
                                    │  Signer / Executor -> secret storage
-                                   │  EthereumProvider  -> chain access
+                                   │  NetworkEndpoint   -> chain access
                                    │  Database          -> persistent store
                                    ↓
 ┌──────────────────────────────────┴─────────────────────────────────┐
@@ -69,7 +69,7 @@ the view layer as untrusted from the key material's perspective.
 
 Inside the core, a **Profile** is a user-facing aggregation that defers to the objects it
 holds: **Signers** (sign messages), **Executors** (send transactions), and **Vaults** (hold
-and move assets), alongside the **EthereumProvider**, **Dapp Sessions**, and **Database**.
+and move assets), alongside the **NetworkEndpoint**, **Dapp Sessions**, and **Database**.
 Each object is defined in [Core API](#core-api).
 
 ## Repository / crate layout
@@ -86,7 +86,7 @@ desktop-wallet/
 ```
 
 Crates are prefixed `edw-`. `edw-core` is the security-critical core: the profile / signer /
-executor / vault objects, the `EthereumProvider` seam (over RPC, a light client, or a local
+executor / vault objects, the `NetworkEndpoint` seam (over RPC, a light client, or a local
 VM), and an encrypted `Database`, behind a shared `error` type. `edw-cli` is the command
 surface over it, and `edw` is the binary that ships.
 
@@ -96,14 +96,14 @@ However the internals land, `edw-core` keeps **zero UI dependencies**: the prope
 preserve regardless of the UI-stack decision.
 
 A possible later step (proposed): split `edw-core` into focused crates, so audit boundaries
-stay crisp and compile times stay low:
+stay crisp and compile times stay low. `bin/` and `cli/` are unaffected:
 
 ```
 crates/
 ├── core/     # edw-core, now a facade: re-exports the stable public API the UI depends on
 ├── keys/     # seed, derivation engine, signers, zeroize discipline (highest audit bar)
 ├── store/    # encrypted Database: encrypting decorator + backends
-├── chain/    # EthereumProvider (alloy-based); RPC / light-client / local-VM backends
+├── chain/    # NetworkEndpoint and its adapters; RPC / light-client / local-VM backends
 ├── registry/ # derivation / address-computation schemes as DATA
 └── privacy/  # privacy vault impls: stealth (ERC-5564), shielded pool (kohaku-rs)
 ```
@@ -118,26 +118,51 @@ The following section describes the core API for the program. The API is designe
 
 Different trait impls are assumed to have different constructors, which are not part of the trait. Once initialized, the trait impls are expected to be used generically and should never be disambiguated by their concrete type.
 
-### Ethereum Provider
+### Network Endpoint
 
-Ethereum JSON-RPC interface. Used by the wallet to query chain state and submit transactions, and by dapps to interact with the wallet.
+The wallet's seam to a chain: one endpoint that answers reads and accepts signed transactions. A `Network` names the chain and lists the endpoints that claim to serve it.
 
-Based on alloy's [`Provider`](https://docs.rs/alloy/latest/alloy/providers/trait.Provider.html) trait. Consider directly using alloy, but it may be better to define a minimal interface to avoid a hard dependency on alloy which can be quite large. Trait implementations may include:
+The seam is a minimal trait the wallet owns, `NetworkEndpoint`, rather than alloy's [`Provider`](https://docs.rs/alloy/latest/alloy/providers/trait.Provider.html) itself. The reason is narrowness. `Provider` is a large surface built for general-purpose tooling, and a consumer holding it can call far more than the wallet needs, which widens both the audit surface and whatever the wallet ends up exposing to a dapp. A trait the wallet owns keeps the callable surface equal to the need. The cost is an adapter per backend.
+
+The trait does not buy independence from alloy and is not there to. Chain-access flavors, light-client verification or PIR among them, are alloy providers with a different tower backend rather than separate implementations, so they arrive as a `DynProvider` and are served by the same alloy-backed adapter. A kohaku Rust provider crate is consumed this way: as an alloy provider, behind the seam. What can sit behind it:
 
 - Remote JSON-RPC providers (e.g. Infura, Alchemy)
 - Self-hosted nodes (e.g. Reth, Geth, Erigon)
 - Light clients (e.g. Helios)
 - Local VMs (e.g. Anvil, revm)
 
+Signatures may name alloy's value types, from `alloy-primitives`, `alloy-consensus` and `alloy-rpc-types-eth`. Those are the ecosystem's vocabulary for addresses, hashes, envelopes and receipts, every backend speaks them, and redeclaring them serves nothing. Signatures may not name alloy's machinery: nothing from `alloy-provider`, `alloy-transport` or `alloy-network`, and errors are `NetworkEndpointError` rather than `alloy_transport::TransportError`.
+
+What v0.1.0 needs:
+
 ```rust
-trait EthereumProvider {
-    // ...
+#[async_trait]
+trait NetworkEndpoint {
+    async fn chain_id(&self) -> Result<u64, NetworkEndpointError>;
+    async fn block_height(&self) -> Result<u64, NetworkEndpointError>;
+
+    async fn balance(&self, address: Address) -> Result<U256, NetworkEndpointError>;
+    async fn code_at(&self, address: Address) -> Result<Bytes, NetworkEndpointError>;
+    async fn transaction_count(&self, address: Address) -> Result<u64, NetworkEndpointError>;
+
+    async fn call(&self, tx: TransactionRequest) -> Result<Bytes, NetworkEndpointError>;
+    async fn estimate_gas(&self, tx: TransactionRequest) -> Result<u64, NetworkEndpointError>;
+    async fn estimate_fees(&self) -> Result<FeeEstimate, NetworkEndpointError>;
+
+    async fn send_transaction(&self, tx: TxEnvelope) -> Result<TxHash, NetworkEndpointError>;
+    async fn receipt(&self, tx: TxHash) -> Result<Option<TransactionReceipt>, NetworkEndpointError>;
 }
 ```
 
+The trait carries two of these today, `block_height` and `chain_id` under its older spelling `network_id`. The rest are calls the core already makes through the adapter, and they land on the trait when its consumers come to depend on it. `FeeEstimate` is the wallet's own two-field type, since alloy's equivalent lives in `alloy-provider`. The list grows with the work that needs it, a log-range read for private-state sync being the next known addition, and never by reaching around the seam to the wrapped provider.
+
+An endpoint is configuration claiming to serve a given chain, and the claim holds only if the endpoint agrees. `chain_id` is what that check reads, and `NetworkEndpointError::ChainMismatch` is what a disagreement reports.
+
 #### Dapp Sessions
 
-Dapp sessions are how dapps interact with the wallet. When connecting, the wallet and dapp establish a secure transport over which the wallet exposes an EthereumProvider impl. Dapps can then query this EthereumProvider for network data or to submit requests.
+Dapp sessions are how dapps interact with the wallet. When connecting, the wallet and dapp establish a secure transport over which the wallet exposes an `EthereumProvider`: the [EIP-1193](https://eips.ethereum.org/EIPS/eip-1193) provider a dapp expects, filling the role `window.ethereum` plays in a browser wallet. Dapps query it for network data and to submit requests.
+
+An `EthereumProvider` is chain access the wallet offers: it answers for accounts and signing as well as network data, and each session gets what the wallet chooses to serve it.
 
 ### Profile
 
