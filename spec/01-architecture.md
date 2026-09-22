@@ -69,8 +69,10 @@ the view layer as untrusted from the key material's perspective.
 
 Inside the core, a **Profile** is a user-facing aggregation that defers to the objects it
 holds: **Signers** (sign messages), **Executors** (send transactions), and **Vaults** (hold
-and move assets), alongside the **NetworkEndpoint**, **Dapp Sessions**, and **Database**.
-Each object is defined in [Core API](#core-api).
+and move assets), alongside the **EthereumProvider**, **Dapp Sessions**, and **Database**.
+Each object is defined in [Core API](#core-api). Those types are not CLI command nouns: the
+command surface in [`02-cli.md`](./02-cli.md) uses `profile` / `network` / `db` / `config`
+for setup, and top-level verbs (`transfer`, `shield`, …) for actions.
 
 ## Repository / crate layout
 
@@ -88,7 +90,8 @@ desktop-wallet/
 Crates are prefixed `edw-`. `edw-core` is the security-critical core: the profile / signer /
 executor / vault objects, the `NetworkEndpoint` seam (over RPC, a light client, or a local
 VM), and an encrypted `Database`, behind a shared `error` type. `edw-cli` is the command
-surface over it, and `edw` is the binary that ships.
+surface over it, and `edw` is the binary that ships. Its grammar (config nouns vs actions)
+is in [`02-cli.md`](./02-cli.md).
 
 The view layer is not in the tree yet; the stack is still under review (see Stack).
 

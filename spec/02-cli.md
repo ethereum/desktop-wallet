@@ -31,33 +31,34 @@ chain ID, so there is no wallet-wide network list to enumerate.
 12-word seed, creates mnemonic 0 and profile 0, and prints the phrase once. Display names are
 unique within an instance, and an unnamed index 0 displays as `default`.
 
-Both are defined in [`vocabulary.md`](./vocabulary.md), which is where the CLI's nouns come
-from.
+Both are defined in [`vocabulary.md`](./vocabulary.md). Signers, executors, and vaults stay
+core objects; they are not command nouns.
 
 ## Grammar
 
-**Proposed: `edw <noun> <verb> [target] [flags]`, with a short list of top-level verbs.**
+**Proposed: two families, not one `edw <noun> <verb>` surface.**
 
-The nouns already exist in `vocabulary.md`, so the CLI inherits the model rather than inventing
-a second one. Grouping also keeps the namespace open: a flat, hyphenated surface groups only
-alphabetically, and every new command competes with every other for one name space.
+Prefixing every action with `vault` or `signer` makes the user think in core types, which
+fights [`00-vision.md`](./00-vision.md) principle 9 (think in Profiles, not addresses). Noun-verb
+is useful for *setup*; day-to-day work is a verb.
+
+- **Config** is `edw <noun> <verb>` for adding, changing, listing, and inspecting setup.
 
 | Noun      | Holds                                                         |
 | --------- | ------------------------------------------------------------- |
 | `profile` | the user-facing aggregation of signers, executors, and vaults |
-| `signer`  | keys and addresses within a profile                           |
-| `vault`   | balances, including shielded and stealth ones                 |
 | `network` | the current instance's networkConfigs and their endpoints     |
-| `asset`   | tracked assets and their metadata                             |
 | `db`      | the encrypted store itself                                    |
 | `config`  | resolved configuration, for inspection                        |
 
-**Exceptions, as top-level verbs:** `unlock`, `lock`, and `send`. The first two are session
-control and belong to no noun. `send` is the one that reads as an inconsistency, and
-[`00-vision.md`](./00-vision.md) settles it: principle 8 puts the safe path on the easy path,
-and principle 9 makes addresses machinery the user should rarely see. The primary flow gets the
-shortest spelling. `edw asset transfer` stays as an alias for scripts that prefer the regular
-form.
+- **Actions** are top-level verbs (`edw transfer`, `edw shield`, `edw balance`, …). When an
+  action needs a profile, it takes `--profile <name>`. Omitted `--profile` is not silently
+  the display name `default` when other profiles exist; see [Missing arguments](#missing-arguments).
+- **Session** verbs (`unlock`, `lock`) stay top-level. They belong to no config noun.
+
+[`00-vision.md`](./00-vision.md) principle 8 puts the safe path on the easy path, so the
+primary value-moving flow is the short spelling `edw transfer` (stealth by default). There is
+no `edw asset transfer` alias, and `signer` / `vault` / `asset` are not command nouns.
 
 Names are kebab-case throughout, including flags.
 
@@ -83,7 +84,9 @@ which lands in shell history; its file-path form exists to work around that.
 | `--broadcast`       | flag only, mutating | actually submit; otherwise dry-run              |
 
 `--network` is deliberately **not** global. The network is a property of the unlocked session
-rather than of each command, so it is an argument to `edw unlock` alone.
+rather than of each command, so it is an argument to `edw unlock` alone. `--profile` is
+likewise **not** global: it belongs on actions, and is filled in when omitted as described
+in [Missing arguments](#missing-arguments).
 
 ## What happens on an empty or locked instance
 
@@ -130,7 +133,25 @@ have. Two obligations follow, and they constrain how each command is designed:
 - **Confirmations count as input.** For anything that submits a transaction, `--broadcast` is
   the confirmation, so dry-run by default already satisfies this.
 
-One command is exempt, for the reason in the next section.
+### Missing arguments
+
+A missing argument that has a finite, known set of choices is filled in. A missing argument
+that does not is still an error, or a labeled typed prompt if that is the only way to get it.
+`--profile` is the example the rest of the surface copies; config commands that already take
+an optional chooser (`network set-rpc --name`) follow the same rule.
+
+Do **not** silently bind omitted `--profile` to the display name `default` when other profiles
+exist. That is a footgun on `transfer` and `shield`.
+
+- **Interactive (TTY, not `--non-interactive`):**
+  - Exactly one legal value (one profile, one networkConfig, …): use it, no prompt.
+  - Several legal values: print a numbered list and read a choice.
+  - Open-ended values (`--to`, amounts, a phrase): prompt with a label, or fail if a prompt
+    would be unsafe (seed material already has its own TTY rules).
+- **`--non-interactive`:** never prompt. Omitted `--profile` is fine only when there is
+  exactly one profile; otherwise fail and name the flag. Same for any other chooser.
+
+One command is exempt from `--non-interactive` entirely, for the reason in the next section.
 
 ### Secrets never reach the machine path
 
@@ -185,64 +206,56 @@ All of these are in `v0.1.0`, against the capability list in [`00-vision.md`](./
 | `edw unlock` | opens an instance for the terminal session; `--network` |
 | `edw lock`   | ends the session                                        |
 
-### Profiles and keys
+### Config
 
-| Command                   | Does                                                |
-| ------------------------- | --------------------------------------------------- |
-| `edw profile generate`    | new mnemonic plus one profile at `--index`          |
-| `edw profile import`      | existing phrase; re-importing a stored one is error |
-| `edw profile add`         | another profile on a stored mnemonic                |
-| `edw profile list`        | profiles in the unlocked instance                   |
-| `edw profile rename`      | display names are unique within an instance         |
-| `edw profile balance`     | the aggregated per-profile view                     |
-| `edw profile reveal-seed` | re-runnable seed backup; TTY and confirmation gated |
-| `edw signer next`         | the invisible fresh address                         |
+| Command                     | Does                                                |
+| --------------------------- | --------------------------------------------------- |
+| `edw profile generate`      | new mnemonic plus one profile at `--index`          |
+| `edw profile import`        | existing phrase; re-importing a stored one is error |
+| `edw profile add`           | another profile on a stored mnemonic                |
+| `edw profile list`          | profiles in the unlocked instance                   |
+| `edw profile rename`        | display names are unique within an instance         |
+| `edw profile reveal-seed`   | re-runnable seed backup; TTY and confirmation gated |
+| `edw network list` / `add`  | networkConfigs within the instance                  |
+| `edw network set-rpc`       | endpoint for a networkConfig                        |
+| `edw network endpoint list` | endpoints on a networkConfig                        |
+| `edw network status`        | chain ID and block height                           |
+| `edw network traffic`       | what the CLI contacted                              |
+| `edw db path` / `migrate`   | store location and migrations                       |
+| `edw db purge`              | deletes profile database data                       |
+| `edw config view` / `path`  | resolved configuration                              |
 
 `kohaku-cli`'s `create-wallet` has no single counterpart, because "wallet" means the
-per-network instance here while the user-named thing is a profile. The three creating commands
-replace it.
-
-### Value movement
-
-| Command       | Does                                      |
-| ------------- | ----------------------------------------- |
-| `edw send`    | stealth is the default path, not a flag   |
-| `edw tx raw`  | contract-call send from a profile account |
-| `edw tx list` | transaction history                       |
-
-### Privacy
-
-| Command                     | Does                                     |
-| --------------------------- | ---------------------------------------- |
-| `edw vault shield`          | deposit to the shielded pool             |
-| `edw vault unshield`        | withdraw, including the private-gas path |
-| `edw vault stealth-address` | show the stealth address others send to  |
-
-**`--protocol` is kept, defaulting to `tornado`.** `edw` supports one shielded pool, so the
-flag has a single legal value today and could be argued away. Keeping it costs a default and
-buys two things. The surface does not change shape when a second pool arrives, so no script
-written against `v0.1.0` breaks. And the pool is named in the command that moves value into it,
-which is what principle 6 asks for: the anonymity set a user is joining is the privacy property
-they are buying, and it should be legible rather than implied.
-
-An unrecognized value is an error listing what is supported, so the flag never silently
-resolves to something other than what was asked for.
-
-### Network and diagnostics
-
-| Command                     | Does                               |
-| --------------------------- | ---------------------------------- |
-| `edw network list` / `add`  | networkConfigs within the instance |
-| `edw network set-rpc`       | endpoint for a networkConfig       |
-| `edw network endpoint list` | endpoints on a networkConfig       |
-| `edw network status`        | chain ID and block height          |
-| `edw network traffic`       | what the CLI contacted             |
-| `edw db path` / `migrate`   | store location and migrations      |
-| `edw db purge`              | deletes profile database data      |
-| `edw config view` / `path`  | resolved configuration             |
+per-network instance here while the user-named thing is a profile. The three creating
+commands replace it.
 
 **`edw network traffic` is worth taking early.** It makes principle 2 ("limit egress")
 observable, and it is the same enumeration an egress-allowlist test asserts against.
+
+### Actions
+
+Actions take `--profile` when they need a profile. Fill-in follows [Missing arguments](#missing-arguments).
+
+| Command               | Does                                                     |
+| --------------------- | -------------------------------------------------------- |
+| `edw transfer`        | stealth is the default path, not a flag                  |
+| `edw shield`          | deposit to the shielded pool                             |
+| `edw unshield`        | withdraw, including the private-gas path                 |
+| `edw balance`         | the aggregated per-profile view                          |
+| `edw stealth-address` | show the stealth address others send to                  |
+| `edw next-address`    | the invisible fresh address                              |
+| `edw history`         | transaction history                                      |
+| `edw call`            | contract-call send from a profile account                |
+
+**`--protocol` is kept on `shield` / `unshield`, defaulting to `tornado`.** `edw` supports one
+shielded pool, so the flag has a single legal value today and could be argued away. Keeping it
+costs a default and buys two things. The surface does not change shape when a second pool
+arrives, so no script written against `v0.1.0` breaks. And the pool is named in the command
+that moves value into it, which is what principle 6 asks for: the anonymity set a user is
+joining is the privacy property they are buying, and it should be legible rather than implied.
+
+An unrecognized value is an error listing what is supported, so the flag never silently
+resolves to something other than what was asked for.
 
 ## Open question
 
