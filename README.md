@@ -27,3 +27,6 @@ cargo test --workspace -- --ignored # the anvil-backed tests
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
+
+The lint, formatting, ordering and test conventions CI enforces are in
+[AGENTS.md](AGENTS.md).
