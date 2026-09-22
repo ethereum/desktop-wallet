@@ -22,7 +22,7 @@
                                    │  response (core -> UI): result only, never raw keys
                                    ↓
 ┌──────────────────────────────────┴─────────────────────────────────┐
-│   wallet-core  (trusted, ZERO ui deps): secrets live only here     │
+│   edw-core  (trusted, ZERO ui deps): secrets live only here        │
 │                                                                    │
 │                   ┌────────────────────────────┐                   │
 │                   │     narrow public API      │                   │
@@ -42,7 +42,7 @@
 │   each object sourced independently: seed-derived / hardware /     │
 │   remote (+ stealth / privacy protocols for vaults)                │
 │                                                                    │
-│   Also in wallet-core:                                             │
+│   Also in edw-core:                                                │
 │   - EthereumProvider  -> chain access; executors submit here       │
 │   - Dapp Sessions     -> expose a provider to connected dapps      │
 │   - Database          -> key/value store, encrypted at the seam    │
@@ -53,7 +53,7 @@
                                    │  Database          -> persistent store
                                    ↓
 ┌──────────────────────────────────┴─────────────────────────────────┐
-│   external to wallet-core                                          │
+│   external to edw-core                                             │
 │                                                                    │
 │   - secret storage: keychain, hardware signer, secure enclave      │
 │   - chain access: RPC / light client / local VM                    │
@@ -63,14 +63,16 @@
 
 The presentation layer requests operations and receives results; it never holds raw secret
 material. This boundary is **Rust-to-Rust** (not the process/language boundary Tauri would
-give for free), so we **enforce it by module structure and discipline**: `wallet-core`
+give for free), so we **enforce it by module structure and discipline**: `edw-core`
 exposes a deliberately narrow public API and keeps all secret-touching types private. Treat
 the view layer as untrusted from the key material's perspective.
 
 Inside the core, a **Profile** is a user-facing aggregation that defers to the objects it
 holds: **Signers** (sign messages), **Executors** (send transactions), and **Vaults** (hold
 and move assets), alongside the **EthereumProvider**, **Dapp Sessions**, and **Database**.
-Each object is defined in [Core API](#core-api).
+Each object is defined in [Core API](#core-api). Those types are not CLI command nouns: the
+command surface in [`02-cli.md`](./02-cli.md) uses `profile` / `network` / `db` / `config`
+for setup, and top-level verbs (`transfer`, `shield`, …) for actions.
 
 ## Repository / crate layout
 
@@ -78,34 +80,38 @@ This repo (official):
 
 ```
 desktop-wallet/
-├── crates/        # Rust crates - the secure core and its focused sub-crates (see split below)
-├── ui/            # the view layer (stack under review - see Stack)
-├── nix/ flake.nix # reproducible dev shell (Rust toolchain + tooling)
-├── spec/          # this specification
-└── .github/       # CODEOWNERS, CI
+├── crates/     # Rust workspace
+├── contracts/  # Solidity and its Foundry tests
+├── nix/        # reproducible dev shell, with flake.nix at the root
+├── spec/       # this specification
+└── .github/    # CODEOWNERS, CI
 ```
 
-A **proposed** shape for the security-critical core in `crates/`: a `wallet-core` crate
-covering the profile / signer / executor / vault objects, the `EthereumProvider` seam (over
-RPC, a light client, or a local VM), and an encrypted `Database`, behind a shared `error`
-type.
-However the internals land, `wallet-core` should keep **zero UI dependencies**: the property
-to preserve regardless of the UI-stack decision.
+Crates are prefixed `edw-`. `edw-core` is the security-critical core: the profile / signer /
+executor / vault objects, the `EthereumProvider` seam (over RPC, a light client, or a local
+VM), and an encrypted `Database`, behind a shared `error` type. `edw-cli` is the command
+surface over it, and `edw` is the binary that ships. Its grammar (config nouns vs actions)
+is in [`02-cli.md`](./02-cli.md).
 
-A possible later step (proposed): split `wallet-core` into focused crates, so audit
-boundaries stay crisp and compile times stay low:
+The view layer is not in the tree yet; the stack is still under review (see Stack).
+
+However the internals land, `edw-core` keeps **zero UI dependencies**: the property to
+preserve regardless of the UI-stack decision.
+
+A possible later step (proposed): split `edw-core` into focused crates, so audit boundaries
+stay crisp and compile times stay low:
 
 ```
 crates/
-├── wallet-core/     # facade: re-exports the stable public API the UI depends on
-├── wallet-keys/     # seed, derivation engine, signers, zeroize discipline  (highest audit bar)
-├── wallet-store/    # encrypted Database: encrypting decorator + backends
-├── wallet-chain/    # EthereumProvider (alloy-based); RPC / light-client / local-VM backends; private reads
-├── wallet-registry/ # derivation / address-computation schemes as DATA
-└── wallet-privacy/  # privacy vault impls: stealth (ERC-5564), shielded pools (Kohaku)
+├── core/     # edw-core, now a facade: re-exports the stable public API the UI depends on
+├── keys/     # seed, derivation engine, signers, zeroize discipline (highest audit bar)
+├── store/    # encrypted Database: encrypting decorator + backends
+├── chain/    # EthereumProvider (alloy-based); RPC / light-client / local-VM backends
+├── registry/ # derivation / address-computation schemes as DATA
+└── privacy/  # privacy vault impls: stealth (ERC-5564), shielded pool (kohaku-rs)
 ```
 
-The **facade crate** matters: the UI imports only `wallet-core`, so internal restructuring
+The **facade crate** matters: the UI imports only `edw-core`, so internal restructuring
 never breaks the view layer as long as the facade's public API is stable. This is the
 contract; as a reference implementation, it is also the API other wallets study.
 
@@ -192,7 +198,7 @@ Vaults are how the program stores assets. A vault is an abstract collection of a
 - Hardware vaults (e.g. Ledger, Trezor)
 - Remote vaults (e.g. OpenLV)
 - [Stealth Addresses](https://eips.ethereum.org/EIPS/eip-5564)
-- Privacy Protocols (e.g. Tornado Cash, Railgun)
+- Shielded pools (Tornado Cash)
 
 ```rust
 trait Vault {
@@ -397,13 +403,14 @@ The **core** stack below is a proposal that looks low-risk to keep; the
   provisions a **Node/pnpm/Chromium + Playwright** toolchain, which points at either a
   web-based UI (e.g. a Tauri-style webview) or browser-driven E2E testing. The team should
   **decide the UI stack explicitly** and, with it, how strict the supply-chain principle is.
-  Whatever wins, the invariant holds: the view layer imports only `wallet-core` and never
+  Whatever wins, the invariant holds: the view layer imports only `edw-core` and never
   touches secret material.
 - **Ethereum:** `alloy` 2.x. **Chain reads:** `helios-ethereum` light client, in-process.
 - **At rest:** XChaCha20-Poly1305 per record under a random data key, itself wrapped by an
   Argon2id (64 MiB / 3-pass) password slot, applied at the `Database` seam. See [Encryption at rest](#encryption-at-rest).
-- **Privacy stack:** Kohaku crates (Rust, git-only 0.1.0, unstable; going native bets on
-  them) for shielded pools; ERC-5564 for stealth.
+- **Privacy stack:** `kohaku-rs` crates (Rust, git-only 0.1.0, unstable; going native bets
+  on them) for the Tornado Cash shielded pool; ERC-5564 for stealth. `kohaku-rs` is the
+  all-Rust destination for the Kohaku port and is the only Kohaku source `edw` depends on.
 
 ## Cross-cutting engineering standards
 
@@ -411,7 +418,7 @@ Proposed standards to adopt or adjust as the code lands:
 
 - **Zeroize discipline:** every type holding secret material is `Zeroizing`/zeroize-on-drop,
   never `Debug`/`Clone`/`Serialize`-able in a way that copies the secret. Reviewed on every
-  `wallet-keys`/`wallet-vault` PR.
+  PR touching key or vault material.
 - **Only-RPC egress + no secrets in logs + no telemetry** (principles 2, 11). Enforce with a
   review check and, where feasible, a test/lint that fails on unexpected network hosts.
 - **Rust style:** follow the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
@@ -421,7 +428,7 @@ Proposed standards to adopt or adjust as the code lands:
   Integration tests (`crates/*/tests`) cover public behavior only: one property per test,
   helpers grouped at the top of the file. Derivation should have committed known-answer
   vectors; user-visible flows should be driven live in the running app before "done."
-- **CI (v0.1.0):** build + clippy + test on macOS/Linux/Windows; deny warnings in `wallet-core`;
+- **CI (v0.1.0):** build + clippy + test on macOS/Linux/Windows; deny warnings in `edw-core`;
   dependency audit (`cargo audit`/`cargo deny`) given the supply-chain principle.
 - **Security review gate:** any PR touching keys, signing, storage, derivation, mixing, or
   the trust boundary requires a second reviewer signing off specifically on secret handling.
