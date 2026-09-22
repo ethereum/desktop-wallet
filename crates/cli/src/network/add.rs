@@ -1,20 +1,36 @@
-use clap::Args;
-use edw_core::network::{db::NetworkDb, endpoint::NetworkEndpointConfig};
+use clap::{Args, ValueEnum};
+use edw_core::network::{
+    DEFAULT_EVENT_BLOCK_RANGE, DEFAULT_LOCAL_NODE_PORT, LocalNodeConfig, NetworkConfigKind,
+    SimpleProviderConfig, db::NetworkDb,
+};
 
 use crate::GlobalArgs;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum NetworkConfigType {
+    #[value(name = "simple-provider")]
+    SimpleProvider,
+    #[value(name = "local-node", alias = "local")]
+    LocalNode,
+}
 
 #[derive(Args, Debug)]
 pub struct NetworkAddArgs {
     name: String,
+    /// `simple-provider` or `local-node` (alias: `local`)
+    #[arg(value_enum, value_name = "TYPE")]
+    kind: NetworkConfigType,
     #[arg(long)]
-    rpc_url: Option<String>,
+    url: Option<String>,
+    #[arg(long)]
+    port: Option<u16>,
+    #[arg(long)]
+    event_block_range: Option<u64>,
 }
 
 #[derive(Args, Debug)]
-pub struct NetworkSetRpcArgs {
-    url: String,
-    #[arg(long)]
-    name: Option<String>,
+pub struct NetworkUseArgs {
+    name: String,
 }
 
 impl NetworkAddArgs {
@@ -29,15 +45,41 @@ impl NetworkAddArgs {
             anyhow::bail!("networkConfig `{}` already exists", self.name);
         }
 
+        let event_block_range = self.event_block_range.unwrap_or(DEFAULT_EVENT_BLOCK_RANGE);
+        let kind = match self.kind {
+            NetworkConfigType::SimpleProvider => {
+                if self.port.is_some() {
+                    anyhow::bail!("--port is only valid for local-node");
+                }
+                let url = match &self.url {
+                    Some(url) => http_url(url)?.to_string(),
+                    None => context.network.default_rpc_url().to_string(),
+                };
+                NetworkConfigKind::SimpleProvider(SimpleProviderConfig {
+                    url,
+                    event_block_range,
+                })
+            }
+            NetworkConfigType::LocalNode => {
+                if self.url.is_some() {
+                    anyhow::bail!("--url is only valid for simple-provider");
+                }
+                NetworkConfigKind::LocalNode(LocalNodeConfig {
+                    port: self.port.unwrap_or(DEFAULT_LOCAL_NODE_PORT),
+                    event_block_range,
+                })
+            }
+        };
+
         let mut config = context.network.default_config();
         config.name = self.name.clone();
-        config.endpoints = match &self.rpc_url {
-            Some(url) => vec![NetworkEndpointConfig::HttpProvider {
-                url: http_url(url)?.to_string(),
-            }],
-            None => vec![],
-        };
-        println!("added {} (chain {})", config.name, config.network_id.0);
+        config.config = kind;
+        println!(
+            "added {} {} (chain {})",
+            config.name,
+            config.config.type_name(),
+            config.network_id.0
+        );
         configs.push(config);
         context.put_network_configs(&configs).await?;
         if context.preferences_db().get_active().await?.is_none() {
@@ -47,18 +89,19 @@ impl NetworkAddArgs {
     }
 }
 
-impl NetworkSetRpcArgs {
+impl NetworkUseArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let url = http_url(&self.url)?;
+        if self.name.is_empty() {
+            anyhow::bail!("networkConfig name cannot be empty");
+        }
+
         let context = global.gather().await?;
-        let (index, mut configs) = context.resolve_config(self.name.as_deref()).await?;
-        configs[index].endpoints = vec![NetworkEndpointConfig::HttpProvider {
-            url: url.to_string(),
-        }];
-        let name = configs[index].name.clone();
-        let chain = configs[index].network_id.0;
-        context.put_network_configs(&configs).await?;
-        println!("updated {name} (chain {chain})");
+        let configs = context.network_configs().await?;
+        if !configs.iter().any(|config| config.name == self.name) {
+            anyhow::bail!("no networkConfig `{}`", self.name);
+        }
+        context.preferences_db().put_active(&self.name).await?;
+        println!("active {}", self.name);
         Ok(())
     }
 }

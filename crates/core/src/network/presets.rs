@@ -1,6 +1,9 @@
 use std::{fmt, str::FromStr};
 
-use crate::network::{NetworkConfig, NetworkId, endpoint::NetworkEndpointConfig};
+use crate::network::{
+    DEFAULT_EVENT_BLOCK_RANGE, DEFAULT_LOCAL_NODE_PORT, LocalNodeConfig, NetworkConfig,
+    NetworkConfigKind, NetworkId, SimpleProviderConfig,
+};
 
 // Placeholder public RPCs for the walking skeleton. Shipping every new
 // instance's traffic to one host is a principle-3 risk (the provider can
@@ -21,7 +24,7 @@ const LOCAL: NetworkPreset = NetworkPreset {
     network_id: NetworkId(31_337),
     name: "Local",
     native_asset: "devEth",
-    rpc_url: "http://localhost:8545",
+    rpc_url: "http://127.0.0.1:8545",
 };
 
 pub const NETWORK_PRESETS: &[NetworkPreset] = &[MAINNET, SEPOLIA, LOCAL];
@@ -61,15 +64,30 @@ impl SupportedNetwork {
     }
 
     #[must_use]
+    pub fn default_rpc_url(self) -> &'static str {
+        self.preset().rpc_url
+    }
+
+    #[must_use]
     pub fn default_config(self) -> NetworkConfig {
         let preset = self.preset();
+        let config = match self {
+            Self::Local => NetworkConfigKind::LocalNode(LocalNodeConfig {
+                port: DEFAULT_LOCAL_NODE_PORT,
+                event_block_range: DEFAULT_EVENT_BLOCK_RANGE,
+            }),
+            Self::Mainnet | Self::Sepolia => {
+                NetworkConfigKind::SimpleProvider(SimpleProviderConfig {
+                    url: preset.rpc_url.to_string(),
+                    event_block_range: DEFAULT_EVENT_BLOCK_RANGE,
+                })
+            }
+        };
         NetworkConfig {
             network_id: preset.network_id,
             name: "default".to_string(),
             native_asset: preset.native_asset.to_string(),
-            endpoints: vec![NetworkEndpointConfig::HttpProvider {
-                url: preset.rpc_url.to_string(),
-            }],
+            config,
         }
     }
 }
@@ -99,22 +117,6 @@ impl NetworkConfig {
     #[must_use]
     pub fn presets() -> &'static [NetworkPreset] {
         NETWORK_PRESETS
-    }
-
-    pub fn from_preset(name_or_id: &str) -> Result<Self, anyhow::Error> {
-        let preset = NETWORK_PRESETS
-            .iter()
-            .find(|p| {
-                p.name.eq_ignore_ascii_case(name_or_id) || p.network_id.0.to_string() == name_or_id
-            })
-            .ok_or_else(|| anyhow::anyhow!("No preset found for name or id: {name_or_id}"))?;
-
-        Ok(Self {
-            network_id: preset.network_id,
-            name: preset.name.to_string(),
-            native_asset: preset.native_asset.to_string(),
-            endpoints: vec![],
-        })
     }
 }
 
@@ -166,14 +168,28 @@ mod tests {
     fn default_config_is_named_default_and_has_a_public_rpc() {
         let local = SupportedNetwork::Local.default_config();
         assert_eq!(local.name, "default");
-        assert_eq!(local.http_rpc_url(), Some("http://localhost:8545"));
+        assert_eq!(
+            local.config,
+            NetworkConfigKind::LocalNode(LocalNodeConfig {
+                port: DEFAULT_LOCAL_NODE_PORT,
+                event_block_range: DEFAULT_EVENT_BLOCK_RANGE,
+            })
+        );
+        assert_eq!(local.http_rpc_url(), "http://127.0.0.1:8545");
         assert_eq!(
             SupportedNetwork::Mainnet.default_config().http_rpc_url(),
-            Some("https://ethereum.publicnode.com")
+            "https://ethereum.publicnode.com"
         );
         assert_eq!(
             SupportedNetwork::Sepolia.default_config().http_rpc_url(),
-            Some("https://ethereum-sepolia-rpc.publicnode.com")
+            "https://ethereum-sepolia-rpc.publicnode.com"
+        );
+        assert_eq!(
+            SupportedNetwork::Mainnet.default_config().config,
+            NetworkConfigKind::SimpleProvider(SimpleProviderConfig {
+                url: "https://ethereum.publicnode.com".to_string(),
+                event_block_range: DEFAULT_EVENT_BLOCK_RANGE,
+            })
         );
     }
 }

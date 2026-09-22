@@ -74,7 +74,7 @@ impl Context {
     ) -> anyhow::Result<(usize, Vec<NetworkConfig>)> {
         let configs = self.network_configs().await?;
         if configs.is_empty() {
-            anyhow::bail!("no networkConfigs; add one with `edw network add <name>`");
+            anyhow::bail!("no networkConfigs; add one with `edw network add <name> <type>`");
         }
         if let Some(name) = name {
             let index = configs
@@ -96,14 +96,7 @@ impl Context {
             url.to_string()
         } else {
             let (index, configs) = self.resolve_config(None).await?;
-            configs[index]
-                .http_rpc_url()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "no RPC endpoint; pass --rpc-url or run `edw network set-rpc <url>`"
-                    )
-                })?
-                .to_string()
+            configs[index].http_rpc_url()
         };
         Ok(SimpleNetworkEndpoint::new_http(url.parse()?))
     }

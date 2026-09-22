@@ -9,7 +9,7 @@ pub async fn run(global: &GlobalArgs) -> Result<(), anyhow::Error> {
 
     if configs.is_empty() {
         println!("No networkConfigs.");
-        println!("Add one with `edw network add <name>`.");
+        println!("Add one with `edw network add <name> <type>`.");
         return Ok(());
     }
 
@@ -19,7 +19,12 @@ pub async fn run(global: &GlobalArgs) -> Result<(), anyhow::Error> {
         } else {
             " "
         };
-        println!("{mark} {} (chain {})", config.name, config.network_id.0);
+        println!(
+            "{mark} {} {} (chain {})",
+            config.name,
+            config.config.type_name(),
+            config.network_id.0
+        );
     }
     Ok(())
 }
