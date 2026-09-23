@@ -13,7 +13,7 @@ use alloy_signer_local::PrivateKeySigner;
 use edw_core::{
     database::{Database, memory::MemoryDatabase},
     factory::{BuildContext, try_build_signer},
-    network::SimpleNetworkEndpoint,
+    network::{NetworkEndpoint, SimpleNetworkEndpoint},
     signer::{Signer, SignerId, simple::SimpleSigner},
 };
 
@@ -43,8 +43,10 @@ async fn signer_pair() -> (SimpleSigner, PrivateKeySigner) {
     (ours, reference)
 }
 
-fn provider() -> SimpleNetworkEndpoint {
-    SimpleNetworkEndpoint::new_http("http://localhost:8545".parse().expect("valid url"))
+fn provider() -> Arc<dyn NetworkEndpoint> {
+    Arc::new(SimpleNetworkEndpoint::new_http(
+        "http://localhost:8545".parse().expect("valid url"),
+    ))
 }
 
 #[tokio::test]

@@ -183,7 +183,7 @@ mod tests {
     use crate::{database::memory::MemoryDatabase, test_support::mocked_provider};
 
     /// Building a [`SimpleSigner`] needs no chain.
-    fn provider() -> crate::network::alloy::SimpleNetworkEndpoint {
+    fn provider() -> Arc<dyn crate::network::NetworkEndpoint> {
         mocked_provider(&Asserter::new())
     }
 

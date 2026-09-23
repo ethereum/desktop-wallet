@@ -25,7 +25,7 @@ pub struct SimpleProfile {
     pub default_executor: (Uuid, Box<dyn Executor>),
     pub vaults: Vec<(Uuid, Box<dyn Vault>)>,
 
-    provider: SimpleNetworkEndpoint,
+    provider: Arc<dyn NetworkEndpoint>,
     db: Arc<dyn Database>,
 }
 
@@ -45,7 +45,7 @@ pub enum SimpleProfileError {
 
 impl SimpleProfile {
     pub async fn new<X, E, F, Fut>(
-        provider: SimpleNetworkEndpoint,
+        provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
         ctor: F,
     ) -> Result<Self, SimpleProfileError>
@@ -70,7 +70,7 @@ impl SimpleProfile {
     }
 
     pub async fn load(
-        provider: SimpleNetworkEndpoint,
+        provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleProfileError> {
         let vault_entries = db.get_vaults().await?;
@@ -152,7 +152,7 @@ impl From<SimpleProfileError> for ProfileError {
 /// Generates a fresh storage scope, builds a [`BuildContext`] against it, and runs
 /// `ctor` against that context.
 async fn build_scoped<T, E, F, Fut>(
-    provider: &SimpleNetworkEndpoint,
+    provider: &Arc<dyn NetworkEndpoint>,
     db: &Arc<dyn Database>,
     ctor: F,
 ) -> Result<(Uuid, T), E>
