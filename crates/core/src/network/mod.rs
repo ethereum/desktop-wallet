@@ -1,4 +1,5 @@
 pub use alloy::SimpleNetworkEndpoint;
+pub use endpoint::NetworkEndpoint;
 pub use presets::SupportedNetwork;
 use serde::{Deserialize, Serialize};
 

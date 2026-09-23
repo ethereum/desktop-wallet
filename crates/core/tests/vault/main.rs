@@ -11,6 +11,7 @@ use edw_core::{
     asset::AssetId,
     database::{Database, memory::MemoryDatabase},
     executor::{Executor, simple::SimpleExecutor},
+    network::{NetworkEndpoint, SimpleNetworkEndpoint},
     signer::{Signer, simple::SimpleSigner},
     vault::{Vault, VaultId, simple::SimpleVault},
 };
@@ -48,6 +49,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
         .wallet(signer.clone())
         .connect_http(rpc_url.parse()?)
         .erased();
+    let endpoint: Arc<dyn NetworkEndpoint> = Arc::new(SimpleNetworkEndpoint::new(provider.clone()));
 
     //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
@@ -64,7 +66,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let executor = SimpleExecutor::new_with_implementation(
         executor_signer,
         implementation_addr,
-        provider.clone().into(),
+        endpoint.clone(),
         executor_db,
     )
     .await?;
@@ -75,7 +77,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let auth = SimpleVault::authorize_implementation(
         vault_signer.as_ref(),
         implementation_addr,
-        &provider.clone().into(),
+        endpoint.as_ref(),
     )
     .await?;
 
@@ -88,7 +90,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let vault = SimpleVault::new_with_implementation(
         vault_signer,
         implementation_addr,
-        provider.clone().into(),
+        endpoint.clone(),
         vault_db,
     )
     .await?;

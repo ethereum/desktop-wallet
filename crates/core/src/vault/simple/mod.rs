@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_provider::Provider;
 use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
 use alloy_sol_types::{SolCall, sol};
 
 use crate::{
     delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
     factory::try_build_signer,
+    network::endpoint::NetworkEndpointError,
     prelude::*,
     signer::{
         Signer,
@@ -36,7 +36,7 @@ const SIMPLE_VAULT_TAG: &str = "simple-vault";
 /// contract to allow the signer to authorize vault transactions for withdrawals.
 pub struct SimpleVault {
     delegate: SimpleDelegate,
-    provider: SimpleNetworkEndpoint,
+    provider: Arc<dyn NetworkEndpoint>,
     #[allow(unused)]
     db: Arc<dyn Database>,
 }
@@ -53,8 +53,8 @@ pub enum SimpleVaultError {
     Factory(#[from] FactoryError),
     #[error("address not authorized")]
     NotAuthorized,
-    #[error("RPC error: {0}")]
-    Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
+    #[error("network error: {0}")]
+    Network(#[from] NetworkEndpointError),
     #[error("sol error: {0}")]
     Sol(#[from] alloy_sol_types::Error),
 }
@@ -75,7 +75,7 @@ impl SimpleVault {
     /// implementation contract.
     pub async fn new(
         signer: Arc<dyn Signer>,
-        provider: SimpleNetworkEndpoint,
+        provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
         Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider, db).await
@@ -88,7 +88,7 @@ impl SimpleVault {
     /// Returns an error if an RPC call fails or if the authorization cannot be signed.
     pub async fn authorization(
         signer: &dyn Signer,
-        provider: &SimpleNetworkEndpoint,
+        provider: &dyn NetworkEndpoint,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
         Self::authorize_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider).await
     }
@@ -122,7 +122,7 @@ impl SimpleVault {
     pub async fn new_with_implementation(
         signer: Arc<dyn Signer>,
         implementation: Address,
-        provider: SimpleNetworkEndpoint,
+        provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
         persist_and_rebuild(
@@ -150,12 +150,9 @@ impl SimpleVault {
     pub async fn authorize_implementation(
         signer: &dyn Signer,
         implementation: Address,
-        provider: &SimpleNetworkEndpoint,
+        provider: &dyn NetworkEndpoint,
     ) -> Result<SignedAuthorization, SimpleVaultError> {
-        let nonce = provider
-            .provider
-            .get_transaction_count(signer.address())
-            .await?;
+        let nonce = provider.transaction_count(signer.address()).await?;
         let auth =
             SimpleDelegate::authorize_implementation(signer, nonce, provider, implementation)
                 .await?;
@@ -218,14 +215,13 @@ impl SimpleVault {
     }
 
     async fn balance_native(&self) -> Result<U256, SimpleVaultError> {
-        let balance = self.provider.provider.get_balance(self.address()).await?;
+        let balance = self.provider.balance(self.address()).await?;
         Ok(balance)
     }
 
     async fn balance_erc20(&self, token: Address) -> Result<U256, SimpleVaultError> {
         let call = Erc20::balanceOfCall::new((self.address(),));
         let data = self
-            .provider
             .provider
             .call(
                 TransactionRequest::default()
