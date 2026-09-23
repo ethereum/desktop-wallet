@@ -11,6 +11,7 @@ use edw_core::{
     database::{Database, memory::MemoryDatabase},
     executor::simple::SimpleExecutor,
     factory::BuildContext,
+    network::{NetworkEndpoint, SimpleNetworkEndpoint},
     profile::{Profile, simple::SimpleProfile},
     signer::{Signer, simple::SimpleSigner},
     vault::simple::SimpleVault,
@@ -46,6 +47,7 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
         .wallet(sponsor.clone())
         .connect_http(rpc_url.parse()?)
         .erased();
+    let endpoint: Arc<dyn NetworkEndpoint> = Arc::new(SimpleNetworkEndpoint::new(provider.clone()));
 
     //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
@@ -57,7 +59,7 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
     //? Construct a profile with a default executor. `SimpleExecutor` authorizes
     //? itself, so no sponsor transaction is needed here.
     let mut profile = SimpleProfile::new(
-        provider.clone().into(),
+        endpoint.clone(),
         db.clone(),
         |ctx: BuildContext| async move {
             let signer: Arc<dyn Signer> = Arc::new(
@@ -85,7 +87,7 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
     let auth = SimpleVault::authorize_implementation(
         auth_signer.as_ref(),
         implementation,
-        &provider.clone().into(),
+        endpoint.as_ref(),
     )
     .await?;
     let tx = TransactionRequest::default()
@@ -107,7 +109,7 @@ async fn test_simple_profile() -> Result<(), Box<dyn std::error::Error>> {
 
     //? Reload the profile from the database and verify every object was
     //? reconstructed without error.
-    let loaded = SimpleProfile::load(provider.clone().into(), db.clone()).await?;
+    let loaded = SimpleProfile::load(endpoint.clone(), db.clone()).await?;
 
     assert_eq!(
         loaded.default_executor.1.id(),

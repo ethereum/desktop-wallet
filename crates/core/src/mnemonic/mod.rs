@@ -58,8 +58,8 @@ pub enum MnemonicError {
     Profile(#[from] crate::profile::simple::ProfileBootstrapError),
     #[error(transparent)]
     ProfileDatabase(#[from] crate::profile::simple::db::SimpleProfileDatabaseError),
-    #[error("rpc error: {0}")]
-    Rpc(#[from] alloy_transport::TransportError),
+    #[error("network error: {0}")]
+    Network(#[from] crate::network::endpoint::NetworkEndpointError),
 }
 
 impl Mnemonic {

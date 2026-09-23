@@ -5,12 +5,11 @@ use alloy_eips::eip7702::{
     Authorization, SignedAuthorization, constants::EIP7702_DELEGATION_DESIGNATOR,
 };
 use alloy_primitives::{Address, Bytes, U256, address};
-use alloy_provider::Provider;
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_sol_types::{Eip712Domain, SolCall, eip712_domain};
 
 use crate::{
-    network::endpoint::NetworkEndpoint,
+    network::endpoint::NetworkEndpointError,
     prelude::*,
     signer::{Signer, SignerError},
 };
@@ -52,17 +51,17 @@ pub const SIMPLE_DELEGATE_ADDRESS: Address = address!("0xACAe14c5d84EA4a1ddb84bF
 /// authorization, then execute signed batches of calls. This is used for atomic
 /// execution of multiple calls and gasless execution for the signer.
 pub struct SimpleDelegate {
-    network_id: u64,
+    chain_id: u64,
     signer: Arc<dyn Signer>,
-    provider: SimpleNetworkEndpoint,
+    provider: Arc<dyn NetworkEndpoint>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum SimpleDelegateError {
     #[error("address not authorized")]
     NotAuthorized,
-    #[error("RPC error: {0}")]
-    Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
+    #[error("network error: {0}")]
+    Network(#[from] NetworkEndpointError),
     #[error("signer error: {0}")]
     Signer(#[from] SignerError),
     #[error("sol error: {0}")]
@@ -78,15 +77,15 @@ impl SimpleDelegate {
     pub async fn new_with_implementation(
         signer: Arc<dyn Signer>,
         implementation: Address,
-        provider: SimpleNetworkEndpoint,
+        provider: Arc<dyn NetworkEndpoint>,
     ) -> Result<Self, SimpleDelegateError> {
-        if !is_delegated(signer.address(), implementation, &provider).await? {
+        if !is_delegated(signer.address(), implementation, provider.as_ref()).await? {
             return Err(SimpleDelegateError::NotAuthorized);
         }
 
-        let network_id = provider.provider.get_chain_id().await?;
+        let chain_id = provider.chain_id().await?;
         Ok(Self {
-            network_id,
+            chain_id,
             signer,
             provider,
         })
@@ -100,13 +99,13 @@ impl SimpleDelegate {
     pub async fn authorize_implementation(
         signer: &dyn Signer,
         nonce: u64,
-        provider: &SimpleNetworkEndpoint,
+        provider: &dyn NetworkEndpoint,
         implementation: Address,
     ) -> Result<SignedAuthorization, SimpleDelegateError> {
-        let network_id = provider.network_id().await?;
+        let chain_id = provider.chain_id().await?;
 
         let authorization = Authorization {
-            chain_id: U256::from(network_id),
+            chain_id: U256::from(chain_id),
             address: implementation,
             nonce,
         };
@@ -155,7 +154,6 @@ impl SimpleDelegate {
         let call = sol::SimpleDelegate::nonceCall::new(());
         let data = self
             .provider
-            .provider
             .call(
                 TransactionRequest::default()
                     .to(self.address())
@@ -171,7 +169,7 @@ impl SimpleDelegate {
         eip712_domain! {
             name: "SimpleDelegate",
             version: "1",
-            chain_id: self.network_id,
+            chain_id: self.chain_id,
             verifying_contract: self.address(),
         }
     }
@@ -182,9 +180,9 @@ impl SimpleDelegate {
 pub async fn is_delegated(
     delegator: Address,
     implementation: Address,
-    provider: &SimpleNetworkEndpoint,
+    provider: &dyn NetworkEndpoint,
 ) -> Result<bool, SimpleDelegateError> {
-    let code = provider.provider.get_code_at(delegator).await?;
+    let code = provider.code_at(delegator).await?;
     let expected = delegation_designator_code(implementation);
     Ok(code == expected)
 }
