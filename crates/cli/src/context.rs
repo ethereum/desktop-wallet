@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use edw_core::{
     database::{
         Database,
@@ -8,7 +9,7 @@ use edw_core::{
     mnemonic::{MnemonicRecord, db::MnemonicDb},
     network::{
         NetworkConfig, NetworkEndpoint, NetworkId, SimpleNetworkEndpoint, SupportedNetwork,
-        db::NetworkDb,
+        db::NetworkDb, verify_chain_id,
     },
     profile::simple::{ProfileRecord, db::SimpleProfileDb, profile_scope},
 };
@@ -104,7 +105,12 @@ impl Context {
             let (index, configs) = self.resolve_config(None).await?;
             configs[index].http_rpc_url()
         };
-        Ok(Arc::new(SimpleNetworkEndpoint::new_http(url.parse()?)))
+        let endpoint: Arc<dyn NetworkEndpoint> =
+            Arc::new(SimpleNetworkEndpoint::new_http(url.parse()?));
+        verify_chain_id(endpoint.as_ref(), self.chain_id())
+            .await
+            .with_context(|| format!("endpoint {url} cannot be used for {}", self.network))?;
+        Ok(endpoint)
     }
 }
 
