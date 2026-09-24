@@ -2,9 +2,17 @@
 
 This document aims to outline used vocabulary, and its definitions.
 
+## Mnemonic
+
+A 12- or 24-word BIP39 English seed phrase stored per network instance, encrypted under that instance's decryption password. Mnemonics are un-named and numbered (`mnemonic 0`, `mnemonic 1`). Index 0 is created on first unlock together with profile 0.
+
+Users name **profiles**, not mnemonics. `edw profile generate` / `import` create a new seed and exactly one profile at a given index (default 0). They do not also create profile 0 when another index is requested. `edw profile add` creates another profile on an existing mnemonic (`--index`, default 0, or `--next` for the smallest unused index). Importing a phrase that is already stored is an error; add a profile on that mnemonic instead. On import, the CLI derives the profile's standard EOAs (`m/44'/60'/<profileIndex>'/0/<addressIndex>`), inspects them on the unlocked network in batches of 10, and continues until a fully unused batch. An EOA counts as used when its nonce is non-zero, it has code, or it has a native ETH balance. It prints addresses through the last used index and `next unused eoa index` (not stored yet).
+
+A **profile** points at a mnemonic by `(mnemonic_index, profile_index)` and does not store the phrase. `profile_index` is the hardened BIP44 account in `m/44'/60'/<profileIndex>'/…`.
+
 ## Profile
 
-A user-facing collection of **signers**, **executors**, and **vaults**. Used to manage and group balances, transactions, history, and other related data.
+A user-facing collection of **signers**, **executors**, and **vaults**. Used to manage and group balances, transactions, history, and other related data. Display names are unique in a network instance. Unnamed index 0 displays as `default`; unnamed later indexes display as `profile #<index>`.
 
 Example:
 
@@ -63,7 +71,8 @@ This should be properly formatted to the users **locale**
 ## Network
 
 A network, sometimes referred to as "chain" aims to track a specific network id.
-Networks are configured wallet-wide.
+Each supported network is a separate wallet instance: its own directory, decryption password, and profiles. Unlocking selects one instance; there is no wallet-wide network list.
+A **networkConfig** is a named typed connection for that instance (for example `simple-provider` or `local-node`), not a list of endpoints. Every networkConfig is forced to the instance chain ID. One networkConfig is active at a time and is what runtime uses.
 
 ### Endpoint
 
