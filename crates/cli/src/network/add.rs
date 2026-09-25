@@ -46,6 +46,9 @@ impl NetworkAddArgs {
         }
 
         let event_block_range = self.event_block_range.unwrap_or(DEFAULT_EVENT_BLOCK_RANGE);
+        if event_block_range == 0 {
+            anyhow::bail!("--event-block-range must be at least 1");
+        }
         let kind = match self.kind {
             NetworkConfigType::SimpleProvider => {
                 if self.port.is_some() {

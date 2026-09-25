@@ -1,7 +1,7 @@
 use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, Bytes, TxHash, U256};
 use alloy_provider::{DynProvider, Provider, ProviderBuilder};
-use alloy_rpc_types_eth::{TransactionReceipt, TransactionRequest};
+use alloy_rpc_types_eth::{Filter, Log, TransactionReceipt, TransactionRequest};
 use async_trait::async_trait;
 use reqwest::Url;
 
@@ -35,6 +35,10 @@ impl NetworkEndpoint for SimpleNetworkEndpoint {
             .get_transaction_count(address)
             .await
             .map_err(backend)
+    }
+
+    async fn logs(&self, filter: &Filter) -> Result<Vec<Log>, NetworkEndpointError> {
+        self.provider.get_logs(filter).await.map_err(backend)
     }
 
     async fn call(&self, tx: TransactionRequest) -> Result<Bytes, NetworkEndpointError> {

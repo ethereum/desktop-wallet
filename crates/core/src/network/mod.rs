@@ -1,11 +1,13 @@
 pub use alloy::SimpleNetworkEndpoint;
 pub use endpoint::NetworkEndpoint;
+pub use logs::logs_in_range;
 pub use presets::SupportedNetwork;
 use serde::{Deserialize, Serialize};
 
 pub mod alloy;
 pub mod db;
 pub mod endpoint;
+pub mod logs;
 pub mod presets;
 
 pub const DEFAULT_EVENT_BLOCK_RANGE: u64 = 500;
