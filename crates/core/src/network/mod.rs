@@ -1,15 +1,19 @@
+use std::num::NonZeroU64;
+
 pub use alloy::SimpleNetworkEndpoint;
 pub use endpoint::NetworkEndpoint;
 use endpoint::NetworkEndpointError;
+pub use logs::logs_in_range;
 pub use presets::SupportedNetwork;
 use serde::{Deserialize, Serialize};
 
 pub mod alloy;
 pub mod db;
 pub mod endpoint;
+pub mod logs;
 pub mod presets;
 
-pub const DEFAULT_EVENT_BLOCK_RANGE: u64 = 500;
+pub const DEFAULT_EVENT_BLOCK_RANGE: NonZeroU64 = NonZeroU64::new(499).expect("non-zero");
 pub const DEFAULT_LOCAL_NODE_PORT: u16 = 8545;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -32,13 +36,13 @@ pub enum NetworkConfigKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimpleProviderConfig {
     pub url: String,
-    pub event_block_range: u64,
+    pub event_block_range: NonZeroU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalNodeConfig {
     pub port: u16,
-    pub event_block_range: u64,
+    pub event_block_range: NonZeroU64,
 }
 
 impl NetworkConfigKind {

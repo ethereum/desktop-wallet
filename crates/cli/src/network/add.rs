@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use clap::{Args, ValueEnum};
 use edw_core::network::{
     DEFAULT_EVENT_BLOCK_RANGE, DEFAULT_LOCAL_NODE_PORT, LocalNodeConfig, NetworkConfigKind,
@@ -25,7 +27,7 @@ pub struct NetworkAddArgs {
     #[arg(long)]
     port: Option<u16>,
     #[arg(long)]
-    event_block_range: Option<u64>,
+    event_block_range: Option<NonZeroU64>,
 }
 
 #[derive(Args, Debug)]
