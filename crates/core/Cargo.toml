@@ -20,6 +20,8 @@ uuid = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 
 argon2 = { workspace = true }
+bip32 = { workspace = true }
+bip39 = { workspace = true }
 chacha20poly1305 = { workspace = true }
 hkdf = { workspace = true }
 sha2 = { workspace = true }
