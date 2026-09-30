@@ -1,6 +1,6 @@
 use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, Bytes, TxHash, U256};
-use alloy_rpc_types_eth::{TransactionReceipt, TransactionRequest};
+use alloy_rpc_types_eth::{Filter, Log, TransactionReceipt, TransactionRequest};
 use async_trait::async_trait;
 
 #[async_trait]
@@ -13,6 +13,10 @@ pub trait NetworkEndpoint: Send + Sync {
     async fn code_at(&self, address: Address) -> Result<Bytes, NetworkEndpointError>;
     /// Also `address`'s next nonce.
     async fn transaction_count(&self, address: Address) -> Result<u64, NetworkEndpointError>;
+
+    /// One request, so a strict endpoint may refuse a wide `filter`. See
+    /// [`logs_in_range`](crate::network::logs_in_range).
+    async fn logs(&self, filter: &Filter) -> Result<Vec<Log>, NetworkEndpointError>;
 
     /// Executes `tx` against the latest block without submitting it.
     async fn call(&self, tx: TransactionRequest) -> Result<Bytes, NetworkEndpointError>;
