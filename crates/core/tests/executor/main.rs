@@ -9,6 +9,7 @@ use edw_core::{
     call::Call,
     database::{Database, memory::MemoryDatabase},
     executor::{Executor, simple::SimpleExecutor},
+    network::{NetworkEndpoint, SimpleNetworkEndpoint},
     signer::{Signer, simple::SimpleSigner},
 };
 use tracing::info;
@@ -44,6 +45,7 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
         .wallet(signer.clone())
         .connect_http(rpc_url.parse()?)
         .erased();
+    let endpoint: Arc<dyn NetworkEndpoint> = Arc::new(SimpleNetworkEndpoint::new(provider.clone()));
 
     //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
@@ -60,7 +62,7 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     let executor = SimpleExecutor::new_with_implementation(
         executor_signer,
         delegate_address,
-        provider.clone().into(),
+        endpoint.clone(),
         executor_db,
     )
     .await?;

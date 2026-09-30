@@ -1,7 +1,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use crate::{
-    database::Database, executor::Executor, network::alloy::SimpleNetworkEndpoint, signer::Signer,
+    database::Database, executor::Executor, network::endpoint::NetworkEndpoint, signer::Signer,
     vault::Vault,
 };
 
@@ -15,7 +15,7 @@ pub struct Factory<T: ?Sized> {
 
 #[derive(Clone)]
 pub struct BuildContext {
-    pub provider: SimpleNetworkEndpoint,
+    pub provider: Arc<dyn NetworkEndpoint>,
     pub db: Arc<dyn Database>,
 }
 
@@ -34,7 +34,7 @@ impl<T: ?Sized> Factory<T> {
 }
 
 impl BuildContext {
-    pub fn new(provider: SimpleNetworkEndpoint, db: Arc<dyn Database>) -> Self {
+    pub fn new(provider: Arc<dyn NetworkEndpoint>, db: Arc<dyn Database>) -> Self {
         Self { provider, db }
     }
 }

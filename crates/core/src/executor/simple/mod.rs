@@ -1,11 +1,10 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use alloy_consensus::TxEnvelope;
 use alloy_network::{
-    NetworkTransactionBuilder, TransactionBuilder, TransactionBuilder7702, TxSigner,
+    EthereumWallet, NetworkTransactionBuilder, TransactionBuilder, TransactionBuilder7702, TxSigner,
 };
 use alloy_primitives::{Address, B256};
-use alloy_provider::{Provider, network::EthereumWallet};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
 use db::{SimpleExecutorDatabaseError, SimpleExecutorDb};
@@ -18,7 +17,7 @@ use crate::{
     },
     executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},
     factory::{BuildContext, Factory, FactoryError, try_build_signer},
-    network::endpoint::NetworkEndpoint,
+    network::endpoint::NetworkEndpointError,
     prelude::*,
     signer::{
         Signer,
@@ -34,12 +33,16 @@ mod db;
 
 const SIMPLE_EXECUTOR_TAG: &str = "simple-executor";
 
+/// The delegate refuses to build until the delegation is on-chain.
+const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(30);
+const AUTHORIZATION_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 /// `SimpleExecutor` is a basic [`Executor`] implementation that uses an signer-based
 /// wallet to execute calls through the `SimpleDelegate` contract.
 pub struct SimpleExecutor {
     delegate: SimpleDelegate,
     wallet: EthereumWallet,
-    provider: SimpleNetworkEndpoint,
+    provider: Arc<dyn NetworkEndpoint>,
     #[allow(unused)]
     db: Arc<dyn Database>,
 }
@@ -56,12 +59,12 @@ pub enum SimpleExecutorError {
     Signer(#[from] SimpleSignerError),
     #[error("factory error: {0}")]
     Factory(#[from] FactoryError),
-    #[error("RPC error: {0}")]
-    Rpc(#[from] alloy_transport::RpcError<alloy_transport::TransportErrorKind>),
+    #[error("network error: {0}")]
+    Network(#[from] NetworkEndpointError),
     #[error("transaction builder error: {0}")]
     Builder(#[from] alloy_network::TransactionBuilderError<alloy_network::Ethereum>),
-    #[error("pending transaction error: {0}")]
-    Pending(#[from] alloy_provider::PendingTransactionError),
+    #[error("authorization {tx} was not mined within {timeout:?}")]
+    AuthorizationNotMined { tx: B256, timeout: Duration },
     #[error("transaction failed with status code")]
     TransactionFailed,
 }
@@ -83,7 +86,7 @@ impl SimpleExecutor {
     /// Returns an error if there is a RPC error.
     pub async fn new(
         signer: Arc<dyn Signer>,
-        provider: SimpleNetworkEndpoint,
+        provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleExecutorError> {
         Self::new_with_implementation(signer, SIMPLE_DELEGATE_ADDRESS, provider, db).await
@@ -94,7 +97,7 @@ impl SimpleExecutor {
     /// # Errors
     /// Returns an error if there is a RPC error.
     pub async fn new_with_random(
-        provider: SimpleNetworkEndpoint,
+        provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleExecutorError> {
         let signer =
@@ -114,7 +117,7 @@ impl SimpleExecutor {
     pub async fn new_with_implementation(
         signer: Arc<dyn Signer>,
         implementation: Address,
-        provider: SimpleNetworkEndpoint,
+        provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleExecutorError> {
         persist_and_rebuild(
@@ -123,7 +126,7 @@ impl SimpleExecutor {
         )
         .await?;
         db.put_implementation(&implementation).await?;
-        Self::authorize_if_missing(implementation, &signer, &provider).await?;
+        Self::authorize_if_missing(implementation, &signer, provider.as_ref()).await?;
 
         let delegate = SimpleDelegate::new_with_implementation(
             signer.clone(),
@@ -163,7 +166,7 @@ impl SimpleExecutor {
     async fn authorize_if_missing(
         implementation: Address,
         signer: &Arc<dyn Signer>,
-        provider: &SimpleNetworkEndpoint,
+        provider: &dyn NetworkEndpoint,
     ) -> Result<(), SimpleExecutorError> {
         let delegator = signer.address();
         if is_delegated(delegator, implementation, provider).await? {
@@ -175,7 +178,7 @@ impl SimpleExecutor {
         );
 
         //? nonce + 1 to account for the authorization transaction
-        let nonce = provider.provider.get_transaction_count(delegator).await? + 1;
+        let nonce = provider.transaction_count(delegator).await? + 1;
         let auth = SimpleDelegate::authorize_implementation(
             signer.as_ref(),
             nonce,
@@ -190,12 +193,8 @@ impl SimpleExecutor {
         let wallet = EthereumWallet::new(signer.clone());
         let envelope = fill_and_sign(tx, provider, &wallet).await?;
 
-        let _ = provider
-            .provider
-            .send_tx_envelope(envelope)
-            .await?
-            .get_receipt()
-            .await?;
+        let hash = provider.send_transaction(envelope).await?;
+        await_authorization(provider, hash).await?;
         Ok(())
     }
 }
@@ -223,8 +222,7 @@ impl Executor for SimpleExecutor {
         let hash = id.0;
         let receipt = self
             .provider
-            .provider
-            .get_transaction_receipt(hash)
+            .receipt(hash)
             .await
             .map_err(|e| ExecutorError::Other(Box::new(e)))?;
 
@@ -245,10 +243,9 @@ impl SimpleExecutor {
             .to(call.target)
             .value(call.value)
             .with_input(call.data);
-        let envelope = fill_and_sign(tx, &self.provider, &self.wallet).await?;
+        let envelope = fill_and_sign(tx, self.provider.as_ref(), &self.wallet).await?;
 
-        let pending_tx = self.provider.provider.send_tx_envelope(envelope).await?;
-        Ok(*pending_tx.tx_hash())
+        Ok(self.provider.send_transaction(envelope).await?)
     }
 }
 
@@ -258,30 +255,49 @@ impl From<SimpleExecutorError> for ExecutorError {
     }
 }
 
-/// Fills the transaction's nonce, network ID, gas limit, and fee parameters, then
+/// Fills the transaction's nonce, chain ID, gas limit, and fee parameters, then
 /// signs it with the wallet.
 async fn fill_and_sign(
     tx: TransactionRequest,
-    provider: &SimpleNetworkEndpoint,
+    provider: &dyn NetworkEndpoint,
     wallet: &EthereumWallet,
 ) -> Result<TxEnvelope, SimpleExecutorError> {
     let from = wallet.default_signer().address();
-    let nonce = provider.provider.get_transaction_count(from).await?;
-    let network_id = provider.network_id().await?;
-    let fees = provider.provider.estimate_eip1559_fees().await?;
+    let nonce = provider.transaction_count(from).await?;
+    let chain_id = provider.chain_id().await?;
+    let fees = provider.estimate_fees().await?;
 
     let tx = tx
         .from(from)
         .nonce(nonce)
-        .with_chain_id(network_id)
+        .with_chain_id(chain_id)
         .with_max_fee_per_gas(fees.max_fee_per_gas)
         .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas);
 
-    let gas_limit = provider.provider.estimate_gas(tx.clone()).await?;
+    let gas_limit = provider.estimate_gas(tx.clone()).await?;
     let tx = tx.with_gas_limit(gas_limit);
 
     let tx_envelope = tx.build(wallet).await?;
     Ok(tx_envelope)
+}
+
+async fn await_authorization(
+    provider: &dyn NetworkEndpoint,
+    tx: B256,
+) -> Result<(), SimpleExecutorError> {
+    let deadline = tokio::time::Instant::now() + AUTHORIZATION_TIMEOUT;
+    loop {
+        if provider.receipt(tx).await?.is_some() {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(SimpleExecutorError::AuthorizationNotMined {
+                tx,
+                timeout: AUTHORIZATION_TIMEOUT,
+            });
+        }
+        tokio::time::sleep(AUTHORIZATION_POLL_INTERVAL).await;
+    }
 }
 
 #[cfg(test)]

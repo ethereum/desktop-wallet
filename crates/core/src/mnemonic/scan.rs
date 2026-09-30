@@ -1,10 +1,9 @@
 use std::future::Future;
 
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_provider::Provider;
 
 use super::{Mnemonic, MnemonicError};
-use crate::network::SimpleNetworkEndpoint;
+use crate::network::NetworkEndpoint;
 
 const BATCH_SIZE: u32 = 10;
 const MAX_INDEX: u32 = 1000;
@@ -46,20 +45,20 @@ impl EoaActivity {
 
 /// Inspects `address` on `provider`. Short-circuits on the first used signal.
 pub async fn inspect_eoa(
-    provider: &SimpleNetworkEndpoint,
+    provider: &dyn NetworkEndpoint,
     address: Address,
 ) -> Result<bool, MnemonicError> {
-    let nonce = provider.provider.get_transaction_count(address).await?;
+    let nonce = provider.transaction_count(address).await?;
     if nonce != 0 {
         return Ok(true);
     }
 
-    let code = provider.provider.get_code_at(address).await?;
+    let code = provider.code_at(address).await?;
     if !code.is_empty() {
         return Ok(true);
     }
 
-    let balance = provider.provider.get_balance(address).await?;
+    let balance = provider.balance(address).await?;
     Ok(EoaActivity {
         nonce,
         code,
@@ -73,12 +72,11 @@ pub async fn inspect_eoa(
 pub async fn scan_standard_eoas(
     mnemonic: &Mnemonic,
     profile_index: impl Into<Option<u32>>,
-    provider: &SimpleNetworkEndpoint,
+    provider: &dyn NetworkEndpoint,
 ) -> Result<EoaScan, MnemonicError> {
     let profile_index = profile_index.into().unwrap_or(0);
-    scan_with(mnemonic, profile_index, |address| {
-        let provider = provider.clone();
-        async move { inspect_eoa(&provider, address).await }
+    scan_with(mnemonic, profile_index, |address| async move {
+        inspect_eoa(provider, address).await
     })
     .await
 }
@@ -268,9 +266,12 @@ mod tests {
     async fn inspect_eoa_short_circuits_on_nonce() {
         let asserter = Asserter::new();
         asserter.push_success(&U64::from(1));
-        let used = inspect_eoa(&mocked_provider(&asserter), Address::repeat_byte(0x11))
-            .await
-            .unwrap();
+        let used = inspect_eoa(
+            mocked_provider(&asserter).as_ref(),
+            Address::repeat_byte(0x11),
+        )
+        .await
+        .unwrap();
         assert!(used);
         assert!(
             asserter.read_q().is_empty(),
@@ -284,9 +285,12 @@ mod tests {
         asserter.push_success(&U64::from(0));
         asserter.push_success(&Bytes::new());
         asserter.push_success(&U256::ZERO);
-        let used = inspect_eoa(&mocked_provider(&asserter), Address::repeat_byte(0x11))
-            .await
-            .unwrap();
+        let used = inspect_eoa(
+            mocked_provider(&asserter).as_ref(),
+            Address::repeat_byte(0x11),
+        )
+        .await
+        .unwrap();
         assert!(!used);
         assert!(asserter.read_q().is_empty());
     }
@@ -296,9 +300,12 @@ mod tests {
         let asserter = Asserter::new();
         asserter.push_success(&U64::from(0));
         asserter.push_success(&Bytes::from_static(&[0xef, 0x01, 0x00]));
-        let used = inspect_eoa(&mocked_provider(&asserter), Address::repeat_byte(0x11))
-            .await
-            .unwrap();
+        let used = inspect_eoa(
+            mocked_provider(&asserter).as_ref(),
+            Address::repeat_byte(0x11),
+        )
+        .await
+        .unwrap();
         assert!(used);
         assert!(
             asserter.read_q().is_empty(),
@@ -312,9 +319,12 @@ mod tests {
         asserter.push_success(&U64::from(0));
         asserter.push_success(&Bytes::new());
         asserter.push_success(&U256::from(1));
-        let used = inspect_eoa(&mocked_provider(&asserter), Address::repeat_byte(0x11))
-            .await
-            .unwrap();
+        let used = inspect_eoa(
+            mocked_provider(&asserter).as_ref(),
+            Address::repeat_byte(0x11),
+        )
+        .await
+        .unwrap();
         assert!(used);
     }
 }

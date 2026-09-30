@@ -149,7 +149,7 @@ async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Er
 
     let provider = context.endpoint(global.rpc_url.as_deref()).await?;
     let parsed = mnemonic.mnemonic()?;
-    let scan = scan_standard_eoas(&parsed, args.index, &provider).await?;
+    let scan = scan_standard_eoas(&parsed, args.index, provider.as_ref()).await?;
     if !scan.addresses.is_empty() {
         let addresses = scan
             .addresses
