@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufRead, IsTerminal},
+    io::{self, BufRead, IsTerminal, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -15,9 +15,14 @@ use edw_core::{
     network::{SupportedNetwork, db::NetworkDb},
     profile::simple::{db::SimpleProfileDb, set_profile_name},
 };
+use serde::Serialize;
 use zeroize::Zeroizing;
 
-use crate::{GlobalArgs, session};
+use crate::{
+    GlobalArgs,
+    output::{self, Report},
+    session,
+};
 
 /// Where a script may pass the decryption password.
 ///
@@ -31,6 +36,47 @@ pub(crate) struct UnlockArgs {
     /// Network to unlock. Defaults to mainnet. Unlocks this network and locks every other.
     #[arg(long, default_value = "mainnet")]
     pub(crate) network: SupportedNetwork,
+}
+
+#[derive(Serialize)]
+pub(crate) struct UnlockReport {
+    network: String,
+    created: bool,
+    /// False after a `created` instance whose phrase was never displayed, so nothing can recover it.
+    recovery_phrase_shown: bool,
+    already_unlocked: bool,
+    locked: Option<String>,
+    /// `None` when the session was held, so the next command needs no unlock.
+    session_error: Option<String>,
+}
+
+impl Report for UnlockReport {
+    fn render(&self, out: &mut dyn Write) -> io::Result<()> {
+        if self.already_unlocked {
+            writeln!(out, "Already unlocked for {}.", self.network)?;
+        } else if let Some(locked) = &self.locked {
+            writeln!(
+                out,
+                "Unlocked {}; {locked} is now locked. Run `edw lock` to lock the wallet.",
+                self.network
+            )?;
+        } else {
+            writeln!(
+                out,
+                "Unlocked {}. Run `edw lock` to lock the wallet.",
+                self.network
+            )?;
+        }
+
+        if let Some(error) = &self.session_error {
+            writeln!(
+                out,
+                "Password accepted, but a session could not be saved: {error}"
+            )?;
+            writeln!(out, "The next command will require `edw unlock` again.")?;
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn network_dir(data_dir: &Path, network: SupportedNetwork) -> PathBuf {
@@ -72,11 +118,12 @@ pub(crate) async fn open_existing_store(
 async fn network_store(
     data_dir: &Path,
     network: SupportedNetwork,
+    non_interactive: bool,
 ) -> Result<(session::Session, Option<Zeroizing<String>>), anyhow::Error> {
     let data_dir = session::canonical_data_dir(data_dir);
     let dir = network_dir(&data_dir, network);
     let initialized = is_initialized(&dir);
-    let password = password(initialized, &dir, network, &data_dir)?;
+    let password = password(initialized, &dir, network, &data_dir, non_interactive)?;
 
     let backend: Arc<dyn Database> = Arc::new(
         FileDatabase::open(&dir)
@@ -135,6 +182,7 @@ fn password(
     dir: &Path,
     network: SupportedNetwork,
     data_dir: &Path,
+    non_interactive: bool,
 ) -> Result<Zeroizing<String>, anyhow::Error> {
     if let Some(value) = std::env::var_os(PASSWORD_ENV) {
         let value = value
@@ -148,6 +196,13 @@ fn password(
         && session.data_dir == data_dir
     {
         return Ok(session.password);
+    }
+
+    if non_interactive {
+        return Err(output::refuse_prompt(
+            "the decryption password",
+            PASSWORD_ENV,
+        ));
     }
 
     if initialized {
@@ -205,6 +260,7 @@ fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
     ))
 }
 
+/// What `unlock` did, minus the recovery phrase, which `--non-interactive` must never carry.
 pub(crate) async fn run_unlock(
     global: &GlobalArgs,
     args: &UnlockArgs,
@@ -213,25 +269,32 @@ pub(crate) async fn run_unlock(
     let network = args.network;
     let dir = network_dir(&data_dir, network);
     let existed = is_initialized(&dir);
+    let quiet = global.non_interactive;
+
     let previous = session::load();
     let was_same = previous
         .as_ref()
         .is_some_and(|s| s.network == network && s.data_dir == data_dir);
     let previous_network = previous.as_ref().map(|s| s.network);
 
-    let (sess, new_phrase) = network_store(&data_dir, network).await?;
+    let (sess, new_phrase) = network_store(&data_dir, network, global.non_interactive).await?;
 
-    if !existed {
+    if !existed && !quiet {
         println!("Encrypted store created at {}.", dir.display());
     }
 
+    let created_mnemonic = new_phrase.is_some();
     if let Some(phrase) = new_phrase {
-        println!("Write this recovery phrase down now. It is shown only this once.");
-        println!();
-        println!("{}", phrase.as_str());
-        println!();
+        // No secret material leaves on the machine-readable path, so the phrase is generated
+        // and never shown.
+        if !quiet {
+            println!("Write this recovery phrase down now. It is shown only this once.");
+            println!();
+            println!("{}", phrase.as_str());
+            println!();
+        }
 
-        if std::io::stdin().is_terminal() {
+        if !quiet && std::io::stdin().is_terminal() {
             let store =
                 open_existing_store(&sess.data_dir, sess.network, sess.password.as_bytes()).await?;
             let profiles = store.clone().scoped(b"profiles").list_profiles().await?;
@@ -241,28 +304,26 @@ pub(crate) async fn run_unlock(
             }
         }
 
-        println!("Mnemonic 0 and profile 0 were created.");
-    }
-
-    match session::store(&sess) {
-        Ok(()) => {
-            if was_same {
-                println!("Already unlocked for {network}.");
-            } else if let Some(previous) = previous_network.filter(|n| *n != network) {
-                println!(
-                    "Unlocked {network}; {previous} is now locked. Run `edw lock` to lock the wallet."
-                );
-            } else {
-                println!("Unlocked {network}. Run `edw lock` to lock the wallet.");
-            }
-        }
-        Err(error) => {
-            println!("Password accepted, but a session could not be saved: {error:#}");
-            println!("The next command will require `edw unlock` again.");
+        if !quiet {
+            println!("Mnemonic 0 and profile 0 were created.");
         }
     }
 
-    Ok(())
+    let session_error = session::store(&sess)
+        .err()
+        .map(|error| format!("{error:#}"));
+    let report = UnlockReport {
+        network: network.to_string(),
+        created: !existed,
+        recovery_phrase_shown: created_mnemonic && !quiet,
+        already_unlocked: was_same && session_error.is_none(),
+        locked: previous_network
+            .filter(|n| *n != network)
+            .map(|n| n.to_string()),
+        session_error,
+    };
+
+    output::emit(global.mode(), &report)
 }
 
 pub(crate) fn run_lock() -> Result<(), anyhow::Error> {
@@ -272,4 +333,31 @@ pub(crate) fn run_lock() -> Result<(), anyhow::Error> {
         println!("Not unlocked; nothing to do.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_session_reports_its_reason() {
+        let report = UnlockReport {
+            network: "local".into(),
+            created: true,
+            recovery_phrase_shown: true,
+            already_unlocked: false,
+            locked: None,
+            session_error: Some("XDG_RUNTIME_DIR is not set".into()),
+        };
+
+        let mut buffer = Vec::new();
+        report.render(&mut buffer).unwrap();
+
+        assert!(
+            String::from_utf8(buffer)
+                .unwrap()
+                .contains("XDG_RUNTIME_DIR is not set")
+        );
+    }
 }

@@ -6,6 +6,7 @@ mod config;
 mod context;
 mod database;
 mod network;
+mod output;
 mod profile;
 mod session;
 mod unlock;
@@ -27,6 +28,9 @@ pub(crate) struct GlobalArgs {
     /// Overrides the unlocked network's endpoint for this invocation.
     #[arg(long, global = true, env = "RPC_URL")]
     pub(crate) rpc_url: Option<String>,
+    /// Emit one JSON document on stdout, never prompt, and fail if an input is missing.
+    #[arg(long, global = true)]
+    pub(crate) non_interactive: bool,
 }
 
 #[derive(Subcommand)]
@@ -49,8 +53,34 @@ enum Command {
     Lock,
 }
 
+impl GlobalArgs {
+    pub(crate) fn mode(&self) -> output::Mode {
+        if self.non_interactive {
+            output::Mode::Json
+        } else {
+            output::Mode::Human
+        }
+    }
+}
+
+impl Command {
+    /// Whether this command emits the single JSON document `--non-interactive` promises.
+    fn emits_json(&self) -> bool {
+        matches!(
+            self,
+            Self::Unlock(_) | Self::Network(network::Command::View)
+        )
+    }
+}
+
 impl Cli {
     pub async fn run(&self) -> Result<(), anyhow::Error> {
+        if self.global.non_interactive && !self.command.emits_json() {
+            anyhow::bail!(
+                "this command has no --non-interactive output yet; run it without the flag"
+            );
+        }
+
         match &self.command {
             Command::Config(args) => args.run(&self.global),
             Command::Profile(args) => args.run(&self.global).await?,

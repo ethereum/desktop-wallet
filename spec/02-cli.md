@@ -119,8 +119,8 @@ on this format.
 non-zero exit when a required input is missing rather than a prompt for it. Diagnostics go to
 stderr so stdout stays parseable.
 
-Whether that JSON shape carries the same compatibility promise as the `edw-core` API is the
-one question this document leaves open, below.
+That JSON shape is explicitly unstable until v1; see [Stability of the JSON
+shape](#stability-of-the-json-shape).
 
 ### Every prompt has a non-interactive equivalent
 
@@ -257,13 +257,21 @@ joining is the privacy property they are buying, and it should be legible rather
 An unrecognized value is an error listing what is supported, so the flag never silently
 resolves to something other than what was asked for.
 
-## Open question
+## Stability of the JSON shape
 
-**Whether the `--non-interactive` JSON shape carries the same compatibility promise as the
-`edw-core` API from v0.1.0, or is explicitly unstable until v1.** Nothing in
-[`00-vision.md`](./00-vision.md) settles this. It is asymmetric: a promise can be added later
-but not withdrawn, and adding it late breaks every harness built in the meantime at least
-once.
+**Decision: the `--non-interactive` JSON shape is explicitly unstable until v1**, while the
+`edw-core` API carries its usual promise from v0.1.0. Nothing in
+[`00-vision.md`](./00-vision.md) settles this, so it is recorded here.
 
-**Proposed: explicitly unstable until v1**, on the reversibility argument, with the shape
-documented from the start so that promising it later is a formality rather than a redesign.
+The reasoning is reversibility. A promise can be added later but not withdrawn, and adding it
+late breaks every harness built in the meantime at least once. So the shape is documented from
+the start, which makes promising it later a formality rather than a redesign.
+
+The first two commands converted showed why the promise would have been premature. `unlock`
+gained and lost a `created` field within a day, and lost `session_held` to a lint capping bools
+per struct, with no behavior change behind either. Both would have been breaking changes to a
+shape nothing had yet consumed.
+
+What this does not license: a shape that changes without reason. A field is still removed or
+renamed only when it is wrong, and a release note still says so. The difference is that doing
+so before v1 is not a compatibility break.
