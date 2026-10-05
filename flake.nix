@@ -35,8 +35,8 @@
       packages.default = import ./nix/package.nix {inherit pkgs rust;};
 
       devShells = {
-        default = import ./nix/devshell.nix {inherit pkgs rust rustfmt;} self;
-        ci = import ./nix/ci.nix {inherit pkgs rust rustfmt;} self;
+        default = import ./nix/devshell.nix {inherit pkgs rust rustfmt;};
+        ci = import ./nix/ci.nix {inherit pkgs rust rustfmt;};
       };
     })
     // {

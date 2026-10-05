@@ -1,4 +1,4 @@
-self: {
+{
   pkgs,
   rust,
   rustfmt,
@@ -6,8 +6,8 @@ self: {
 }:
 pkgs.mkShell {
   packages = with pkgs; [
-    rust
     rustfmt
+    rust
     rust-analyzer
     bacon
     cargo-audit
