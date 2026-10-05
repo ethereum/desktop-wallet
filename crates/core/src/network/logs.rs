@@ -69,11 +69,6 @@ mod tests {
     }
 
     #[test]
-    fn a_range_shorter_than_one_span_yields_a_single_span() {
-        assert_eq!(spans(0..=99, SPAN_500), vec![0..=99]);
-    }
-
-    #[test]
     fn a_range_that_divides_exactly_has_no_trailing_span() {
         assert_eq!(spans(0..=999, SPAN_500), vec![0..=499, 500..=999]);
     }

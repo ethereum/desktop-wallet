@@ -189,7 +189,8 @@ pub async fn is_delegated(
 
 /// Builds the EIP-7702 delegation designator bytecode that an EOA installs
 /// on itself to delegate execution to `implementation`.
-pub(crate) fn delegation_designator_code(implementation: Address) -> Bytes {
+#[must_use]
+pub fn delegation_designator_code(implementation: Address) -> Bytes {
     let mut code = Vec::with_capacity(23);
     code.extend_from_slice(&EIP7702_DELEGATION_DESIGNATOR);
     code.extend_from_slice(implementation.as_slice());

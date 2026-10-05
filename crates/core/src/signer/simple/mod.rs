@@ -150,29 +150,28 @@ impl From<SimpleSignerError> for SignerError {
     }
 }
 
-/// Rebuilds `signer` from `ctx.db` through the factory, and records its tag once that has
-/// succeeded, so a signer that cannot be recovered leaves no tag behind for a later
-/// [`try_build_signer`] to trip over.
-///
-/// Callers that submit on-chain authorization must do this first: otherwise a
-/// [`SimpleSigner::from_key`] (or any signer that has not stored what it needs)
-/// can land a 7702 delegation that cannot be recovered after restart.
-pub(crate) async fn persist_and_rebuild(
-    signer: &dyn Signer,
-    ctx: BuildContext,
-) -> Result<(), FactoryError> {
-    let rebuilt = try_build_signer(signer.tag(), ctx.clone()).await?;
-    if rebuilt.id() != signer.id() {
-        return Err(FactoryError::Other(Box::new(SignerMismatch {
-            persisted: rebuilt.id().to_string(),
-            given: signer.id().to_string(),
-        })));
+impl dyn Signer {
+    /// Rebuilds this signer from `ctx.db` through the factory, and records its tag once that
+    /// has succeeded, so a signer that cannot be recovered leaves no tag behind for a later
+    /// [`try_build_signer`] to trip over.
+    ///
+    /// Callers that submit on-chain authorization must do this first: otherwise a
+    /// [`SimpleSigner::from_key`] (or any signer that has not stored what it needs)
+    /// can land a 7702 delegation that cannot be recovered after restart.
+    pub async fn persist_and_rebuild(&self, ctx: BuildContext) -> Result<(), FactoryError> {
+        let rebuilt = try_build_signer(self.tag(), ctx.clone()).await?;
+        if rebuilt.id() != self.id() {
+            return Err(FactoryError::Other(Box::new(SignerMismatch {
+                persisted: rebuilt.id().to_string(),
+                given: self.id().to_string(),
+            })));
+        }
+        ctx.db
+            .put_signer_tag(self.tag())
+            .await
+            .map_err(|e| FactoryError::Other(Box::new(e)))?;
+        Ok(())
     }
-    ctx.db
-        .put_signer_tag(signer.tag())
-        .await
-        .map_err(|e| FactoryError::Other(Box::new(e)))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -194,7 +193,8 @@ mod tests {
             .await
             .expect("build signer");
 
-        persist_and_rebuild(&original, BuildContext::new(provider(), db.clone()))
+        (&original as &dyn Signer)
+            .persist_and_rebuild(BuildContext::new(provider(), db.clone()))
             .await
             .expect("persist");
 
@@ -210,7 +210,8 @@ mod tests {
         let db: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
         let signer = SimpleSigner::from_key(PrivateKeySigner::random().credential().clone());
 
-        persist_and_rebuild(&signer, BuildContext::new(provider(), db.clone()))
+        (&signer as &dyn Signer)
+            .persist_and_rebuild(BuildContext::new(provider(), db.clone()))
             .await
             .expect_err("from_key has nothing in the database");
 
@@ -227,7 +228,8 @@ mod tests {
             .expect("build signer");
         let other = SimpleSigner::from_key(PrivateKeySigner::random().credential().clone());
 
-        persist_and_rebuild(&other, BuildContext::new(provider(), db))
+        (&other as &dyn Signer)
+            .persist_and_rebuild(BuildContext::new(provider(), db))
             .await
             .expect_err("the stored key rebuilds to a different address");
     }

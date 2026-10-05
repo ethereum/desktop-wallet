@@ -1,6 +1,6 @@
 use clap::Subcommand;
 
-use crate::{GlobalArgs, session};
+use crate::{GlobalArgs, session::Session};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -22,7 +22,7 @@ impl Command {
                     "network_store={}/{{mainnet|sepolia|local}}",
                     global.data_dir.display()
                 );
-                match session::load() {
+                match Session::load() {
                     Some(session) => println!("session={}", session.network),
                     None => println!("session=(locked)"),
                 }

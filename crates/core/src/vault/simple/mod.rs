@@ -11,10 +11,7 @@ use crate::{
     prelude::*,
     signer::{
         Signer,
-        simple::{
-            db::{SimpleSignerDatabaseError, SimpleSignerDb},
-            persist_and_rebuild,
-        },
+        simple::db::{SimpleSignerDatabaseError, SimpleSignerDb},
     },
     vault::simple::db::{SimpleVaultDatabaseError, SimpleVaultDb},
 };
@@ -125,11 +122,9 @@ impl SimpleVault {
         provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleVaultError> {
-        persist_and_rebuild(
-            signer.as_ref(),
-            BuildContext::new(provider.clone(), db.clone()),
-        )
-        .await?;
+        signer
+            .persist_and_rebuild(BuildContext::new(provider.clone(), db.clone()))
+            .await?;
         let delegate =
             SimpleDelegate::new_with_implementation(signer, implementation, provider.clone())
                 .await?;

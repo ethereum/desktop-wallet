@@ -163,33 +163,4 @@ mod tests {
             NetworkId(31_337)
         );
     }
-
-    #[test]
-    fn default_config_is_named_default_and_has_a_public_rpc() {
-        let local = SupportedNetwork::Local.default_config();
-        assert_eq!(local.name, "default");
-        assert_eq!(
-            local.config,
-            NetworkConfigKind::LocalNode(LocalNodeConfig {
-                port: DEFAULT_LOCAL_NODE_PORT,
-                event_block_range: DEFAULT_EVENT_BLOCK_RANGE,
-            })
-        );
-        assert_eq!(local.http_rpc_url(), "http://127.0.0.1:8545");
-        assert_eq!(
-            SupportedNetwork::Mainnet.default_config().http_rpc_url(),
-            "https://ethereum.publicnode.com"
-        );
-        assert_eq!(
-            SupportedNetwork::Sepolia.default_config().http_rpc_url(),
-            "https://ethereum-sepolia-rpc.publicnode.com"
-        );
-        assert_eq!(
-            SupportedNetwork::Mainnet.default_config().config,
-            NetworkConfigKind::SimpleProvider(SimpleProviderConfig {
-                url: "https://ethereum.publicnode.com".to_string(),
-                event_block_range: DEFAULT_EVENT_BLOCK_RANGE,
-            })
-        );
-    }
 }

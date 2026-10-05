@@ -12,13 +12,76 @@ use zeroize::Zeroizing;
 
 const TTL: Duration = Duration::from_mins(15);
 
-pub(crate) struct Session {
-    pub(crate) data_dir: PathBuf,
-    pub(crate) network: SupportedNetwork,
-    pub(crate) password: Zeroizing<String>,
+pub struct Session {
+    pub data_dir: PathBuf,
+    pub network: SupportedNetwork,
+    pub password: Zeroizing<String>,
 }
 
-pub(crate) fn canonical_data_dir(path: &Path) -> PathBuf {
+impl Session {
+    pub fn load() -> Option<Self> {
+        let path = path()?;
+        let raw = Zeroizing::new(fs::read_to_string(&path).ok()?);
+        let mut parts = raw.splitn(4, '\n');
+        let deadline = parts.next()?;
+        let data_dir = parts.next()?;
+        let network = parts.next()?;
+        let password = parts.next()?;
+
+        if now() >= deadline.parse::<u64>().ok()? {
+            let _ = fs::remove_file(&path);
+            return None;
+        }
+
+        let session = Self {
+            data_dir: PathBuf::from(data_dir),
+            network: network.parse().ok()?,
+            password: Zeroizing::new(password.to_string()),
+        };
+        let _ = session.store();
+        Some(session)
+    }
+
+    pub fn store(&self) -> Result<(), anyhow::Error> {
+        let directory =
+            directory().context("XDG_RUNTIME_DIR is not set, so no session can be held")?;
+        fs::create_dir_all(&directory)
+            .with_context(|| format!("error creating {}", directory.display()))?;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+
+        let path = directory.join("session");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .with_context(|| format!("error writing {}", path.display()))?;
+
+        write!(
+            file,
+            "{}\n{}\n{}\n{}",
+            now() + TTL.as_secs(),
+            self.data_dir.display(),
+            self.network,
+            self.password.as_str()
+        )?;
+        Ok(())
+    }
+
+    pub fn clear() -> Result<bool, anyhow::Error> {
+        let Some(path) = path() else {
+            return Ok(false);
+        };
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error).with_context(|| format!("error removing {}", path.display())),
+        }
+    }
+}
+
+pub fn canonical_data_dir(path: &Path) -> PathBuf {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let mut suffix = PathBuf::new();
     let mut cursor = absolute.as_path();
@@ -58,66 +121,6 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-pub(crate) fn load() -> Option<Session> {
-    let path = path()?;
-    let raw = Zeroizing::new(fs::read_to_string(&path).ok()?);
-    let mut parts = raw.splitn(4, '\n');
-    let deadline = parts.next()?;
-    let data_dir = parts.next()?;
-    let network = parts.next()?;
-    let password = parts.next()?;
-
-    if now() >= deadline.parse::<u64>().ok()? {
-        let _ = fs::remove_file(&path);
-        return None;
-    }
-
-    let session = Session {
-        data_dir: PathBuf::from(data_dir),
-        network: network.parse().ok()?,
-        password: Zeroizing::new(password.to_string()),
-    };
-    let _ = store(&session);
-    Some(session)
-}
-
-pub(crate) fn store(session: &Session) -> Result<(), anyhow::Error> {
-    let directory = directory().context("XDG_RUNTIME_DIR is not set, so no session can be held")?;
-    fs::create_dir_all(&directory)
-        .with_context(|| format!("error creating {}", directory.display()))?;
-    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-
-    let path = directory.join("session");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)
-        .with_context(|| format!("error writing {}", path.display()))?;
-
-    write!(
-        file,
-        "{}\n{}\n{}\n{}",
-        now() + TTL.as_secs(),
-        session.data_dir.display(),
-        session.network,
-        session.password.as_str()
-    )?;
-    Ok(())
-}
-
-pub(crate) fn clear() -> Result<bool, anyhow::Error> {
-    let Some(path) = path() else {
-        return Ok(false);
-    };
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("error removing {}", path.display())),
-    }
 }
 
 #[cfg(test)]
@@ -167,8 +170,8 @@ mod tests {
     #[test]
     fn load_returns_what_was_stored() {
         isolated(|| {
-            store(&sample(SupportedNetwork::Sepolia)).unwrap();
-            let loaded = load().unwrap();
+            sample(SupportedNetwork::Sepolia).store().unwrap();
+            let loaded = Session::load().unwrap();
             assert_eq!(loaded.network, SupportedNetwork::Sepolia);
             assert_eq!(loaded.password.as_str(), "secret");
         });
@@ -177,9 +180,9 @@ mod tests {
     #[test]
     fn store_replaces_the_unlocked_network() {
         isolated(|| {
-            store(&sample(SupportedNetwork::Sepolia)).unwrap();
-            store(&sample(SupportedNetwork::Mainnet)).unwrap();
-            assert_eq!(load().unwrap().network, SupportedNetwork::Mainnet);
+            sample(SupportedNetwork::Sepolia).store().unwrap();
+            sample(SupportedNetwork::Mainnet).store().unwrap();
+            assert_eq!(Session::load().unwrap().network, SupportedNetwork::Mainnet);
         });
     }
 }

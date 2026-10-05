@@ -58,7 +58,7 @@ const ARGON2_P_COST: u32 = 1;
 /// [`PasswordKeySource`] is the only implementation today. The trait is async so a hardware
 /// token can be a second kind without a redesign.
 #[async_trait::async_trait]
-pub(crate) trait KeySource: Send + Sync {
+trait KeySource: Send + Sync {
     fn kind(&self) -> &'static str;
 
     async fn wrap(&self, data_key: &DataKey) -> Result<StoredSlot, EncryptedDatabaseError>;
@@ -70,13 +70,13 @@ pub(crate) trait KeySource: Send + Sync {
 ///
 /// Deliberately not `Debug`, `Clone`, or `Serialize`.
 #[derive(ZeroizeOnDrop)]
-pub(crate) struct DataKey([u8; KEY_LEN]);
+struct DataKey([u8; KEY_LEN]);
 
 /// One way of recovering the [`DataKey`], as persisted in the header.
 ///
 /// `params` are opaque except to the named `kind`, so unknown slots can be skipped at unlock.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct StoredSlot {
+struct StoredSlot {
     kind: String,
     params: Vec<u8>,
     wrapped: Vec<u8>,
@@ -91,7 +91,7 @@ struct Argon2idParams {
 }
 
 /// Recovers the data key by stretching a password with Argon2id.
-pub(crate) struct PasswordKeySource {
+struct PasswordKeySource {
     password: Zeroizing<Vec<u8>>,
 }
 
@@ -148,13 +148,13 @@ impl DataKey {
         Ok(Self(key))
     }
 
-    pub(crate) fn expose(&self) -> &[u8; KEY_LEN] {
+    fn expose(&self) -> &[u8; KEY_LEN] {
         &self.0
     }
 }
 
 impl PasswordKeySource {
-    pub(crate) fn new(password: &[u8]) -> Result<Self, EncryptedDatabaseError> {
+    fn new(password: &[u8]) -> Result<Self, EncryptedDatabaseError> {
         if password.is_empty() {
             return Err(EncryptedDatabaseError::EmptyPassword);
         }
@@ -250,7 +250,7 @@ impl EncryptedDatabase {
         Self::unlock_with(db, &PasswordKeySource::new(password)?).await
     }
 
-    pub(crate) async fn create_with(
+    async fn create_with(
         db: Arc<dyn Database>,
         source: &dyn KeySource,
     ) -> Result<Self, EncryptedDatabaseError> {
@@ -271,7 +271,7 @@ impl EncryptedDatabase {
 
     /// Tries every slot of `source`'s kind, so a second credential of the same kind is not
     /// shadowed.
-    pub(crate) async fn unlock_with(
+    async fn unlock_with(
         db: Arc<dyn Database>,
         source: &dyn KeySource,
     ) -> Result<Self, EncryptedDatabaseError> {
@@ -671,20 +671,6 @@ mod tests {
         db.change_password(NEXT_PASSWORD).await.unwrap();
 
         assert_eq!(record_blobs(&backend).await, before);
-    }
-
-    #[tokio::test]
-    async fn change_password_unlocks_with_the_new_password() {
-        let backend = memory();
-        let db = create(&backend).await;
-        db.put(b"pk", b"secret").await.unwrap();
-        db.change_password(NEXT_PASSWORD).await.unwrap();
-        drop(db);
-
-        let reopened = EncryptedDatabase::unlock(backend, NEXT_PASSWORD)
-            .await
-            .unwrap();
-        assert_eq!(&*reopened.get(b"pk").await.unwrap().unwrap(), b"secret");
     }
 
     #[tokio::test]

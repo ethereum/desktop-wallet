@@ -17,7 +17,10 @@ use edw_core::{
 };
 use zeroize::Zeroizing;
 
-use crate::{GlobalArgs, session};
+use crate::{
+    GlobalArgs,
+    session::{self, Session},
+};
 
 /// Where a script may pass the decryption password.
 ///
@@ -27,26 +30,86 @@ use crate::{GlobalArgs, session};
 const PASSWORD_ENV: &str = "EDW_DECRYPTION_PASSWORD";
 
 #[derive(Args, Debug)]
-pub(crate) struct UnlockArgs {
+pub struct UnlockArgs {
     /// Network to unlock. Defaults to mainnet. Unlocks this network and locks every other.
     #[arg(long, default_value = "mainnet")]
-    pub(crate) network: SupportedNetwork,
+    network: SupportedNetwork,
 }
 
-pub(crate) fn network_dir(data_dir: &Path, network: SupportedNetwork) -> PathBuf {
+impl UnlockArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let data_dir = session::canonical_data_dir(&global.data_dir);
+        let network = self.network;
+        let dir = network_dir(&data_dir, network);
+        let existed = is_initialized(&dir);
+        let previous = Session::load();
+        let was_same = previous
+            .as_ref()
+            .is_some_and(|s| s.network == network && s.data_dir == data_dir);
+        let previous_network = previous.as_ref().map(|s| s.network);
+
+        let (sess, new_phrase) = network_store(&data_dir, network).await?;
+
+        if !existed {
+            println!("Encrypted store created at {}.", dir.display());
+        }
+
+        if let Some(phrase) = new_phrase {
+            println!("Write this recovery phrase down now. It is shown only this once.");
+            println!();
+            println!("{}", phrase.as_str());
+            println!();
+
+            if std::io::stdin().is_terminal() {
+                let store =
+                    open_existing_store(&sess.data_dir, sess.network, sess.password.as_bytes())
+                        .await?;
+                let profiles = store.clone().scoped(b"profiles").list_profiles().await?;
+                let name = crate::profile::prompt_profile_name(None, &profiles, 0, Some((0, 0)))?;
+                if name.is_some() {
+                    set_profile_name(store, 0, 0, name).await?;
+                }
+            }
+
+            println!("Mnemonic 0 and profile 0 were created.");
+        }
+
+        match sess.store() {
+            Ok(()) => {
+                if was_same {
+                    println!("Already unlocked for {network}.");
+                } else if let Some(previous) = previous_network.filter(|n| *n != network) {
+                    println!(
+                        "Unlocked {network}; {previous} is now locked. Run `edw lock` to lock the wallet."
+                    );
+                } else {
+                    println!("Unlocked {network}. Run `edw lock` to lock the wallet.");
+                }
+            }
+            Err(error) => {
+                println!("Password accepted, but a session could not be saved: {error:#}");
+                println!("The next command will require `edw unlock` again.");
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn network_dir(data_dir: &Path, network: SupportedNetwork) -> PathBuf {
     data_dir.join(network.slug())
 }
 
 /// Whether an encrypted store already exists, checked before anything can create one.
-pub(crate) fn is_initialized(dir: &Path) -> bool {
+fn is_initialized(dir: &Path) -> bool {
     fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
 
-pub(crate) fn locked_error() -> anyhow::Error {
+pub fn locked_error() -> anyhow::Error {
     anyhow::anyhow!("wallet is locked; run `edw unlock`")
 }
 
-pub(crate) async fn open_existing_store(
+pub async fn open_existing_store(
     data_dir: &Path,
     network: SupportedNetwork,
     password: &[u8],
@@ -72,7 +135,7 @@ pub(crate) async fn open_existing_store(
 async fn network_store(
     data_dir: &Path,
     network: SupportedNetwork,
-) -> Result<(session::Session, Option<Zeroizing<String>>), anyhow::Error> {
+) -> Result<(Session, Option<Zeroizing<String>>), anyhow::Error> {
     let data_dir = session::canonical_data_dir(data_dir);
     let dir = network_dir(&data_dir, network);
     let initialized = is_initialized(&dir);
@@ -120,7 +183,7 @@ async fn network_store(
     };
 
     Ok((
-        session::Session {
+        Session {
             data_dir,
             network,
             password,
@@ -143,7 +206,7 @@ fn password(
         return Ok(Zeroizing::new(value));
     }
 
-    if let Some(session) = session::load()
+    if let Some(session) = Session::load()
         && session.network == network
         && session.data_dir == data_dir
     {
@@ -205,68 +268,8 @@ fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
     ))
 }
 
-pub(crate) async fn run_unlock(
-    global: &GlobalArgs,
-    args: &UnlockArgs,
-) -> Result<(), anyhow::Error> {
-    let data_dir = session::canonical_data_dir(&global.data_dir);
-    let network = args.network;
-    let dir = network_dir(&data_dir, network);
-    let existed = is_initialized(&dir);
-    let previous = session::load();
-    let was_same = previous
-        .as_ref()
-        .is_some_and(|s| s.network == network && s.data_dir == data_dir);
-    let previous_network = previous.as_ref().map(|s| s.network);
-
-    let (sess, new_phrase) = network_store(&data_dir, network).await?;
-
-    if !existed {
-        println!("Encrypted store created at {}.", dir.display());
-    }
-
-    if let Some(phrase) = new_phrase {
-        println!("Write this recovery phrase down now. It is shown only this once.");
-        println!();
-        println!("{}", phrase.as_str());
-        println!();
-
-        if std::io::stdin().is_terminal() {
-            let store =
-                open_existing_store(&sess.data_dir, sess.network, sess.password.as_bytes()).await?;
-            let profiles = store.clone().scoped(b"profiles").list_profiles().await?;
-            let name = crate::profile::prompt_profile_name(None, &profiles, 0, Some((0, 0)))?;
-            if name.is_some() {
-                set_profile_name(store, 0, 0, name).await?;
-            }
-        }
-
-        println!("Mnemonic 0 and profile 0 were created.");
-    }
-
-    match session::store(&sess) {
-        Ok(()) => {
-            if was_same {
-                println!("Already unlocked for {network}.");
-            } else if let Some(previous) = previous_network.filter(|n| *n != network) {
-                println!(
-                    "Unlocked {network}; {previous} is now locked. Run `edw lock` to lock the wallet."
-                );
-            } else {
-                println!("Unlocked {network}. Run `edw lock` to lock the wallet.");
-            }
-        }
-        Err(error) => {
-            println!("Password accepted, but a session could not be saved: {error:#}");
-            println!("The next command will require `edw unlock` again.");
-        }
-    }
-
-    Ok(())
-}
-
-pub(crate) fn run_lock() -> Result<(), anyhow::Error> {
-    if session::clear()? {
+pub fn run_lock() -> Result<(), anyhow::Error> {
+    if Session::clear()? {
         println!("Locked.");
     } else {
         println!("Not unlocked; nothing to do.");
