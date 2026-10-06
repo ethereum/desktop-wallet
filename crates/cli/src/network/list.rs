@@ -1,5 +1,4 @@
 use clap::Args;
-use edw_core::network::db::NetworkDb;
 
 use crate::GlobalArgs;
 
@@ -8,9 +7,9 @@ pub struct NetworkListArgs {}
 
 impl NetworkListArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let context = global.gather().await?;
-        let configs = context.network_configs().await?;
-        let active = context.preferences_db().get_active().await?;
+        let instance = global.open().await?;
+        let configs = instance.network_configs().await?;
+        let active = instance.active_network_config_name().await?;
 
         if configs.is_empty() {
             println!("No networkConfigs.");
@@ -26,9 +25,7 @@ impl NetworkListArgs {
             };
             println!(
                 "{mark} {} {} (network id {})",
-                config.name,
-                config.config.type_name(),
-                config.network_id.0
+                config.name, config.config, config.network_id.0
             );
         }
         Ok(())

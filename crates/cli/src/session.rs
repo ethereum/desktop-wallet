@@ -2,19 +2,19 @@ use std::{
     fs,
     io::Write,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
-use edw_core::network::SupportedNetwork;
+use edw_core::network::NetworkId;
 use zeroize::Zeroizing;
 
 const TTL: Duration = Duration::from_mins(15);
 
 pub struct Session {
     pub data_dir: PathBuf,
-    pub network: SupportedNetwork,
+    pub network: NetworkId,
     pub password: Zeroizing<String>,
 }
 
@@ -82,29 +82,6 @@ impl Session {
     }
 }
 
-// TODO: maybe replace or relocate: resolve the data dir once where GlobalArgs is parsed.
-pub fn canonical_data_dir(path: &Path) -> PathBuf {
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut suffix = PathBuf::new();
-    let mut cursor = absolute.as_path();
-    loop {
-        if let Ok(canonical) = fs::canonicalize(cursor) {
-            return if suffix.as_os_str().is_empty() {
-                canonical
-            } else {
-                canonical.join(suffix)
-            };
-        }
-        match (cursor.file_name(), cursor.parent()) {
-            (Some(name), Some(parent)) if parent != cursor => {
-                suffix = Path::new(name).join(suffix);
-                cursor = parent;
-            }
-            _ => return absolute,
-        }
-    }
-}
-
 // TODO: maybe replace or relocate: runtime-dir lookup plus a test hook; Session should own its path.
 fn directory() -> Option<PathBuf> {
     #[cfg(test)]
@@ -154,7 +131,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    fn sample(network: SupportedNetwork) -> Session {
+    fn sample(network: NetworkId) -> Session {
         Session {
             data_dir: PathBuf::from("/tmp/edw-data"),
             network,
@@ -163,21 +140,11 @@ mod tests {
     }
 
     #[test]
-    fn canonical_data_dir_resolves_a_missing_leaf() {
-        let parent = std::env::temp_dir();
-        let missing = parent.join("edw-missing-leaf");
-        assert_eq!(
-            canonical_data_dir(&missing),
-            fs::canonicalize(&parent).unwrap().join("edw-missing-leaf")
-        );
-    }
-
-    #[test]
     fn load_returns_what_was_stored() {
         isolated(|| {
-            sample(SupportedNetwork::Sepolia).store().unwrap();
+            sample(NetworkId(11_155_111)).store().unwrap();
             let loaded = Session::load().unwrap();
-            assert_eq!(loaded.network, SupportedNetwork::Sepolia);
+            assert_eq!(loaded.network, NetworkId(11_155_111));
             assert_eq!(loaded.password.as_str(), "secret");
         });
     }
@@ -185,9 +152,9 @@ mod tests {
     #[test]
     fn store_replaces_the_unlocked_network() {
         isolated(|| {
-            sample(SupportedNetwork::Sepolia).store().unwrap();
-            sample(SupportedNetwork::Mainnet).store().unwrap();
-            assert_eq!(Session::load().unwrap().network, SupportedNetwork::Mainnet);
+            sample(NetworkId(11_155_111)).store().unwrap();
+            sample(NetworkId(1337)).store().unwrap();
+            assert_eq!(Session::load().unwrap().network, NetworkId(1337));
         });
     }
 }

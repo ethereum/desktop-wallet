@@ -39,12 +39,8 @@ pub async fn bootstrap_profile(
         });
     }
 
-    let record = ProfileRecord {
-        mnemonic_index,
-        profile_index,
-        name: empty_to_none(name),
-    };
-    ensure_unique_display_name(&profiles, &record, None)?;
+    let record = ProfileRecord::new(mnemonic_index, profile_index, name);
+    record.check_unique_name(&profiles)?;
     let profile_db = store.scoped(profile_scope(mnemonic_index, profile_index).as_bytes());
     profile_db
         .put_pointer(mnemonic_index, profile_index)
@@ -88,10 +84,10 @@ pub async fn set_profile_name(
                 "{mnemonic_index}/{profile_index}"
             )));
         };
-        record.name = empty_to_none(name);
+        *record = ProfileRecord::new(mnemonic_index, profile_index, name);
         record.clone()
     };
-    ensure_unique_display_name(&profiles, &updated, Some((mnemonic_index, profile_index)))?;
+    updated.check_unique_name(&profiles)?;
     index_db.put_profiles(&profiles).await?;
     Ok(updated)
 }
@@ -160,34 +156,6 @@ pub fn profile_scope(mnemonic_index: u32, profile_index: u32) -> String {
 fn parse_profile_pair(selector: &str) -> Option<(u32, u32)> {
     let (left, right) = selector.split_once('/')?;
     Some((left.parse().ok()?, right.parse().ok()?))
-}
-
-// TODO: maybe replace or relocate: duplicated by the CLI's empty_name.
-fn empty_to_none(name: Option<String>) -> Option<String> {
-    match name {
-        Some(name) if name.is_empty() || name == "-" => None,
-        other => other,
-    }
-}
-
-// TODO: maybe replace or relocate: duplicated by the CLI's prompt_profile_name.
-fn ensure_unique_display_name(
-    profiles: &[ProfileRecord],
-    candidate: &ProfileRecord,
-    except: Option<(u32, u32)>,
-) -> Result<(), ProfileBootstrapError> {
-    let display = candidate.display_name();
-    let taken = profiles.iter().any(|profile| {
-        if except == Some((profile.mnemonic_index, profile.profile_index)) {
-            return false;
-        }
-        profile.display_name() == display
-    });
-    if taken {
-        Err(ProfileBootstrapError::DuplicateName(display))
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

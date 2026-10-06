@@ -1,10 +1,7 @@
 use std::num::NonZeroU64;
 
 use clap::{Args, ValueEnum};
-use edw_core::network::{
-    DEFAULT_EVENT_BLOCK_RANGE, DEFAULT_LOCAL_NODE_PORT, LocalNodeConfig, NetworkConfigKind,
-    SimpleProviderConfig, db::NetworkDb,
-};
+use edw_core::instance::NetworkConfigSpec;
 
 use crate::GlobalArgs;
 
@@ -37,83 +34,40 @@ pub struct NetworkUseArgs {
 
 impl NetworkAddArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        if self.name.is_empty() {
-            anyhow::bail!("networkConfig name cannot be empty");
-        }
-
-        let context = global.gather().await?;
-        let mut configs = context.network_configs().await?;
-        if configs.iter().any(|config| config.name == self.name) {
-            anyhow::bail!("networkConfig `{}` already exists", self.name);
-        }
-
-        let event_block_range = self.event_block_range.unwrap_or(DEFAULT_EVENT_BLOCK_RANGE);
-        let kind = match self.kind {
+        let spec = match self.kind {
             NetworkConfigType::SimpleProvider => {
                 if self.port.is_some() {
                     anyhow::bail!("--port is only valid for local-node");
                 }
-                let url = match &self.url {
-                    Some(url) => http_url(url)?.to_string(),
-                    None => context.network.default_rpc_url().to_string(),
-                };
-                NetworkConfigKind::SimpleProvider(SimpleProviderConfig {
-                    url,
-                    event_block_range,
-                })
+                NetworkConfigSpec::SimpleProvider {
+                    url: self.url.clone(),
+                }
             }
             NetworkConfigType::LocalNode => {
                 if self.url.is_some() {
                     anyhow::bail!("--url is only valid for simple-provider");
                 }
-                NetworkConfigKind::LocalNode(LocalNodeConfig {
-                    port: self.port.unwrap_or(DEFAULT_LOCAL_NODE_PORT),
-                    event_block_range,
-                })
+                NetworkConfigSpec::LocalNode { port: self.port }
             }
         };
 
-        let mut config = context.network.default_config();
-        config.name = self.name.clone();
-        config.config = kind;
+        let config = global
+            .open()
+            .await?
+            .add_network_config(self.name.clone(), spec, self.event_block_range)
+            .await?;
         println!(
             "added {} {} (network id {})",
-            config.name,
-            config.config.type_name(),
-            config.network_id.0
+            config.name, config.config, config.network_id.0
         );
-        configs.push(config);
-        context.put_network_configs(&configs).await?;
-        if context.preferences_db().get_active().await?.is_none() {
-            context.preferences_db().put_active(&self.name).await?;
-        }
         Ok(())
     }
 }
 
 impl NetworkUseArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        if self.name.is_empty() {
-            anyhow::bail!("networkConfig name cannot be empty");
-        }
-
-        let context = global.gather().await?;
-        let configs = context.network_configs().await?;
-        if !configs.iter().any(|config| config.name == self.name) {
-            anyhow::bail!("no networkConfig `{}`", self.name);
-        }
-        context.preferences_db().put_active(&self.name).await?;
+        global.open().await?.use_network_config(&self.name).await?;
         println!("active {}", self.name);
         Ok(())
-    }
-}
-
-// TODO: maybe replace or relocate: validate at parse time with a clap value_parser or a Url type.
-fn http_url(url: &str) -> Result<&str, anyhow::Error> {
-    let url = url.trim();
-    if url.starts_with("http://") || url.starts_with("https://") {
-        Ok(url)
-    } else {
-        anyhow::bail!("RPC URL must be an http or https URL")
     }
 }

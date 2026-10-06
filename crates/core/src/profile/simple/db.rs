@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::bootstrap::ProfileBootstrapError;
 use crate::database::{Database, DatabaseError};
 
 #[async_trait::async_trait]
@@ -87,6 +88,31 @@ pub enum SimpleProfileDatabaseError {
 impl<D: Database + ?Sized> SimpleProfileDb for D {}
 
 impl ProfileRecord {
+    /// Treats an empty name or `-` as no name.
+    #[must_use]
+    pub fn new(mnemonic_index: u32, profile_index: u32, name: Option<String>) -> Self {
+        Self {
+            mnemonic_index,
+            profile_index,
+            name: name.filter(|name| !name.is_empty() && name != "-"),
+        }
+    }
+
+    /// Rejects `self` if another profile in `profiles` has the same display name.
+    pub fn check_unique_name(&self, profiles: &[Self]) -> Result<(), ProfileBootstrapError> {
+        let display = self.display_name();
+        let taken = profiles.iter().any(|profile| {
+            (profile.mnemonic_index, profile.profile_index)
+                != (self.mnemonic_index, self.profile_index)
+                && profile.display_name() == display
+        });
+        if taken {
+            Err(ProfileBootstrapError::DuplicateName(display))
+        } else {
+            Ok(())
+        }
+    }
+
     #[must_use]
     pub fn display_name(&self) -> String {
         match self.name.as_deref() {

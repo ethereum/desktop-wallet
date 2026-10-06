@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand};
 
-use crate::{context::GlobalArgs, session::Session};
+use crate::{global_args::GlobalArgs, session::Session};
 
 mod config;
-mod context;
 mod database;
+mod global_args;
 mod network;
 mod profile;
 mod session;

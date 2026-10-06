@@ -14,13 +14,14 @@ impl Command {
     pub fn run(&self, global: &GlobalArgs) {
         match self {
             Command::Path => {
-                println!("{}", global.data_dir.display());
+                println!("{}", global.data_dir().path().display());
             }
             Command::View => {
-                println!("data_dir={}", global.data_dir.display());
+                let data_dir = global.data_dir();
+                println!("data_dir={}", data_dir.path().display());
                 println!(
-                    "network_store={}/{{mainnet|sepolia|local}}",
-                    global.data_dir.display()
+                    "network_store={}/<mainnet|sepolia|local|network id>",
+                    data_dir.path().display()
                 );
                 match Session::load() {
                     Some(session) => println!("session={}", session.network),
