@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use alloy_consensus::TxEnvelope;
 use alloy_network::{
     EthereumWallet, NetworkTransactionBuilder, TransactionBuilder, TransactionBuilder7702, TxSigner,
 };
@@ -12,9 +11,7 @@ use tracing::info;
 
 use crate::{
     call::Call,
-    delegate::simple::{
-        SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated,
-    },
+    delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
     executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},
     factory::{BuildContext, Factory, FactoryError},
     network::endpoint::NetworkEndpointError,
@@ -167,7 +164,7 @@ impl SimpleExecutor {
         provider: &dyn NetworkEndpoint,
     ) -> Result<(), SimpleExecutorError> {
         let delegator = signer.address();
-        if is_delegated(delegator, implementation, provider).await? {
+        if provider.delegation_of(delegator).await? == Some(implementation) {
             return Ok(());
         }
 
@@ -189,10 +186,23 @@ impl SimpleExecutor {
             .to(Address::ZERO)
             .with_authorization_list(vec![auth]);
         let wallet = EthereumWallet::new(signer.clone());
-        let envelope = fill_and_sign(tx, provider, &wallet).await?;
+        let envelope = provider
+            .fill_transaction(tx, delegator)
+            .await?
+            .build(&wallet)
+            .await?;
 
         let hash = provider.send_transaction(envelope).await?;
-        await_authorization(provider, hash).await?;
+        if provider
+            .await_receipt(hash, AUTHORIZATION_TIMEOUT, AUTHORIZATION_POLL_INTERVAL)
+            .await?
+            .is_none()
+        {
+            return Err(SimpleExecutorError::AuthorizationNotMined {
+                tx: hash,
+                timeout: AUTHORIZATION_TIMEOUT,
+            });
+        }
         Ok(())
     }
 }
@@ -241,7 +251,12 @@ impl SimpleExecutor {
             .to(call.target)
             .value(call.value)
             .with_input(call.data);
-        let envelope = fill_and_sign(tx, self.provider.as_ref(), &self.wallet).await?;
+        let envelope = self
+            .provider
+            .fill_transaction(tx, self.wallet.default_signer().address())
+            .await?
+            .build(&self.wallet)
+            .await?;
 
         Ok(self.provider.send_transaction(envelope).await?)
     }
@@ -250,53 +265,6 @@ impl SimpleExecutor {
 impl From<SimpleExecutorError> for ExecutorError {
     fn from(err: SimpleExecutorError) -> Self {
         ExecutorError::Other(Box::new(err))
-    }
-}
-
-// TODO: maybe replace or relocate: one caller; inline into SimpleExecutor::send or make it a method.
-/// Fills the transaction's nonce, network id, gas limit, and fee parameters, then
-/// signs it with the wallet.
-async fn fill_and_sign(
-    tx: TransactionRequest,
-    provider: &dyn NetworkEndpoint,
-    wallet: &EthereumWallet,
-) -> Result<TxEnvelope, SimpleExecutorError> {
-    let from = wallet.default_signer().address();
-    let nonce = provider.transaction_count(from).await?;
-    let network_id = provider.network_id().await?;
-    let fees = provider.estimate_fees().await?;
-
-    let tx = tx
-        .from(from)
-        .nonce(nonce)
-        .with_chain_id(network_id)
-        .with_max_fee_per_gas(fees.max_fee_per_gas)
-        .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas);
-
-    let gas_limit = provider.estimate_gas(tx.clone()).await?;
-    let tx = tx.with_gas_limit(gas_limit);
-
-    let tx_envelope = tx.build(wallet).await?;
-    Ok(tx_envelope)
-}
-
-// TODO: maybe replace or relocate: receipt polling belongs on NetworkEndpoint.
-async fn await_authorization(
-    provider: &dyn NetworkEndpoint,
-    tx: B256,
-) -> Result<(), SimpleExecutorError> {
-    let deadline = tokio::time::Instant::now() + AUTHORIZATION_TIMEOUT;
-    loop {
-        if provider.receipt(tx).await?.is_some() {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(SimpleExecutorError::AuthorizationNotMined {
-                tx,
-                timeout: AUTHORIZATION_TIMEOUT,
-            });
-        }
-        tokio::time::sleep(AUTHORIZATION_POLL_INTERVAL).await;
     }
 }
 

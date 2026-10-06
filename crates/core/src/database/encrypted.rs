@@ -102,6 +102,20 @@ struct KeystoreHeader {
     slots: Vec<StoredSlot>,
 }
 
+/// An XChaCha20-Poly1305 key: the per-record key, or a password-stretched wrapping key.
+///
+/// Deliberately not `Debug`, `Clone`, or `Serialize`.
+struct SealingKey(Zeroizing<[u8; KEY_LEN]>);
+
+/// What a sealed value is bound to.
+///
+/// The domain keeps record AAD apart from slot AAD. Without it, an unscoped record named
+/// `argon2id-password` would share AAD with the password slot.
+enum Aad<'a> {
+    Record(&'a [u8]),
+    Slot(&'a str),
+}
+
 /// Encrypts every record written to an inner [`Database`].
 pub struct EncryptedDatabase {
     db: Arc<dyn Database>,
@@ -174,18 +188,8 @@ impl KeySource for PasswordKeySource {
         let mut salt = vec![0u8; SALT_LEN];
         OsRng.fill_bytes(&mut salt);
 
-        let wrapping_key = derive_wrapping_key(
-            &self.password,
-            &salt,
-            ARGON2_M_COST,
-            ARGON2_T_COST,
-            ARGON2_P_COST,
-        )?;
-        let wrapped = seal_with(
-            &wrapping_key,
-            &slot_associated_data(PASSWORD_SLOT_KIND),
-            data_key.expose(),
-        )?;
+        let wrapped = SealingKey::from_password(&self.password, &salt)?
+            .seal(&Aad::Slot(PASSWORD_SLOT_KIND), data_key.expose())?;
 
         let params = Argon2idParams {
             m_cost: ARGON2_M_COST,
@@ -213,19 +217,9 @@ impl KeySource for PasswordKeySource {
             return Err(EncryptedDatabaseError::UnsupportedParameters);
         }
 
-        let wrapping_key = derive_wrapping_key(
-            &self.password,
-            &params.salt,
-            params.m_cost,
-            params.t_cost,
-            params.p_cost,
-        )?;
-        let plaintext = open_with(
-            &wrapping_key,
-            &slot_associated_data(PASSWORD_SLOT_KIND),
-            &slot.wrapped,
-        )
-        .map_err(|_| EncryptedDatabaseError::InvalidPassword)?;
+        let plaintext = SealingKey::from_password(&self.password, &params.salt)?
+            .open(&Aad::Slot(PASSWORD_SLOT_KIND), &slot.wrapped)
+            .map_err(|_| EncryptedDatabaseError::InvalidPassword)?;
 
         DataKey::from_slice(&plaintext)
     }
@@ -264,7 +258,7 @@ impl EncryptedDatabase {
             version: STORE_VERSION,
             slots: vec![source.wrap(&data_key).await?],
         };
-        db.put(HEADER_KEY, &postcard::to_stdvec(&header)?).await?;
+        header.write(db.as_ref()).await?;
 
         Ok(Self { db, data_key })
     }
@@ -275,7 +269,7 @@ impl EncryptedDatabase {
         db: Arc<dyn Database>,
         source: &dyn KeySource,
     ) -> Result<Self, EncryptedDatabaseError> {
-        let header = read_header(&db).await?;
+        let header = KeystoreHeader::read(db.as_ref()).await?;
 
         let mut last_error = EncryptedDatabaseError::NoMatchingSlot(source.kind());
         for slot in header.slots.iter().filter(|s| s.kind == source.kind()) {
@@ -307,20 +301,18 @@ impl EncryptedDatabase {
         let source = PasswordKeySource::new(new_password)?;
         let slot = source.wrap(&self.data_key).await?;
 
-        let mut header = read_header(&self.db).await?;
+        let mut header = KeystoreHeader::read(self.db.as_ref()).await?;
         header
             .slots
             .retain(|existing| existing.kind != PASSWORD_SLOT_KIND);
         header.slots.push(slot);
-        self.db
-            .put(HEADER_KEY, &postcard::to_stdvec(&header)?)
-            .await?;
+        header.write(self.db.as_ref()).await?;
         Ok(())
     }
 
     /// Kind tag of each header slot, in index order.
     pub async fn slot_kinds(&self) -> Result<Vec<String>, EncryptedDatabaseError> {
-        let header = read_header(&self.db).await?;
+        let header = KeystoreHeader::read(self.db.as_ref()).await?;
         Ok(header.slots.into_iter().map(|slot| slot.kind).collect())
     }
 
@@ -330,10 +322,10 @@ impl EncryptedDatabase {
         Ok(out)
     }
 
-    fn record_key(&self, key: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>, EncryptedDatabaseError> {
+    fn record_key(&self, key: &[u8]) -> Result<SealingKey, EncryptedDatabaseError> {
         let mut out = Zeroizing::new([0u8; KEY_LEN]);
         self.expand(RECORD_KEY_INFO, key, out.as_mut())?;
-        Ok(out)
+        Ok(SealingKey(out))
     }
 
     fn expand(
@@ -349,11 +341,11 @@ impl EncryptedDatabase {
     }
 
     fn seal(&self, key: &[u8], value: &[u8]) -> Result<Vec<u8>, EncryptedDatabaseError> {
-        seal_with(&*self.record_key(key)?, &associated_data(key), value)
+        self.record_key(key)?.seal(&Aad::Record(key), value)
     }
 
     fn open(&self, key: &[u8], blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, EncryptedDatabaseError> {
-        open_with(&*self.record_key(key)?, &associated_data(key), blob)
+        self.record_key(key)?.open(&Aad::Record(key), blob)
     }
 }
 
@@ -385,121 +377,109 @@ impl Database for EncryptedDatabase {
     }
 }
 
-// TODO: maybe replace or relocate: a KeystoreHeader constructor.
-async fn read_header(db: &Arc<dyn Database>) -> Result<KeystoreHeader, EncryptedDatabaseError> {
-    let Some(bytes) = db.get(HEADER_KEY).await? else {
-        return Err(EncryptedDatabaseError::NotInitialized);
-    };
-    let header: KeystoreHeader = postcard::from_bytes(&bytes)?;
+impl KeystoreHeader {
+    async fn read(db: &dyn Database) -> Result<Self, EncryptedDatabaseError> {
+        let Some(bytes) = db.get(HEADER_KEY).await? else {
+            return Err(EncryptedDatabaseError::NotInitialized);
+        };
+        let header: Self = postcard::from_bytes(&bytes)?;
 
-    if header.magic != HEADER_MAGIC {
-        return Err(EncryptedDatabaseError::Corrupt);
+        if header.magic != HEADER_MAGIC {
+            return Err(EncryptedDatabaseError::Corrupt);
+        }
+        if header.version != STORE_VERSION {
+            return Err(EncryptedDatabaseError::UnsupportedVersion(header.version));
+        }
+        Ok(header)
     }
-    if header.version != STORE_VERSION {
-        return Err(EncryptedDatabaseError::UnsupportedVersion(header.version));
+
+    async fn write(&self, db: &dyn Database) -> Result<(), EncryptedDatabaseError> {
+        db.put(HEADER_KEY, &postcard::to_stdvec(self)?).await?;
+        Ok(())
     }
-    Ok(header)
 }
 
-// TODO: maybe replace or relocate: one-line wrapper over associated_data_in.
-fn associated_data(key: &[u8]) -> Vec<u8> {
-    associated_data_in(RECORD_AAD_DOMAIN, key)
-}
-
-// TODO: maybe replace or relocate: one-line wrapper over associated_data_in.
-fn slot_associated_data(kind: &str) -> Vec<u8> {
-    associated_data_in(SLOT_AAD_DOMAIN, kind.as_bytes())
-}
-
-/// Domain-separates record AAD from slot AAD. Without the prefix, an unscoped record named
-/// `argon2id-password` would share AAD with the password slot.
-fn associated_data_in(domain: &[u8], context: &[u8]) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(1 + domain.len() + context.len());
-    aad.push(STORE_VERSION);
-    aad.extend_from_slice(domain);
-    aad.extend_from_slice(context);
-    aad
-}
-
-// TODO: maybe replace or relocate: first param is the key; a method on a key newtype.
-fn seal_with(
-    key: &[u8; KEY_LEN],
-    aad: &[u8],
-    plaintext: &[u8],
-) -> Result<Vec<u8>, EncryptedDatabaseError> {
-    let cipher = XChaCha20Poly1305::new_from_slice(key)
-        .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
-
-    let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-    let ciphertext = cipher
-        .encrypt(
-            &nonce,
-            Payload {
-                msg: plaintext,
-                aad,
-            },
-        )
-        .map_err(|_| EncryptedDatabaseError::Corrupt)?;
-
-    let mut blob = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
-    blob.push(STORE_VERSION);
-    blob.extend_from_slice(&nonce);
-    blob.extend_from_slice(&ciphertext);
-    Ok(blob)
-}
-
-// TODO: maybe replace or relocate: first param is the key; a method on a key newtype.
-fn open_with(
-    key: &[u8; KEY_LEN],
-    aad: &[u8],
-    blob: &[u8],
-) -> Result<Zeroizing<Vec<u8>>, EncryptedDatabaseError> {
-    let Some((&version, rest)) = blob.split_first() else {
-        return Err(EncryptedDatabaseError::Corrupt);
-    };
-    if version != STORE_VERSION {
-        return Err(EncryptedDatabaseError::UnsupportedVersion(version));
+impl Aad<'_> {
+    fn bytes(&self) -> Vec<u8> {
+        let (domain, context) = match self {
+            Self::Record(key) => (RECORD_AAD_DOMAIN, *key),
+            Self::Slot(kind) => (SLOT_AAD_DOMAIN, kind.as_bytes()),
+        };
+        let mut aad = Vec::with_capacity(1 + domain.len() + context.len());
+        aad.push(STORE_VERSION);
+        aad.extend_from_slice(domain);
+        aad.extend_from_slice(context);
+        aad
     }
-    if rest.len() < NONCE_LEN {
-        return Err(EncryptedDatabaseError::Corrupt);
-    }
-    let (nonce, ciphertext) = rest.split_at(NONCE_LEN);
-    let nonce: [u8; NONCE_LEN] = nonce
-        .try_into()
-        .map_err(|_| EncryptedDatabaseError::Corrupt)?;
-
-    let cipher = XChaCha20Poly1305::new_from_slice(key)
-        .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
-    let plaintext = cipher
-        .decrypt(
-            &XNonce::from(nonce),
-            Payload {
-                msg: ciphertext,
-                aad,
-            },
-        )
-        .map_err(|_| EncryptedDatabaseError::Corrupt)?;
-    Ok(Zeroizing::new(plaintext))
 }
 
-// TODO: maybe replace or relocate: the constructor of that key newtype.
-fn derive_wrapping_key(
-    password: &[u8],
-    salt: &[u8],
-    m_cost: u32,
-    t_cost: u32,
-    p_cost: u32,
-) -> Result<Zeroizing<[u8; KEY_LEN]>, EncryptedDatabaseError> {
-    let params = Params::new(m_cost, t_cost, p_cost, Some(KEY_LEN))
-        .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+impl SealingKey {
+    /// Stretches `password` with Argon2id at the costs this version writes.
+    fn from_password(password: &[u8], salt: &[u8]) -> Result<Self, EncryptedDatabaseError> {
+        let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, Some(KEY_LEN))
+            .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    // Hash into the zeroizing buffer so a derived-then-moved key is not left on the stack.
-    let mut wrapping_key = Zeroizing::new([0u8; KEY_LEN]);
-    argon2
-        .hash_password_into(password, salt, wrapping_key.as_mut())
-        .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
-    Ok(wrapping_key)
+        // Hash into the zeroizing buffer so a derived-then-moved key is not left on the stack.
+        let mut key = Zeroizing::new([0u8; KEY_LEN]);
+        argon2
+            .hash_password_into(password, salt, key.as_mut())
+            .map_err(|_| EncryptedDatabaseError::KeyDerivation)?;
+        Ok(Self(key))
+    }
+
+    fn cipher(&self) -> Result<XChaCha20Poly1305, EncryptedDatabaseError> {
+        XChaCha20Poly1305::new_from_slice(self.0.as_ref())
+            .map_err(|_| EncryptedDatabaseError::KeyDerivation)
+    }
+
+    fn seal(&self, aad: &Aad, plaintext: &[u8]) -> Result<Vec<u8>, EncryptedDatabaseError> {
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ciphertext = self
+            .cipher()?
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext,
+                    aad: &aad.bytes(),
+                },
+            )
+            .map_err(|_| EncryptedDatabaseError::Corrupt)?;
+
+        let mut blob = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
+        blob.push(STORE_VERSION);
+        blob.extend_from_slice(&nonce);
+        blob.extend_from_slice(&ciphertext);
+        Ok(blob)
+    }
+
+    fn open(&self, aad: &Aad, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, EncryptedDatabaseError> {
+        let Some((&version, rest)) = blob.split_first() else {
+            return Err(EncryptedDatabaseError::Corrupt);
+        };
+        if version != STORE_VERSION {
+            return Err(EncryptedDatabaseError::UnsupportedVersion(version));
+        }
+        if rest.len() < NONCE_LEN {
+            return Err(EncryptedDatabaseError::Corrupt);
+        }
+        let (nonce, ciphertext) = rest.split_at(NONCE_LEN);
+        let nonce: [u8; NONCE_LEN] = nonce
+            .try_into()
+            .map_err(|_| EncryptedDatabaseError::Corrupt)?;
+
+        let plaintext = self
+            .cipher()?
+            .decrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad: &aad.bytes(),
+                },
+            )
+            .map_err(|_| EncryptedDatabaseError::Corrupt)?;
+        Ok(Zeroizing::new(plaintext))
+    }
 }
 
 #[cfg(test)]
@@ -513,7 +493,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::database::{memory::MemoryDatabase, scoped::ScopedDatabaseExt};
+    use crate::database::{memory::MemoryDatabase, scoped::ScopedDatabase};
 
     const PASSWORD: &[u8] = b"correct horse battery staple";
     const NEXT_PASSWORD: &[u8] = b"a different passphrase entirely";
@@ -538,7 +518,7 @@ mod tests {
 
     async fn header(backend: &Arc<MemoryDatabase>) -> KeystoreHeader {
         let inner: Arc<dyn Database> = backend.clone();
-        read_header(&inner).await.unwrap()
+        KeystoreHeader::read(inner.as_ref()).await.unwrap()
     }
 
     async fn push_slot(backend: &Arc<MemoryDatabase>, slot: StoredSlot) {
@@ -596,9 +576,7 @@ mod tests {
         let vault_id = Uuid::new_v4();
 
         store.put(b"vaults", b"index").await.unwrap();
-        store
-            .clone()
-            .scoped(vault_id.as_bytes())
+        ScopedDatabase::new(store.clone(), vault_id.as_bytes())
             .put(b"pk", b"secret")
             .await
             .unwrap();
@@ -617,8 +595,8 @@ mod tests {
     async fn ciphertext_does_not_decrypt_in_another_scope() {
         let backend = memory();
         let store: Arc<dyn Database> = Arc::new(create(&backend).await);
-        let first = store.clone().scoped(Uuid::new_v4().as_bytes());
-        let second = store.scoped(Uuid::new_v4().as_bytes());
+        let first = ScopedDatabase::new(store.clone(), Uuid::new_v4().as_bytes());
+        let second = ScopedDatabase::new(store, Uuid::new_v4().as_bytes());
 
         let before = keys_of(&backend);
         first.put(b"pk", b"first secret").await.unwrap();

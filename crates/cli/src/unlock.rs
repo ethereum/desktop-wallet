@@ -6,7 +6,11 @@ use edw_core::{
 };
 use zeroize::Zeroizing;
 
-use crate::{GlobalArgs, input::Input, session::Session};
+use crate::{
+    GlobalArgs,
+    input::Input,
+    session::{Session, SessionFile},
+};
 
 /// Where a script may pass the decryption password.
 ///
@@ -31,13 +35,14 @@ impl UnlockArgs {
         let data_dir = global.data_dir();
         let network = self.network;
         let existed = data_dir.has_instance(network);
-        let previous = Session::load();
+        let sessions = SessionFile::runtime();
+        let previous = sessions.load().await;
         let was_same = previous
             .as_ref()
             .is_some_and(|s| s.network == network && s.data_dir == data_dir.path());
         let previous_network = previous.as_ref().map(|s| s.network);
 
-        let password = password(&data_dir, network, global.input())?;
+        let password = password(&data_dir, network, global.input()).await?;
         Instance::open_or_create(&data_dir, network, password.as_bytes()).await?;
 
         if !existed {
@@ -54,7 +59,7 @@ impl UnlockArgs {
             network,
             password,
         };
-        match session.store() {
+        match sessions.store(&session).await {
             Ok(()) => {
                 if was_same {
                     println!("Already unlocked for {network}.");
@@ -108,14 +113,14 @@ pub async fn prompt_unlock(data_dir: &DataDir, input: Input) -> Result<Instance,
         network,
         password,
     };
-    if let Err(error) = session.store() {
+    if let Err(error) = SessionFile::runtime().store(&session).await {
         eprintln!("Password accepted, but a session could not be saved: {error:#}");
     }
     Ok(instance)
 }
 
 /// The decryption password, from the environment, the session, or `input`.
-fn password(
+async fn password(
     data_dir: &DataDir,
     network: NetworkId,
     input: Input,
@@ -127,7 +132,7 @@ fn password(
         return Ok(Zeroizing::new(value));
     }
 
-    if let Some(session) = Session::load()
+    if let Some(session) = SessionFile::runtime().load().await
         && session.network == network
         && session.data_dir == data_dir.path()
     {

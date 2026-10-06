@@ -79,7 +79,7 @@ impl SimpleDelegate {
         implementation: Address,
         provider: Arc<dyn NetworkEndpoint>,
     ) -> Result<Self, SimpleDelegateError> {
-        if !is_delegated(signer.address(), implementation, provider.as_ref()).await? {
+        if provider.delegation_of(signer.address()).await? != Some(implementation) {
             return Err(SimpleDelegateError::NotAuthorized);
         }
 
@@ -173,19 +173,6 @@ impl SimpleDelegate {
             verifying_contract: self.address(),
         }
     }
-}
-
-// TODO: maybe replace or relocate: a SimpleDelegate or NetworkEndpoint query, not a free fn.
-/// Returns whether the given address is delegated to act as the implementation
-/// for the given delegator.
-pub async fn is_delegated(
-    delegator: Address,
-    implementation: Address,
-    provider: &dyn NetworkEndpoint,
-) -> Result<bool, SimpleDelegateError> {
-    let code = provider.code_at(delegator).await?;
-    let expected = delegation_designator_code(implementation);
-    Ok(code == expected)
 }
 
 /// Builds the EIP-7702 delegation designator bytecode that an EOA installs

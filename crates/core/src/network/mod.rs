@@ -2,9 +2,7 @@ use std::{fmt, num::NonZeroU64, str::FromStr};
 
 pub use alloy::SimpleNetworkEndpoint;
 pub use endpoint::NetworkEndpoint;
-use endpoint::NetworkEndpointError;
 pub use endpoint_config::{NetworkEndpointConfig, NetworkEndpointKind};
-pub use logs::logs_in_range;
 pub use presets::NetworkPreset;
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +10,7 @@ pub mod alloy;
 pub mod db;
 pub mod endpoint;
 pub mod endpoint_config;
-pub mod logs;
+mod logs;
 pub mod presets;
 
 pub const DEFAULT_EVENT_BLOCK_RANGE: NonZeroU64 = NonZeroU64::new(499).expect("non-zero");
@@ -71,34 +69,9 @@ impl Network {
     }
 }
 
-// TODO: maybe replace or relocate: first param is the endpoint; a provided method on NetworkEndpoint.
-/// Rejects `endpoint` unless it serves `expected`.
-///
-/// Costs one round trip.
-///
-/// # Errors
-/// [`NetworkEndpointError::NetworkMismatch`] if the endpoint serves another network.
-pub async fn verify_network_id(
-    endpoint: &dyn NetworkEndpoint,
-    expected: NetworkId,
-) -> Result<(), NetworkEndpointError> {
-    let found = endpoint.network_id().await?;
-    if found == expected.0 {
-        return Ok(());
-    }
-    Err(NetworkEndpointError::NetworkMismatch {
-        expected: expected.0,
-        found,
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::U64;
-    use alloy_transport::mock::Asserter;
-
     use super::*;
-    use crate::test_support::mocked_provider;
 
     #[test]
     fn presets_parse_case_insensitively_to_their_network_id() {
@@ -123,37 +96,5 @@ mod tests {
         }
         assert_eq!(NetworkId(1).to_string(), "mainnet");
         assert_eq!(NetworkId(1337).to_string(), "1337");
-    }
-
-    #[tokio::test]
-    async fn an_endpoint_serving_the_expected_network_id_is_accepted() {
-        let asserter = Asserter::new();
-        asserter.push_success(&U64::from(1));
-
-        verify_network_id(mocked_provider(&asserter).as_ref(), NetworkId(1))
-            .await
-            .expect("the endpoint serves the network id it was configured as");
-    }
-
-    #[tokio::test]
-    async fn an_endpoint_serving_another_network_id_is_rejected() {
-        let asserter = Asserter::new();
-        asserter.push_success(&U64::from(1));
-
-        let endpoint = mocked_provider(&asserter);
-
-        let Err(error) = verify_network_id(endpoint.as_ref(), NetworkId(11_155_111)).await else {
-            panic!("a mainnet endpoint must not pass as sepolia");
-        };
-        assert!(
-            matches!(
-                error,
-                NetworkEndpointError::NetworkMismatch {
-                    expected: 11_155_111,
-                    found: 1,
-                }
-            ),
-            "expected the disagreement to name both network ids, got {error}",
-        );
     }
 }

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::{global_args::GlobalArgs, session::Session};
+use crate::{global_args::GlobalArgs, session::SessionFile};
 
 mod config;
 mod database;
@@ -44,13 +44,13 @@ enum Command {
 impl Cli {
     pub async fn run(&self) -> Result<(), anyhow::Error> {
         match &self.command {
-            Command::Config(args) => args.run(&self.global),
+            Command::Config(args) => args.run(&self.global).await,
             Command::Profile(args) => args.run(&self.global).await?,
             Command::Database(args) => args.run(&self.global).await?,
             Command::Network(args) => args.run(&self.global).await?,
             Command::Unlock(args) => args.run(&self.global).await?,
             Command::Lock => {
-                if Session::clear()? {
+                if SessionFile::runtime().clear().await? {
                     println!("Locked.");
                 } else {
                     println!("Not unlocked; nothing to do.");

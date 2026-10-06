@@ -1,6 +1,6 @@
 use clap::Subcommand;
 
-use crate::{GlobalArgs, session::Session};
+use crate::{GlobalArgs, session::SessionFile};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -11,7 +11,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn run(&self, global: &GlobalArgs) {
+    pub async fn run(&self, global: &GlobalArgs) {
         match self {
             Command::Path => {
                 println!("{}", global.data_dir().path().display());
@@ -23,7 +23,7 @@ impl Command {
                     "network_store={}/<mainnet|sepolia|local|network id>",
                     data_dir.path().display()
                 );
-                match Session::load() {
+                match SessionFile::runtime().load().await {
                     Some(session) => println!("session={}", session.network),
                     None => println!("session=(locked)"),
                 }

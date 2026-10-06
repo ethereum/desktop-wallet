@@ -10,15 +10,15 @@ use crate::{
         Database,
         encrypted::{EncryptedDatabase, EncryptedDatabaseError},
         file::{FileDatabase, FileDatabaseError},
-        scoped::ScopedDatabaseExt,
+        scoped::ScopedDatabase,
     },
-    mnemonic::{MnemonicError, db::MnemonicDatabaseError},
+    mnemonic::MnemonicError,
     network::{
         Network, NetworkId,
         db::{NetworkDatabaseError, NetworkDb},
         endpoint::NetworkEndpointError,
     },
-    profile::{ProfileError, db::ProfileDatabaseError},
+    profile::ProfileError,
 };
 
 mod data_dir;
@@ -72,13 +72,9 @@ pub enum InstanceError {
     #[error(transparent)]
     Mnemonic(#[from] MnemonicError),
     #[error(transparent)]
-    MnemonicDatabase(#[from] MnemonicDatabaseError),
-    #[error(transparent)]
     NetworkDatabase(#[from] NetworkDatabaseError),
     #[error(transparent)]
     Profile(#[from] ProfileError),
-    #[error(transparent)]
-    ProfileDatabase(#[from] ProfileDatabaseError),
 }
 
 impl Instance {
@@ -93,9 +89,7 @@ impl Instance {
             return Err(InstanceError::NotFound { network_id, dir });
         }
         let store = Self::store(&dir, password, true).await?;
-        let network = store
-            .clone()
-            .scoped(NETWORK_SCOPE)
+        let network = ScopedDatabase::new(store.clone(), NETWORK_SCOPE)
             .get_network()
             .await?
             .ok_or(InstanceError::MissingNetwork(network_id))?;
@@ -112,7 +106,7 @@ impl Instance {
     ) -> Result<Self, InstanceError> {
         let exists = data_dir.has_instance(network_id);
         let store = Self::store(&data_dir.instance_dir(network_id), password, exists).await?;
-        let records = store.clone().scoped(NETWORK_SCOPE);
+        let records = ScopedDatabase::new(store.clone(), NETWORK_SCOPE);
         let network = if let Some(network) = records.get_network().await? {
             network
         } else {
@@ -126,6 +120,15 @@ impl Instance {
     #[must_use]
     pub const fn network(&self) -> &Network {
         &self.network
+    }
+
+    /// An instance over an unencrypted memory store, for tests that exercise its logic.
+    #[cfg(test)]
+    fn in_memory(network_id: NetworkId) -> Self {
+        Self {
+            network: Network::new(network_id),
+            store: Arc::new(crate::database::memory::MemoryDatabase::new()),
+        }
     }
 
     async fn store(

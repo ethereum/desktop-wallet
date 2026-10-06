@@ -2,11 +2,8 @@ use std::sync::Arc;
 
 use super::{Instance, InstanceError, NETWORK_SCOPE};
 use crate::{
-    database::scoped::{ScopedDatabase, ScopedDatabaseExt},
-    network::{
-        DEFAULT_EVENT_BLOCK_RANGE, NetworkEndpoint, NetworkEndpointConfig, db::NetworkDb,
-        verify_network_id,
-    },
+    database::scoped::ScopedDatabase,
+    network::{DEFAULT_EVENT_BLOCK_RANGE, NetworkEndpoint, NetworkEndpointConfig, db::NetworkDb},
 };
 
 impl Instance {
@@ -62,7 +59,8 @@ impl Instance {
             None => self.active_endpoint_config().await?,
         };
         let endpoint = config.connect()?;
-        verify_network_id(endpoint.as_ref(), self.network.id)
+        endpoint
+            .verify_network_id(self.network.id)
             .await
             .map_err(|source| InstanceError::UnusableEndpoint {
                 name: config.name,
@@ -87,6 +85,6 @@ impl Instance {
     }
 
     fn network_db(&self) -> ScopedDatabase {
-        self.store.clone().scoped(NETWORK_SCOPE)
+        ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE)
     }
 }

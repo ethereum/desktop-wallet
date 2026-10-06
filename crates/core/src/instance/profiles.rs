@@ -2,53 +2,53 @@ use zeroize::Zeroizing;
 
 use super::{Instance, InstanceError};
 use crate::{
-    database::scoped::ScopedDatabaseExt,
-    mnemonic::{
-        self, MnemonicRecord,
-        db::MnemonicDb,
-        resolve_mnemonic,
-        scan::{EoaScan, scan_standard_eoas},
-    },
+    keyring::Keyring,
+    mnemonic::{Mnemonic, MnemonicRecord, scan::EoaScan},
     network::NetworkEndpoint,
-    profile::{ProfileRecord, bootstrap, db::ProfileDb},
+    profile::{ProfileIndex, ProfileRecord},
 };
 
 impl Instance {
     pub async fn profiles(&self) -> Result<Vec<ProfileRecord>, InstanceError> {
-        Ok(self
-            .store
-            .clone()
-            .scoped(b"profiles")
-            .list_profiles()
-            .await?)
+        Ok(self.profile_index().list().await?)
     }
 
     /// The profile `selector` names, as `mnemonic/profile` or a unique name.
     pub async fn profile(&self, selector: &str) -> Result<ProfileRecord, InstanceError> {
-        Ok(bootstrap::resolve_profile(&self.profiles().await?, selector)?.clone())
+        Ok(self.profile_index().find(selector).await?)
     }
 
-    /// Generates a mnemonic and creates exactly one profile on it, at `profile_index`.
+    /// Generates a recovery phrase and creates exactly one profile on it, at `profile_index`.
     pub async fn generate_profile(
         &self,
         long_seed: bool,
         profile_index: u32,
         name: Option<String>,
     ) -> Result<(MnemonicRecord, ProfileRecord), InstanceError> {
-        Ok(
-            mnemonic::generate_as_profile(self.store.clone(), long_seed, profile_index, name)
-                .await?,
-        )
+        let mnemonic = Mnemonic::generate(long_seed)?;
+        self.import_profile(mnemonic.phrase(), profile_index, name)
+            .await
     }
 
     /// Stores `phrase` and creates exactly one profile on it, at `profile_index`.
+    ///
+    /// Checks the profile name first, so a taken name stores no phrase.
     pub async fn import_profile(
         &self,
         phrase: Zeroizing<String>,
         profile_index: u32,
         name: Option<String>,
     ) -> Result<(MnemonicRecord, ProfileRecord), InstanceError> {
-        Ok(mnemonic::import_as_profile(self.store.clone(), phrase, profile_index, name).await?)
+        let keyring = self.keyring();
+        let profiles = self.profile_index();
+        let candidate = ProfileRecord::new(keyring.next_index().await?, profile_index, name);
+        profiles.check_name_free(&candidate).await?;
+
+        let mnemonic = keyring.add_mnemonic(phrase).await?;
+        let profile = profiles
+            .create(mnemonic.index, Some(profile_index), candidate.name)
+            .await?;
+        Ok((mnemonic, profile))
     }
 
     /// Creates a profile on stored mnemonic `mnemonic_index`, at `profile_index` or else at
@@ -59,15 +59,11 @@ impl Instance {
         profile_index: Option<u32>,
         name: Option<String>,
     ) -> Result<ProfileRecord, InstanceError> {
-        resolve_mnemonic(&self.mnemonics().await?, mnemonic_index)?;
-        let profile_index = match profile_index {
-            Some(index) => index,
-            None => bootstrap::next_profile_index(&self.profiles().await?, mnemonic_index),
-        };
-        Ok(
-            bootstrap::bootstrap_profile(self.store.clone(), mnemonic_index, profile_index, name)
-                .await?,
-        )
+        self.keyring().mnemonic(mnemonic_index).await?;
+        Ok(self
+            .profile_index()
+            .create(mnemonic_index, profile_index, name)
+            .await?)
     }
 
     /// Renames the profile `selector` names, as `mnemonic/profile` or a unique name.
@@ -76,7 +72,7 @@ impl Instance {
         selector: &str,
         name: Option<String>,
     ) -> Result<ProfileRecord, InstanceError> {
-        Ok(bootstrap::rename_profile(self.store.clone(), selector, name).await?)
+        Ok(self.profile_index().rename(selector, name).await?)
     }
 
     pub async fn set_profile_name(
@@ -85,10 +81,10 @@ impl Instance {
         profile_index: u32,
         name: Option<String>,
     ) -> Result<ProfileRecord, InstanceError> {
-        Ok(
-            bootstrap::set_profile_name(self.store.clone(), mnemonic_index, profile_index, name)
-                .await?,
-        )
+        Ok(self
+            .profile_index()
+            .set_name(mnemonic_index, profile_index, name)
+            .await?)
     }
 
     /// Scans `profile`'s standard EOAs on `endpoint` for on-chain use.
@@ -97,17 +93,126 @@ impl Instance {
         profile: &ProfileRecord,
         endpoint: &dyn NetworkEndpoint,
     ) -> Result<EoaScan, InstanceError> {
-        let mnemonics = self.mnemonics().await?;
-        let mnemonic = resolve_mnemonic(&mnemonics, profile.mnemonic_index)?.mnemonic()?;
-        Ok(scan_standard_eoas(&mnemonic, profile.profile_index, endpoint).await?)
+        let mnemonic = self
+            .keyring()
+            .mnemonic(profile.mnemonic_index)
+            .await?
+            .mnemonic()?;
+        Ok(mnemonic
+            .scan_standard_eoas(profile.profile_index, endpoint)
+            .await?)
     }
 
-    async fn mnemonics(&self) -> Result<Vec<MnemonicRecord>, InstanceError> {
-        Ok(self
-            .store
-            .clone()
-            .scoped(b"mnemonics")
-            .get_mnemonics()
-            .await?)
+    fn keyring(&self) -> Keyring {
+        Keyring::new(self.store.clone())
+    }
+
+    fn profile_index(&self) -> ProfileIndex {
+        ProfileIndex::new(self.store.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{mnemonic::MnemonicError, network::NetworkId, profile::ProfileError};
+
+    const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const SECOND_FIXTURE: &str =
+        "legal winner thank year wave sausage worth useful legal winner thank yellow";
+
+    fn instance() -> Instance {
+        Instance::in_memory(NetworkId(1337))
+    }
+
+    #[tokio::test]
+    async fn new_on_an_empty_instance_is_mnemonic_0_and_profile_0() {
+        let instance = instance();
+        let (mnemonic, profile) = instance.generate_profile(false, 0, None).await.unwrap();
+
+        assert_eq!(mnemonic.index, 0);
+        assert_eq!(mnemonic.phrase.split_whitespace().count(), 12);
+        assert_eq!(profile.key(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn import_creates_only_the_requested_index() {
+        let instance = instance();
+        instance.generate_profile(false, 0, None).await.unwrap();
+
+        let (mnemonic, profile) = instance
+            .import_profile(
+                Zeroizing::new(SECOND_FIXTURE.to_string()),
+                3,
+                Some("work".into()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!((mnemonic.index, profile.key()), (1, (1, 3)));
+        let on_second: Vec<u32> = instance
+            .profiles()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|profile| profile.mnemonic_index == 1)
+            .map(|profile| profile.profile_index)
+            .collect();
+        assert_eq!(on_second, vec![3]);
+    }
+
+    #[tokio::test]
+    async fn import_rejects_a_stored_phrase() {
+        let instance = instance();
+        instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap();
+
+        let error = instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 1, Some("work".into()))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InstanceError::Mnemonic(MnemonicError::DuplicatePhrase { index: 0 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn import_with_a_taken_name_stores_no_phrase() {
+        let instance = instance();
+        instance.generate_profile(false, 0, None).await.unwrap();
+
+        let error = instance
+            .import_profile(Zeroizing::new(SECOND_FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InstanceError::Profile(ProfileError::DuplicateName(_))
+        ));
+        assert!(matches!(
+            instance.add_profile(1, None, Some("probe".into())).await,
+            Err(InstanceError::Mnemonic(MnemonicError::Unresolved(1)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn profile_records_never_hold_the_phrase() {
+        let instance = instance();
+        instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap();
+
+        let encoded = postcard::to_stdvec(&instance.profiles().await.unwrap()).unwrap();
+        assert!(
+            !encoded
+                .windows(FIXTURE.len())
+                .any(|window| window == FIXTURE.as_bytes())
+        );
     }
 }

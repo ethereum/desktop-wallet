@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::Address;
 
 use super::{Mnemonic, MnemonicError};
 use crate::network::NetworkEndpoint;
@@ -18,119 +18,69 @@ pub struct EoaScan {
     pub next_unused: u32,
 }
 
-/// On-chain signals used to decide whether an EOA has been used.
-pub struct EoaActivity {
-    pub nonce: u64,
-    pub code: Bytes,
-    pub balance: U256,
-}
-
-impl EoaActivity {
-    /// An EOA is used when it has a non-zero nonce, code, or native ETH balance.
-    ///
-    /// TODO: also treat the address as used if it has received any ERC-20, so a
-    /// dust-token airdrop with zero ETH / nonce / code would not look unused.
-    /// Exhaustive detection is unsolved on a plain JSON-RPC node: there is no
-    /// `eth_getAllTokens(address)`. Practical options all have holes —
-    /// `balanceOf` against a token list (misses unknown tokens), `eth_getLogs`
-    /// for `Transfer(to=address)` from genesis (needs a log-indexed node, is
-    /// range-limited, and still misses non-standard tokens that do not emit
-    /// `Transfer`), or a third-party indexer (same completeness problem, plus a
-    /// privacy/correlation leak). How to do this exhaustively?
-    #[must_use]
-    pub fn is_used(&self) -> bool {
-        self.nonce != 0 || !self.code.is_empty() || !self.balance.is_zero()
-    }
-}
-
-// TODO: maybe replace or relocate: builds an EoaActivity only to call is_used; one of them should go.
-/// Inspects `address` on `provider`. Short-circuits on the first used signal.
-pub async fn inspect_eoa(
-    provider: &dyn NetworkEndpoint,
-    address: Address,
-) -> Result<bool, MnemonicError> {
-    let nonce = provider.transaction_count(address).await?;
-    if nonce != 0 {
-        return Ok(true);
+impl Mnemonic {
+    /// Derives standard EOAs for `profile_index` and checks them on `endpoint` in batches of
+    /// 10, until a fully unused batch or [`MAX_INDEX`].
+    pub async fn scan_standard_eoas(
+        &self,
+        profile_index: u32,
+        endpoint: &dyn NetworkEndpoint,
+    ) -> Result<EoaScan, MnemonicError> {
+        self.scan_with(profile_index, |address| async move {
+            Ok(endpoint.has_activity(address).await?)
+        })
+        .await
     }
 
-    let code = provider.code_at(address).await?;
-    if !code.is_empty() {
-        return Ok(true);
-    }
+    async fn scan_with<F, Fut>(
+        &self,
+        profile_index: u32,
+        mut is_used: F,
+    ) -> Result<EoaScan, MnemonicError>
+    where
+        F: FnMut(Address) -> Fut,
+        Fut: Future<Output = Result<bool, MnemonicError>>,
+    {
+        let mut scanned = Vec::new();
+        let mut last_used = None;
+        let mut start = 0;
 
-    let balance = provider.balance(address).await?;
-    Ok(EoaActivity {
-        nonce,
-        code,
-        balance,
-    }
-    .is_used())
-}
-
-// TODO: maybe replace or relocate: first param is the Mnemonic; a method on Mnemonic.
-/// Derives standard EOAs for `profile_index` and scans them in batches of 10
-/// until a fully unused batch, or until [`MAX_INDEX`].
-pub async fn scan_standard_eoas(
-    mnemonic: &Mnemonic,
-    profile_index: impl Into<Option<u32>>,
-    provider: &dyn NetworkEndpoint,
-) -> Result<EoaScan, MnemonicError> {
-    let profile_index = profile_index.into().unwrap_or(0);
-    scan_with(mnemonic, profile_index, |address| async move {
-        inspect_eoa(provider, address).await
-    })
-    .await
-}
-
-async fn scan_with<F, Fut>(
-    mnemonic: &Mnemonic,
-    profile_index: u32,
-    mut inspect: F,
-) -> Result<EoaScan, MnemonicError>
-where
-    F: FnMut(Address) -> Fut,
-    Fut: Future<Output = Result<bool, MnemonicError>>,
-{
-    let mut scanned = Vec::new();
-    let mut last_used = None;
-    let mut start = 0;
-
-    loop {
-        if start >= MAX_INDEX {
-            return Err(MnemonicError::ScanLimit(MAX_INDEX));
-        }
-
-        let mut batch_used = false;
-        for address_index in start..start.saturating_add(BATCH_SIZE) {
-            let address = mnemonic.standard_address(address_index, profile_index)?;
-            scanned.push((address_index, address));
-            if inspect(address).await? {
-                last_used = Some(address_index);
-                batch_used = true;
+        loop {
+            if start >= MAX_INDEX {
+                return Err(MnemonicError::ScanLimit(MAX_INDEX));
             }
+
+            let mut batch_used = false;
+            for address_index in start..start.saturating_add(BATCH_SIZE) {
+                let address = self.standard_address(address_index, profile_index)?;
+                scanned.push((address_index, address));
+                if is_used(address).await? {
+                    last_used = Some(address_index);
+                    batch_used = true;
+                }
+            }
+
+            if !batch_used {
+                break;
+            }
+            start = start.saturating_add(BATCH_SIZE);
         }
 
-        if !batch_used {
-            break;
-        }
-        start = start.saturating_add(BATCH_SIZE);
+        let addresses = match last_used {
+            Some(last) => scanned
+                .into_iter()
+                .take((last as usize).saturating_add(1))
+                .collect(),
+            None => Vec::new(),
+        };
+        let next_unused = last_used.map_or(0, |index| index.saturating_add(1));
+
+        Ok(EoaScan {
+            addresses,
+            last_used,
+            next_unused,
+        })
     }
-
-    let addresses = match last_used {
-        Some(last) => scanned
-            .into_iter()
-            .take((last as usize).saturating_add(1))
-            .collect(),
-        None => Vec::new(),
-    };
-    let next_unused = last_used.map_or(0, |index| index.saturating_add(1));
-
-    Ok(EoaScan {
-        addresses,
-        last_used,
-        next_unused,
-    })
 }
 
 #[cfg(test)]
@@ -144,11 +94,7 @@ mod tests {
         },
     };
 
-    use alloy_primitives::{Bytes, U64, U256};
-    use alloy_transport::mock::Asserter;
-
     use super::*;
-    use crate::test_support::mocked_provider;
 
     const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -164,20 +110,21 @@ mod tests {
             .collect();
         let used = Arc::new(used);
         let inspected = Arc::new(AtomicU32::new(0));
-        let scan = scan_with(&mnemonic, 0, {
-            let used = Arc::clone(&used);
-            let inspected = Arc::clone(&inspected);
-            move |address| {
+        let scan = mnemonic
+            .scan_with(0, {
                 let used = Arc::clone(&used);
                 let inspected = Arc::clone(&inspected);
-                async move {
-                    inspected.fetch_add(1, Ordering::SeqCst);
-                    Ok(used.contains(&address))
+                move |address| {
+                    let used = Arc::clone(&used);
+                    let inspected = Arc::clone(&inspected);
+                    async move {
+                        inspected.fetch_add(1, Ordering::SeqCst);
+                        Ok(used.contains(&address))
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
         (scan, inspected.load(Ordering::SeqCst))
     }
 
@@ -199,71 +146,5 @@ mod tests {
         assert_eq!(scan.addresses.len(), 16);
         assert_eq!(scan.addresses[0].0, 0);
         assert_eq!(scan.addresses[15].0, 15);
-    }
-
-    #[tokio::test]
-    async fn inspect_eoa_short_circuits_on_nonce() {
-        let asserter = Asserter::new();
-        asserter.push_success(&U64::from(1));
-        let used = inspect_eoa(
-            mocked_provider(&asserter).as_ref(),
-            Address::repeat_byte(0x11),
-        )
-        .await
-        .unwrap();
-        assert!(used);
-        assert!(
-            asserter.read_q().is_empty(),
-            "a non-zero nonce must not fetch code or balance"
-        );
-    }
-
-    #[tokio::test]
-    async fn inspect_eoa_unused_queries_nonce_code_and_balance() {
-        let asserter = Asserter::new();
-        asserter.push_success(&U64::from(0));
-        asserter.push_success(&Bytes::new());
-        asserter.push_success(&U256::ZERO);
-        let used = inspect_eoa(
-            mocked_provider(&asserter).as_ref(),
-            Address::repeat_byte(0x11),
-        )
-        .await
-        .unwrap();
-        assert!(!used);
-        assert!(asserter.read_q().is_empty());
-    }
-
-    #[tokio::test]
-    async fn inspect_eoa_treats_code_as_used() {
-        let asserter = Asserter::new();
-        asserter.push_success(&U64::from(0));
-        asserter.push_success(&Bytes::from_static(&[0xef, 0x01, 0x00]));
-        let used = inspect_eoa(
-            mocked_provider(&asserter).as_ref(),
-            Address::repeat_byte(0x11),
-        )
-        .await
-        .unwrap();
-        assert!(used);
-        assert!(
-            asserter.read_q().is_empty(),
-            "code must not fetch balance once it is already used"
-        );
-    }
-
-    #[tokio::test]
-    async fn inspect_eoa_treats_balance_as_used() {
-        let asserter = Asserter::new();
-        asserter.push_success(&U64::from(0));
-        asserter.push_success(&Bytes::new());
-        asserter.push_success(&U256::from(1));
-        let used = inspect_eoa(
-            mocked_provider(&asserter).as_ref(),
-            Address::repeat_byte(0x11),
-        )
-        .await
-        .unwrap();
-        assert!(used);
     }
 }

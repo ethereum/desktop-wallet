@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::bootstrap::ProfileError;
+use super::index::ProfileError;
 use crate::database::{Database, DatabaseError};
 
 #[async_trait::async_trait]
@@ -66,14 +66,24 @@ impl ProfileRecord {
         }
     }
 
+    /// `(mnemonic_index, profile_index)`, which identifies the profile.
+    #[must_use]
+    pub const fn key(&self) -> (u32, u32) {
+        (self.mnemonic_index, self.profile_index)
+    }
+
+    /// The storage scope of this profile's own records.
+    #[must_use]
+    pub fn scope(&self) -> String {
+        format!("profile:{}:{}", self.mnemonic_index, self.profile_index)
+    }
+
     /// Rejects `self` if another profile in `profiles` has the same display name.
     pub fn check_unique_name(&self, profiles: &[Self]) -> Result<(), ProfileError> {
         let display = self.display_name();
-        let taken = profiles.iter().any(|profile| {
-            (profile.mnemonic_index, profile.profile_index)
-                != (self.mnemonic_index, self.profile_index)
-                && profile.display_name() == display
-        });
+        let taken = profiles
+            .iter()
+            .any(|profile| profile.key() != self.key() && profile.display_name() == display);
         if taken {
             Err(ProfileError::DuplicateName(display))
         } else {

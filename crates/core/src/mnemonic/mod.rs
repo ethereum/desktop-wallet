@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr, sync::Arc};
+use std::{fmt, str::FromStr};
 
 use alloy_primitives::Address;
 use alloy_signer::k256::ecdsa::SigningKey;
@@ -7,11 +7,7 @@ use bip32::{DerivationPath, XPrv};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::{
-    database::{Database, scoped::ScopedDatabaseExt},
-    mnemonic::db::{MnemonicDatabaseError, MnemonicDb},
-    profile::{ProfileRecord, bootstrap_profile, db::ProfileDb},
-};
+use crate::mnemonic::db::MnemonicDatabaseError;
 
 pub mod db;
 pub mod scan;
@@ -52,10 +48,6 @@ pub enum MnemonicError {
     ScanLimit(u32),
     #[error(transparent)]
     Database(#[from] MnemonicDatabaseError),
-    #[error(transparent)]
-    Profile(#[from] crate::profile::ProfileError),
-    #[error(transparent)]
-    ProfileDatabase(#[from] crate::profile::db::ProfileDatabaseError),
     #[error("network error: {0}")]
     Network(#[from] crate::network::endpoint::NetworkEndpointError),
 }
@@ -172,94 +164,12 @@ impl fmt::Debug for MnemonicRecord {
     }
 }
 
-// TODO: maybe replace or relocate: every fn below takes the root store and hardcodes b"mnemonics"; a mnemonic store type should own them.
-/// Persists a mnemonic. Does not create a profile. Errors if the phrase is already stored.
-pub async fn add_mnemonic(
-    store: Arc<dyn Database>,
-    phrase: Zeroizing<String>,
-) -> Result<MnemonicRecord, MnemonicError> {
-    let parsed = Mnemonic::parse(&phrase)?;
-    let normalized = parsed.phrase();
-    let mnemonics_db = store.scoped(b"mnemonics");
-    let mut records = mnemonics_db.get_mnemonics().await?;
-    if let Some(existing) = records
-        .iter()
-        .find(|record| record.phrase == normalized.as_str())
-    {
-        return Err(MnemonicError::DuplicatePhrase {
-            index: existing.index,
-        });
-    }
-    let index = u32::try_from(records.len()).map_err(|_| MnemonicError::TooMany)?;
-    let record = MnemonicRecord {
-        index,
-        phrase: normalized.to_string(),
-    };
-    records.push(record.clone());
-    mnemonics_db.put_mnemonics(&records).await?;
-    Ok(record)
-}
-
-// TODO: maybe replace or relocate: lookup on a slice of records; a method on a collection type.
-pub fn resolve_mnemonic(
-    records: &[MnemonicRecord],
-    index: u32,
-) -> Result<&MnemonicRecord, MnemonicError> {
-    records
-        .iter()
-        .find(|record| record.index == index)
-        .ok_or(MnemonicError::Unresolved(index))
-}
-
-// TODO: maybe replace or relocate: composes mnemonic and profile writes; belongs with the store type.
-/// Stores a new mnemonic and creates exactly one profile at `profile_index`.
-///
-/// Checks the profile name first, so a taken name stores no mnemonic.
-pub async fn import_as_profile(
-    store: Arc<dyn Database>,
-    phrase: Zeroizing<String>,
-    profile_index: u32,
-    profile_name: Option<String>,
-) -> Result<(MnemonicRecord, ProfileRecord), MnemonicError> {
-    let mnemonic_index = u32::try_from(
-        store
-            .clone()
-            .scoped(b"mnemonics")
-            .get_mnemonics()
-            .await?
-            .len(),
-    )
-    .map_err(|_| MnemonicError::TooMany)?;
-    let profiles = store.clone().scoped(b"profiles").list_profiles().await?;
-    ProfileRecord::new(mnemonic_index, profile_index, profile_name.clone())
-        .check_unique_name(&profiles)?;
-
-    let mnemonic = add_mnemonic(store.clone(), phrase).await?;
-    let profile = bootstrap_profile(store, mnemonic.index, profile_index, profile_name).await?;
-    Ok((mnemonic, profile))
-}
-
-// TODO: maybe replace or relocate: composes mnemonic and profile writes; belongs with the store type.
-/// Generates a mnemonic and creates exactly one profile at `profile_index`.
-pub async fn generate_as_profile(
-    store: Arc<dyn Database>,
-    long_seed: bool,
-    profile_index: u32,
-    profile_name: Option<String>,
-) -> Result<(MnemonicRecord, ProfileRecord), MnemonicError> {
-    let generated = Mnemonic::generate(long_seed)?;
-    import_as_profile(store, generated.phrase(), profile_index, profile_name).await
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::{database::memory::MemoryDatabase, profile::ProfileError};
 
     const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    const SECOND_FIXTURE: &str =
-        "legal winner thank year wave sausage worth useful legal winner thank yellow";
 
     fn fixture() -> Mnemonic {
         Mnemonic::parse(FIXTURE).unwrap()
@@ -328,138 +238,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(std_0, expected);
-    }
-
-    #[tokio::test]
-    async fn mnemonic_db_round_trips_without_exposing_phrase_on_profiles() {
-        let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        let record = add_mnemonic(store.clone(), Zeroizing::new(FIXTURE.to_string()))
-            .await
-            .unwrap();
-        let profile = bootstrap_profile(store.clone(), record.index, 0, None)
-            .await
-            .unwrap();
-
-        assert_eq!(record.index, 0);
-        assert_eq!(record.phrase, FIXTURE);
-
-        let loaded = store
-            .clone()
-            .scoped(b"mnemonics")
-            .get_mnemonics()
-            .await
-            .unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].phrase, FIXTURE);
-
-        let profiles = store
-            .clone()
-            .scoped(b"profiles")
-            .list_profiles()
-            .await
-            .unwrap();
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].mnemonic_index, 0);
-        assert_eq!(profiles[0].profile_index, 0);
-        assert_eq!(profiles[0].display_name(), "default");
-        assert!(profiles[0].name.is_none());
-        assert_eq!(profile.display_name(), "default");
-
-        let encoded = postcard::to_stdvec(&profiles[0]).unwrap();
-        let phrase_bytes = FIXTURE.as_bytes();
-        assert!(
-            !encoded
-                .windows(phrase_bytes.len())
-                .any(|w| w == phrase_bytes)
-        );
-    }
-
-    #[tokio::test]
-    async fn generate_on_an_empty_instance_creates_mnemonic_0_and_profile_0() {
-        let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        let (record, _) = generate_as_profile(store.clone(), false, 0, None)
-            .await
-            .unwrap();
-        assert_eq!(record.index, 0);
-        assert_eq!(record.phrase.split_whitespace().count(), 12);
-
-        let profiles = store.scoped(b"profiles").list_profiles().await.unwrap();
-        assert_eq!(
-            (profiles[0].mnemonic_index, profiles[0].profile_index),
-            (0, 0)
-        );
-    }
-
-    #[tokio::test]
-    async fn import_creates_only_the_requested_index() {
-        let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        generate_as_profile(store.clone(), false, 0, None)
-            .await
-            .unwrap();
-
-        let created = bootstrap_profile(store.clone(), 0, 1, None).await.unwrap();
-        assert_eq!(created.profile_index, 1);
-        assert_eq!(created.display_name(), "profile #1");
-
-        let imported = import_as_profile(
-            store.clone(),
-            Zeroizing::new(SECOND_FIXTURE.to_string()),
-            3,
-            Some("work".into()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(imported.0.index, 1);
-        assert_eq!(imported.1.profile_index, 3);
-        assert_eq!(imported.1.display_name(), "work");
-
-        let profiles = store.scoped(b"profiles").list_profiles().await.unwrap();
-        let on_second: Vec<u32> = profiles
-            .iter()
-            .filter(|profile| profile.mnemonic_index == 1)
-            .map(|profile| profile.profile_index)
-            .collect();
-        assert_eq!(on_second, vec![3]);
-    }
-
-    #[tokio::test]
-    async fn import_rejects_duplicate_phrase() {
-        let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        add_mnemonic(store.clone(), Zeroizing::new(FIXTURE.to_string()))
-            .await
-            .unwrap();
-        let error = import_as_profile(
-            store,
-            Zeroizing::new(FIXTURE.to_string()),
-            1,
-            Some("work".into()),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, MnemonicError::DuplicatePhrase { index: 0 }));
-    }
-
-    #[tokio::test]
-    async fn import_with_a_taken_name_stores_no_mnemonic() {
-        let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        generate_as_profile(store.clone(), false, 0, None)
-            .await
-            .unwrap();
-
-        let error = import_as_profile(
-            store.clone(),
-            Zeroizing::new(SECOND_FIXTURE.to_string()),
-            0,
-            None,
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(
-            error,
-            MnemonicError::Profile(ProfileError::DuplicateName(_))
-        ));
-        let stored = store.scoped(b"mnemonics").get_mnemonics().await.unwrap();
-        assert_eq!(stored.len(), 1);
     }
 }
