@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use clap::{Parser, Subcommand};
 
-use clap::{Args, Parser, Subcommand};
+use crate::context::GlobalArgs;
 
 mod config;
 mod context;
@@ -18,15 +18,6 @@ pub struct Cli {
 
     #[command(flatten)]
     global: GlobalArgs,
-}
-
-#[derive(Args)]
-pub(crate) struct GlobalArgs {
-    #[arg(long, global = true, env = "DATA_DIR", default_value = "./.edw/")]
-    pub(crate) data_dir: PathBuf,
-    /// Overrides the unlocked network's endpoint for this invocation.
-    #[arg(long, global = true, env = "RPC_URL")]
-    pub(crate) rpc_url: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -56,7 +47,7 @@ impl Cli {
             Command::Profile(args) => args.run(&self.global).await?,
             Command::Database(args) => args.run(&self.global).await?,
             Command::Network(args) => args.run(&self.global).await?,
-            Command::Unlock(args) => unlock::run_unlock(&self.global, args).await?,
+            Command::Unlock(args) => args.run(&self.global).await?,
             Command::Lock => unlock::run_lock()?,
         }
 

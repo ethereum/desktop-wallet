@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Context as _;
+use clap::Args;
 use edw_core::{
     database::{
         Database,
@@ -14,7 +15,19 @@ use edw_core::{
     profile::simple::{ProfileRecord, db::SimpleProfileDb, profile_scope},
 };
 
-use crate::{GlobalArgs, session, unlock};
+use crate::{
+    session::{self, Session},
+    unlock,
+};
+
+#[derive(Args)]
+pub struct GlobalArgs {
+    #[arg(long, global = true, env = "DATA_DIR", default_value = "./.edw/")]
+    pub data_dir: PathBuf,
+    /// Overrides the unlocked network's endpoint for this invocation.
+    #[arg(long, global = true, env = "RPC_URL")]
+    pub rpc_url: Option<String>,
+}
 
 pub struct Context {
     pub network: SupportedNetwork,
@@ -116,7 +129,7 @@ impl Context {
 
 impl GlobalArgs {
     pub async fn gather(&self) -> anyhow::Result<Context> {
-        let session = session::load().ok_or_else(unlock::locked_error)?;
+        let session = Session::load().ok_or_else(unlock::locked_error)?;
         let data_dir = session::canonical_data_dir(&self.data_dir);
         if session.data_dir != data_dir {
             anyhow::bail!(

@@ -8,14 +8,14 @@ use alloy_transport::mock::Asserter;
 
 use crate::network::{SimpleNetworkEndpoint, endpoint::NetworkEndpoint};
 
-pub(crate) struct TempDir(PathBuf);
+pub struct TempDir(PathBuf);
 
 impl TempDir {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self(std::env::temp_dir().join(format!("edw-test-{}", uuid::Uuid::new_v4())))
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -27,7 +27,7 @@ impl Drop for TempDir {
 }
 
 /// An endpoint that answers from `asserter`'s FIFO queue instead of a chain.
-pub(crate) fn mocked_provider(asserter: &Asserter) -> Arc<dyn NetworkEndpoint> {
+pub fn mocked_provider(asserter: &Asserter) -> Arc<dyn NetworkEndpoint> {
     Arc::new(SimpleNetworkEndpoint::new(
         ProviderBuilder::new()
             .connect_mocked_client(asserter.clone())

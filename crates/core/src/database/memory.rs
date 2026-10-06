@@ -20,7 +20,7 @@ impl MemoryDatabase {
     }
 
     #[cfg(test)]
-    pub(crate) fn keys(&self) -> Result<Vec<Vec<u8>>, DatabaseError> {
+    pub fn keys(&self) -> Result<Vec<Vec<u8>>, DatabaseError> {
         let store = self
             .store
             .lock()

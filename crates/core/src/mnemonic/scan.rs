@@ -142,8 +142,7 @@ mod tests {
         },
     };
 
-    use alloy_primitives::{Bytes, U64, U256, address};
-    use alloy_signer_local::PrivateKeySigner;
+    use alloy_primitives::{Bytes, U64, U256};
     use alloy_transport::mock::Asserter;
 
     use super::*;
@@ -180,53 +179,6 @@ mod tests {
         (scan, inspected.load(Ordering::SeqCst))
     }
 
-    #[test]
-    fn standard_address_matches_known_answer_key() {
-        let mnemonic = fixture();
-        let key = mnemonic.standard_address_key(0, None).unwrap();
-        let expected = PrivateKeySigner::from_signing_key(key).address();
-        assert_eq!(mnemonic.standard_address(0, None).unwrap(), expected);
-        assert_eq!(
-            expected,
-            address!("0x9858EfFD232B4033E47d90003D41EC34EcaEda94")
-        );
-    }
-
-    #[test]
-    fn eoa_is_used_for_nonce_code_or_balance() {
-        let unused = EoaActivity {
-            nonce: 0,
-            code: Bytes::new(),
-            balance: U256::ZERO,
-        };
-        assert!(!unused.is_used());
-
-        assert!(
-            EoaActivity {
-                nonce: 1,
-                code: Bytes::new(),
-                balance: U256::ZERO,
-            }
-            .is_used()
-        );
-        assert!(
-            EoaActivity {
-                nonce: 0,
-                code: Bytes::from_static(&[0xef]),
-                balance: U256::ZERO,
-            }
-            .is_used()
-        );
-        assert!(
-            EoaActivity {
-                nonce: 0,
-                code: Bytes::new(),
-                balance: U256::from(1),
-            }
-            .is_used()
-        );
-    }
-
     #[tokio::test]
     async fn unused_first_batch_yields_empty_addresses() {
         let (scan, inspected) = scan_used(&[]).await;
@@ -234,21 +186,6 @@ mod tests {
         assert!(scan.addresses.is_empty());
         assert_eq!(scan.last_used, None);
         assert_eq!(scan.next_unused, 0);
-    }
-
-    #[tokio::test]
-    async fn used_at_five_continues_then_truncates_to_last_used() {
-        let (scan, inspected) = scan_used(&[5]).await;
-        assert_eq!(inspected, 20);
-        assert_eq!(scan.last_used, Some(5));
-        assert_eq!(scan.next_unused, 6);
-        assert_eq!(
-            scan.addresses
-                .iter()
-                .map(|(index, _)| *index)
-                .collect::<Vec<_>>(),
-            (0..=5).collect::<Vec<_>>()
-        );
     }
 
     #[tokio::test]

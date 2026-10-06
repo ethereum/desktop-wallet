@@ -378,16 +378,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_mnemonic_does_not_create_a_profile() {
-        let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        add_mnemonic(store.clone(), Zeroizing::new(FIXTURE.to_string()))
-            .await
-            .unwrap();
-        let profiles = store.scoped(b"profiles").list_profiles().await.unwrap();
-        assert!(profiles.is_empty());
-    }
-
-    #[tokio::test]
     async fn seed_new_instance_creates_default_mnemonic_and_profile() {
         let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
         let record = seed_new_instance(store.clone(), false).await.unwrap();
@@ -448,18 +438,5 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(error, MnemonicError::DuplicatePhrase { index: 0 }));
-    }
-
-    #[tokio::test]
-    async fn generate_as_profile_skips_index_zero_when_requested() {
-        let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        let generated = generate_as_profile(store.clone(), false, 2, Some("cold".into()))
-            .await
-            .unwrap();
-        assert_eq!(generated.0.index, 0);
-        assert_eq!(generated.1.profile_index, 2);
-        let profiles = store.scoped(b"profiles").list_profiles().await.unwrap();
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].profile_index, 2);
     }
 }

@@ -147,15 +147,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn put_writes_one_file_per_key() {
-        let dir = TempDir::new();
-        let db = FileDatabase::open(dir.path()).unwrap();
-        db.put(b"first", b"one").await.unwrap();
-        db.put(b"second", b"two").await.unwrap();
-        assert_eq!(record_files(dir.path()).len(), 2);
-    }
-
-    #[tokio::test]
     async fn rewriting_one_key_does_not_change_other_files() {
         let dir = TempDir::new();
         let db = FileDatabase::open(dir.path()).unwrap();

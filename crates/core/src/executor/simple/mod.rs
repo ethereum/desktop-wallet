@@ -24,7 +24,6 @@ use crate::{
         simple::{
             SimpleSigner, SimpleSignerError,
             db::{SimpleSignerDatabaseError, SimpleSignerDb},
-            persist_and_rebuild,
         },
     },
 };
@@ -120,11 +119,9 @@ impl SimpleExecutor {
         provider: Arc<dyn NetworkEndpoint>,
         db: Arc<dyn Database>,
     ) -> Result<Self, SimpleExecutorError> {
-        persist_and_rebuild(
-            signer.as_ref(),
-            BuildContext::new(provider.clone(), db.clone()),
-        )
-        .await?;
+        signer
+            .persist_and_rebuild(BuildContext::new(provider.clone(), db.clone()))
+            .await?;
         db.put_implementation(&implementation).await?;
         Self::authorize_if_missing(implementation, &signer, provider.as_ref()).await?;
 

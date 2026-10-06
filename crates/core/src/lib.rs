@@ -12,4 +12,4 @@ pub mod signer;
 pub mod vault;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+mod test_support;

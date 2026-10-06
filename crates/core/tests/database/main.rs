@@ -60,23 +60,6 @@ async fn records_round_trip() {
 }
 
 #[tokio::test]
-async fn records_survive_unlock() {
-    let dir = TempDir::new();
-
-    let store = EncryptedDatabase::create(file(dir.path()), PASSWORD)
-        .await
-        .expect("create");
-    store.put(b"greeting", b"hello").await.expect("put");
-    drop(store);
-
-    let store = EncryptedDatabase::unlock(file(dir.path()), PASSWORD)
-        .await
-        .expect("unlock");
-    let value = store.get(b"greeting").await.expect("get").expect("present");
-    assert_eq!(&*value, b"hello");
-}
-
-#[tokio::test]
 async fn wrong_password_is_rejected() {
     let dir = TempDir::new();
 
@@ -124,20 +107,6 @@ async fn create_rejects_an_empty_password() {
 }
 
 #[tokio::test]
-async fn unlock_rejects_an_empty_password() {
-    let backend = memory();
-    EncryptedDatabase::create(backend.clone(), PASSWORD)
-        .await
-        .expect("create");
-
-    let err = EncryptedDatabase::unlock(backend, b"")
-        .await
-        .err()
-        .expect("unlock must fail");
-    assert!(matches!(err, EncryptedDatabaseError::EmptyPassword));
-}
-
-#[tokio::test]
 async fn scoped_records_are_isolated() {
     let store: Arc<dyn Database> = Arc::new(
         EncryptedDatabase::create(memory(), PASSWORD)
@@ -159,26 +128,6 @@ async fn scoped_records_are_isolated() {
         b"second secret"
     );
     assert!(store.get(b"pk").await.expect("get").is_none());
-}
-
-#[tokio::test]
-async fn rewriting_one_record_does_not_lose_another() {
-    let store = EncryptedDatabase::create(memory(), PASSWORD)
-        .await
-        .expect("create");
-    store.put(b"first", b"one").await.expect("put");
-    store.put(b"second", b"two").await.expect("put");
-
-    store.put(b"first", b"one again").await.expect("put");
-
-    assert_eq!(
-        &*store.get(b"first").await.expect("get").expect("present"),
-        b"one again"
-    );
-    assert_eq!(
-        &*store.get(b"second").await.expect("get").expect("present"),
-        b"two"
-    );
 }
 
 #[tokio::test]

@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 use crate::GlobalArgs;
 
 #[derive(Subcommand)]
-pub(crate) enum Command {
+pub enum Command {
     /// List profiles grouped by mnemonic.
     List,
     /// Generate a new mnemonic and one profile.
@@ -26,7 +26,7 @@ pub(crate) enum Command {
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct GenerateArgs {
+pub struct GenerateArgs {
     #[arg(long)]
     name: Option<String>,
     /// Generate a 24-word phrase instead of 12.
@@ -38,7 +38,7 @@ pub(crate) struct GenerateArgs {
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct ImportArgs {
+pub struct ImportArgs {
     #[arg(long)]
     name: Option<String>,
     /// Profile index to create. Defaults to 0.
@@ -47,7 +47,7 @@ pub(crate) struct ImportArgs {
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct AddArgs {
+pub struct AddArgs {
     #[arg(long)]
     name: Option<String>,
     /// Mnemonic index. Prompted when more than one mnemonic exists.
@@ -62,7 +62,7 @@ pub(crate) struct AddArgs {
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct RenameArgs {
+pub struct RenameArgs {
     /// Profile as `mnemonic/profile` or a unique name.
     selector: String,
     /// New name. Pass `-` or an empty string to clear it.
@@ -234,7 +234,7 @@ fn select_mnemonic(mnemonics: &[mnemonic::MnemonicRecord]) -> Result<u32, anyhow
     Ok(resolve_mnemonic(mnemonics, index)?.index)
 }
 
-pub(crate) fn prompt_profile_name(
+pub fn prompt_profile_name(
     explicit: Option<String>,
     profiles: &[ProfileRecord],
     profile_index: u32,
