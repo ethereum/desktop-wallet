@@ -19,7 +19,6 @@ pub mod db;
 
 sol!(
     contract Erc20 {
-        // ERC20
         function balanceOf(address) external view returns (uint256);
         function transfer(address to, uint256 amount) external returns (bool);
     }

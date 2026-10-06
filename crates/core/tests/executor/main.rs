@@ -46,16 +46,12 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
         .connect_http(rpc_url.parse()?)
         .erased();
     let endpoint: Arc<dyn NetworkEndpoint> = Arc::new(SimpleNetworkEndpoint::new(provider.clone()));
-
-    //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
     let delegate_address = *delegate_contract.address();
     info!(
         "Deployed SimpleDelegate contract at: {:?}",
         delegate_address
     );
-
-    //? Create SimpleExecutor
     let executor_db: Arc<dyn Database> = Arc::new(MemoryDatabase::default());
     let executor_signer: Arc<dyn Signer> =
         Arc::new(SimpleSigner::new(executor_signer.credential().clone(), &executor_db).await?);
@@ -67,8 +63,6 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());
-
-    //? Make an arbitrary call through the executor
     info!("Sending calls through SimpleExecutor...");
     let nonce_before_call = provider.get_transaction_count(executor.address()).await?;
 
@@ -84,8 +78,6 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     executor.await_call(call, MINING_TIMEOUT).await?;
     info!("Sent SimpleExecutor calls");
-
-    //? Verify the call was executed by checking the nonce of the SimpleDelegate contract
     info!("Verifying SimpleDelegate's address nonce after sending calls...");
     let nonce = provider.get_transaction_count(executor.address()).await?;
     assert_eq!(
@@ -93,8 +85,6 @@ async fn test_simple_executor() -> Result<(), Box<dyn std::error::Error>> {
         nonce_before_call + 1,
         "Expected nonce to increment by 1 after sending a call"
     );
-
-    //? Verify the balance of the target address was updated
     info!("Verifying balances of target addresses...");
     let balance = provider.get_balance(target_1).await?;
     assert_eq!(

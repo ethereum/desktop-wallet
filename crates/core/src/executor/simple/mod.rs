@@ -238,7 +238,6 @@ impl Executor for SimpleExecutor {
             return Ok(None);
         };
 
-        // TODO
         Ok(Some(CallReceipt))
     }
 }

@@ -12,11 +12,8 @@ use crate::{
     session::{Session, SessionFile},
 };
 
-/// Where a script may pass the decryption password.
-///
-/// Named for what it is so nobody mistakes it for an account password or an RPC credential.
-/// An environment variable is readable by anything running as the user, so this exists for
-/// automation and the terminal session is what interactive use should rely on.
+/// Where a script may pass the decryption password. Any process running as the user can read
+/// it, so interactive use should rely on the session instead.
 const PASSWORD_ENV: &str = "EDW_DECRYPTION_PASSWORD";
 
 const MISSING_PASSWORD: &str =

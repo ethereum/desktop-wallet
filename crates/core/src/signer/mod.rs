@@ -15,7 +15,6 @@ pub trait Signer: Send + Sync {
 
     fn id(&self) -> SignerId;
 
-    /// Returns the address associated with this signer.
     fn address(&self) -> Address;
 
     /// Signs a message per [EIP-191].

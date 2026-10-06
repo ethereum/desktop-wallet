@@ -114,8 +114,7 @@ impl ProfileIndex {
         Ok(record)
     }
 
-    /// Fails like [`Self::create`] would for a profile named `name` at `profile_index` on a
-    /// mnemonic not stored yet, without writing anything.
+    /// Fails like [`Self::create`] would for `candidate`, without writing anything.
     pub async fn check_name_free(&self, candidate: &ProfileRecord) -> Result<(), ProfileError> {
         candidate.check_unique_name(&self.list().await?)
     }

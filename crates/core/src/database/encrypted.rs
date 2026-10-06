@@ -4,8 +4,6 @@
 //! wrapped by credential slots in the header (`argon2id-password` today). Record keys and
 //! blinded storage keys are derived from it with HKDF-SHA256; values are sealed with
 //! XChaCha20-Poly1305. Changing a password rewraps one slot and leaves records untouched.
-//!
-//! The scheme and its known costs are in `spec/architecture.md`.
 
 use std::sync::Arc;
 
@@ -46,7 +44,7 @@ const KEY_LEN: usize = 32;
 
 const NONCE_LEN: usize = 24;
 
-/// Argon2id costs from `spec/architecture.md`: 64 MiB, 3 passes, one lane.
+/// Argon2id memory cost, in KiB.
 const ARGON2_M_COST: u32 = 64 * 1024;
 
 const ARGON2_T_COST: u32 = 3;
