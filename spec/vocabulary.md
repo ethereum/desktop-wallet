@@ -4,19 +4,22 @@ This document aims to outline used vocabulary, and its definitions.
 
 ## Mnemonic
 
-A 12- or 24-word BIP39 English seed phrase stored per network instance, encrypted under that instance's decryption password. Mnemonics are un-named and numbered (`mnemonic 0`, `mnemonic 1`). Unlock never creates one; `edw profile generate` or `import` does.
-
-Users name **profiles**, not mnemonics. `edw profile generate` / `import` create a new seed and exactly one profile at a given index (default 0). They do not also create profile 0 when another index is requested. `edw profile add` creates another profile on an existing mnemonic (`--index`, default 0, or `--next` for the smallest unused index). Importing a phrase that is already stored is an error; add a profile on that mnemonic instead. On import, the CLI derives the profile's standard EOAs (`m/44'/60'/<profileIndex>'/0/<addressIndex>`), inspects them on the unlocked network in batches of 10, and continues until a fully unused batch. An EOA counts as used when its nonce is non-zero, it has code, or it has a native ETH balance. It prints addresses through the last used index and `next unused eoa index` (not stored yet).
-
-A **profile** points at a mnemonic by `(mnemonic_index, profile_index)` and does not store the phrase. `profile_index` is the hardened BIP44 account in `m/44'/60'/<profileIndex>'/…`.
+A BIP39 seed phrase.
 
 ## Profile
 
-A user-facing collection of **signers**, **executors**, and **vaults**. Used to manage and group balances, transactions, history, and other related data. Display names are unique in a network instance. Unnamed index 0 displays as `default`; unnamed later indexes display as `profile #<index>`.
+A user-facing collection of accounts.
+Used to manage and group balances, transactions, history, and other related data.
+
+## Account
+
+An abstract object that has some balance of assets, can be deposited into (increasing the balance), and withdrawn from (decreasing the balance).
 
 Example:
 
-- A user has a profile that contains a **signer** and **executor** for their EOA address, a **vault** for their hardware wallet, and a **vault** for their meta stealth address.
+- A user has an **account** for their EOA address.
+- A user has a **account** for their multisig smart account.
+- A user has a **account** for their tornadocash shielded balance.
 
 ## Signer
 
@@ -36,16 +39,6 @@ Example:
 - A user has an **executor** for their EOA address.
 - A user has an **executor** for a 4337 smart account.
 
-## Vault
-
-An abstract object that has some balance of assets, can be deposited into (increasing the balance), and withdrawn from (decreasing the balance).
-
-Example:
-
-- A user has a **vault** for their EOA address.
-- A user has a **vault** for their multisig smart account.
-- A user has a **vault** for their tornadocash shielded balance.
-
 ## Asset
 
 Assets are configured wallet-wide and opted-in to on a per "account" basis.
@@ -57,7 +50,7 @@ Asset information such as **decimals**, **symbol**, and **name** are fetched whe
 
 ### Balance
 
-The amount of an **asset** held by some object (e.g. a **vault** or **profile**).
+The amount of an **asset** held by some object (e.g. a **account** or **profile**).
 
 ### Value
 
@@ -70,15 +63,13 @@ This should be properly formatted to the users **locale**
 
 ## Network
 
-A network, sometimes referred to as "chain" aims to track a specific network id.
-Each supported network is a separate wallet instance: its own directory, decryption password, and profiles. Unlocking selects one instance; there is no wallet-wide network list.
-A **networkConfig** is a named typed connection for that instance (for example `simple-provider` or `local-node`), not a list of endpoints. Every networkConfig is forced to the instance chain ID. One networkConfig is active at a time and is what runtime uses.
+A **network** is a chain identified by its network id.
 
 ### Endpoint
 
-A **network endpoint** is a given RPC or mechanism for connecting to the network.
-Each endpoint instance is a single RPC either http, ws, or ipc.
-For each Network one Network Endpoint is active at a time to provide a stable source of data.
+A **network endpoint config** is a stored, named way to reach the network: its kind (http, ipc, light clients) and per-endpoint settings. A network has any number of them and one is active.
+
+A **network endpoint** is what an endpoint config resolves into at runtime: essentially a DynProvider.
 
 ## Flashcall
 
@@ -86,4 +77,4 @@ The atomic execution of a set of calls that (1) fund an address, (2) interact wi
 
 Examples:
 
-- Flashcall uniswap by withdrawing USDC from tint, swapping USDC to ETH, and depositing ETH into Tornadocash. 
+- Flashcall uniswap by withdrawing USDC from tint, swapping USDC to ETH, and depositing ETH into Tornadocash.
