@@ -131,17 +131,10 @@ impl ImportArgs {
         println!("Imported profile {}.", profile.display_name());
 
         let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
-        let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
-        if !scan.addresses.is_empty() {
-            let addresses = scan
-                .addresses
-                .iter()
-                .map(|(index, address)| format!("{index}: {address}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            println!("importing addresses {addresses}");
-        }
-        println!("next unused eoa index: {}", scan.next_unused);
+        let added = instance
+            .discover_accounts(&profile, endpoint.as_ref())
+            .await?;
+        println!("Found {} more used addresses.", added.len());
         Ok(())
     }
 }

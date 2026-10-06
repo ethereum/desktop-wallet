@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use super::db::{ProfileDatabaseError, ProfileDb, ProfileRecord};
-use crate::database::{Database, scoped::ScopedDatabase};
+use crate::{
+    account::{AccountKind, AccountRecord},
+    database::{Database, scoped::ScopedDatabase},
+};
 
 /// The instance's profiles: the index of records, plus a scope of its own per profile.
 pub struct ProfileIndex {
@@ -69,7 +72,7 @@ impl ProfileIndex {
     }
 
     /// Creates a profile on mnemonic `mnemonic_index`, at `profile_index` or else at the
-    /// smallest unused one. Writes its pointer; derives no keys.
+    /// smallest unused one. Creates no accounts.
     pub async fn create(
         &self,
         mnemonic_index: u32,
@@ -106,9 +109,6 @@ impl ProfileIndex {
 
         let record = ProfileRecord::new(mnemonic_index, profile_index, name);
         record.check_unique_name(&profiles)?;
-        ScopedDatabase::new(self.store.clone(), record.scope().as_bytes())
-            .put_pointer(mnemonic_index, profile_index)
-            .await?;
         profiles.push(record.clone());
         self.records().put_profiles(&profiles).await?;
         Ok(record)
@@ -117,6 +117,48 @@ impl ProfileIndex {
     /// Fails like [`Self::create`] would for `candidate`, without writing anything.
     pub async fn check_name_free(&self, candidate: &ProfileRecord) -> Result<(), ProfileError> {
         candidate.check_unique_name(&self.list().await?)
+    }
+
+    pub async fn accounts(
+        &self,
+        profile: &ProfileRecord,
+    ) -> Result<Vec<AccountRecord>, ProfileError> {
+        Ok(self.profile_scope(profile).get_accounts().await?)
+    }
+
+    /// Adds the accounts in `kinds` the profile does not have yet, and returns those.
+    pub async fn add_accounts(
+        &self,
+        profile: &ProfileRecord,
+        kinds: Vec<AccountKind>,
+    ) -> Result<Vec<AccountRecord>, ProfileError> {
+        let scope = self.profile_scope(profile);
+        let mut accounts = scope.get_accounts().await?;
+        let mut added = Vec::new();
+        for kind in kinds {
+            if accounts
+                .iter()
+                .any(|account| account.kind.same_branch(&kind))
+            {
+                continue;
+            }
+            let id = accounts
+                .iter()
+                .map(|account| account.id.saturating_add(1))
+                .max()
+                .unwrap_or(0);
+            let account = AccountRecord {
+                id,
+                kind,
+                label: None,
+            };
+            accounts.push(account.clone());
+            added.push(account);
+        }
+        if !added.is_empty() {
+            scope.put_accounts(&accounts).await?;
+        }
+        Ok(added)
     }
 
     pub async fn rename(
@@ -152,6 +194,10 @@ impl ProfileIndex {
 
     fn records(&self) -> ScopedDatabase {
         ScopedDatabase::new(self.store.clone(), b"profiles")
+    }
+
+    fn profile_scope(&self, profile: &ProfileRecord) -> ScopedDatabase {
+        ScopedDatabase::new(self.store.clone(), profile.scope().as_bytes())
     }
 }
 

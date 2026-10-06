@@ -1,27 +1,23 @@
 use serde::{Deserialize, Serialize};
 
 use super::index::ProfileError;
-use crate::database::{Database, DatabaseError};
+use crate::{
+    account::AccountRecord,
+    database::{Database, DatabaseError},
+};
 
 #[async_trait::async_trait]
 pub trait ProfileDb: Database {
-    async fn get_pointer(&self) -> Result<Option<(u32, u32)>, ProfileDatabaseError> {
-        let Some(bytes) = self.get(b"pointer").await? else {
-            return Ok(None);
+    async fn get_accounts(&self) -> Result<Vec<AccountRecord>, ProfileDatabaseError> {
+        let Some(bytes) = self.get(b"accounts").await? else {
+            return Ok(vec![]);
         };
-        Ok(Some(postcard::from_bytes(&bytes)?))
+        Ok(postcard::from_bytes(&bytes)?)
     }
 
-    async fn put_pointer(
-        &self,
-        mnemonic_index: u32,
-        profile_index: u32,
-    ) -> Result<(), ProfileDatabaseError> {
-        self.put(
-            b"pointer",
-            &postcard::to_stdvec(&(mnemonic_index, profile_index))?,
-        )
-        .await?;
+    async fn put_accounts(&self, accounts: &[AccountRecord]) -> Result<(), ProfileDatabaseError> {
+        self.put(b"accounts", &postcard::to_stdvec(accounts)?)
+            .await?;
         Ok(())
     }
 

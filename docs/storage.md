@@ -1,7 +1,7 @@
 # Storage
 
 EDW keeps one encrypted store per network.
-It holds that network's endpoints, the keyring, the profiles and their accounts, and the protocol caches the profiles share.
+It holds that network's endpoints and assets, the keyring, the profiles and their accounts, and the protocol caches the profiles share.
 
 ## Layout
 
@@ -11,10 +11,12 @@ It holds that network's endpoints, the keyring, the profiles and their accounts,
 network          / network            # Network { id, native_asset }
                  / endpointConfigs    # Vec<NetworkEndpointConfig>
                  / activeEndpoint     # name of the active endpoint config
+                 / assets             # Vec<Asset>: the network's ERC-20 and ERC-1155 tokens
 keyring          / mnemonics          # indices of the stored recovery phrases
                  / mnemonic:{m}       # one recovery phrase
 profiles         / index              # Vec<ProfileRecord { m, x, name }>
-profile:{m}:{x}  / accounts           # Vec<AccountRecord>
+profile:{m}:{x}  / accounts           # Vec<AccountRecord { id, kind, label, assets }>
+                 / assets             # assets enabled for every account of the profile
                  / account:{id}:...   # sync state of one account
 cache:{protocol} / cursor             # last indexed block
                  / chunk:{n}          # indexed events for one block span
@@ -22,17 +24,18 @@ cache:{protocol} / cursor             # last indexed block
 
 ## Keyring
 
-The keyring holds recovery phrases, indexed by `m`.
-Keys are derived from a phrase on use and never stored.
+Recovery phrases are stored one per record, indexed by `m`.
+Keys derived from a phrase are never stored.
 
 ## Profiles
 
-A profile is a recovery phrase `m` and a profile index `x`, the BIP-44 `account'` leaf.
-Profiles may share a phrase under different `x`.
+Profiles are keyed by their recovery phrase `m` and profile index `x`, the BIP-44 `account'` leaf.
+Several profiles may share `m` under different `x`.
 
 ## Accounts
 
-An account is one branch of a profile, derived from its phrase at `x`:
+Accounts are stored per profile, one entry per derivation branch.
+Each entry keeps the public side of its branch, an address or meta-address, so reading accounts never needs the phrase.
 
 ```sh
 Address { index }                       # m/44'/60'/x'/0/i, where i = 0 is the identity anchor
@@ -47,9 +50,17 @@ Accounts that sync keep their state under `account:{id}`:
 - Stealth: the payments found in announcements.
 - TornadoCash: its notes (pool, deposit index, commitment, leaf index, spent). A new note takes the next unused `deposit'`.
 
+## Assets
+
+`network / assets` lists the assets configured for the network.
+The native asset is not listed and is always enabled.
+
+Enabled assets are stored on the profile, on the account, or both.
+A balance overview queries an account only for the native asset and the assets enabled for it or its profile.
+
 ## Caches
 
-A cache holds the indexed events of one protocol (`tornado-cash`, `railgun`, ...), shared by every account on the network.
+Each protocol (`tornado-cash`, `railgun`, ...) gets one cache per network, shared by every account on it.
 Events are written in numbered chunks behind a cursor, since stored keys cannot be listed.
 
 ## Encryption

@@ -18,25 +18,21 @@ pub struct Keyring {
 impl Keyring {
     pub fn new(store: Arc<dyn Database>) -> Self {
         Self {
-            db: ScopedDatabase::new(store, b"mnemonics"),
+            db: ScopedDatabase::new(store, b"keyring"),
         }
     }
 
-    pub async fn mnemonics(&self) -> Result<Vec<MnemonicRecord>, MnemonicError> {
-        Ok(self.db.get_mnemonics().await?)
-    }
-
     pub async fn mnemonic(&self, index: u32) -> Result<MnemonicRecord, MnemonicError> {
-        self.mnemonics()
+        self.db
+            .get_mnemonic(index)
             .await?
-            .into_iter()
-            .find(|record| record.index == index)
             .ok_or(MnemonicError::Unresolved(index))
     }
 
     /// The index the next stored phrase will get.
     pub async fn next_index(&self) -> Result<u32, MnemonicError> {
-        u32::try_from(self.mnemonics().await?.len()).map_err(|_| MnemonicError::TooMany)
+        u32::try_from(self.db.get_mnemonic_indices().await?.len())
+            .map_err(|_| MnemonicError::TooMany)
     }
 
     /// Stores `phrase`. Errors if it is already stored.
@@ -45,21 +41,20 @@ impl Keyring {
         phrase: Zeroizing<String>,
     ) -> Result<MnemonicRecord, MnemonicError> {
         let normalized = Mnemonic::parse(&phrase)?.phrase();
-        let mut records = self.mnemonics().await?;
-        if let Some(existing) = records
-            .iter()
-            .find(|record| record.phrase == normalized.as_str())
-        {
-            return Err(MnemonicError::DuplicatePhrase {
-                index: existing.index,
-            });
+        let mut indices = self.db.get_mnemonic_indices().await?;
+        for &index in &indices {
+            if self.mnemonic(index).await?.phrase == normalized.as_str() {
+                return Err(MnemonicError::DuplicatePhrase { index });
+            }
         }
+
         let record = MnemonicRecord {
-            index: u32::try_from(records.len()).map_err(|_| MnemonicError::TooMany)?,
+            index: u32::try_from(indices.len()).map_err(|_| MnemonicError::TooMany)?,
             phrase: normalized.to_string(),
         };
-        records.push(record.clone());
-        self.db.put_mnemonics(&records).await?;
+        self.db.put_mnemonic(&record).await?;
+        indices.push(record.index);
+        self.db.put_mnemonic_indices(&indices).await?;
         Ok(record)
     }
 }
@@ -70,6 +65,8 @@ mod tests {
     use crate::database::memory::MemoryDatabase;
 
     const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const SECOND_FIXTURE: &str =
+        "legal winner thank year wave sausage worth useful legal winner thank yellow";
 
     #[tokio::test]
     async fn a_stored_phrase_cannot_be_stored_again() {
@@ -85,5 +82,23 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, MnemonicError::DuplicatePhrase { index: 0 }));
+    }
+
+    #[tokio::test]
+    async fn each_phrase_reads_back_at_its_index() {
+        let keyring = Keyring::new(Arc::new(MemoryDatabase::new()));
+        for phrase in [FIXTURE, SECOND_FIXTURE] {
+            keyring
+                .add_mnemonic(Zeroizing::new(phrase.to_string()))
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(keyring.mnemonic(1).await.unwrap().phrase, SECOND_FIXTURE);
+        assert_eq!(keyring.next_index().await.unwrap(), 2);
+        assert!(matches!(
+            keyring.mnemonic(2).await,
+            Err(MnemonicError::Unresolved(2))
+        ));
     }
 }
