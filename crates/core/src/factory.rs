@@ -39,6 +39,7 @@ impl BuildContext {
     }
 }
 
+// TODO: maybe replace or relocate: three copies of one lookup; one generic Factory::<T>::build.
 pub async fn try_build_vault(
     tag: &str,
     build_ctx: BuildContext,
@@ -52,6 +53,7 @@ pub async fn try_build_vault(
     Err(FactoryError::NotFound(tag.to_string()))
 }
 
+// TODO: maybe replace or relocate: copy of try_build_vault.
 pub async fn try_build_executor(
     tag: &str,
     build_ctx: BuildContext,
@@ -65,6 +67,7 @@ pub async fn try_build_executor(
     Err(FactoryError::NotFound(tag.to_string()))
 }
 
+// TODO: maybe replace or relocate: copy of try_build_vault.
 pub async fn try_build_signer(
     tag: &str,
     build_ctx: BuildContext,

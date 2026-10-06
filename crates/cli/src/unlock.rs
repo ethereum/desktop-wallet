@@ -96,19 +96,23 @@ impl UnlockArgs {
     }
 }
 
+// TODO: maybe replace or relocate: path layout belongs to a data-dir type, not the unlock command.
 pub fn network_dir(data_dir: &Path, network: SupportedNetwork) -> PathBuf {
     data_dir.join(network.slug())
 }
 
+// TODO: maybe replace or relocate: FileDatabase should answer whether its directory holds a store.
 /// Whether an encrypted store already exists, checked before anything can create one.
 fn is_initialized(dir: &Path) -> bool {
     fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
 }
 
+// TODO: maybe replace or relocate: an error constructor; use a thiserror variant.
 pub fn locked_error() -> anyhow::Error {
     anyhow::anyhow!("wallet is locked; run `edw unlock`")
 }
 
+// TODO: maybe replace or relocate: repeats the unlock branch of network_store.
 pub async fn open_existing_store(
     data_dir: &Path,
     network: SupportedNetwork,
@@ -132,6 +136,7 @@ pub async fn open_existing_store(
     ))
 }
 
+// TODO: maybe replace or relocate: mixes store open/create, preference seeding, and Session construction.
 async fn network_store(
     data_dir: &Path,
     network: SupportedNetwork,
@@ -192,6 +197,7 @@ async fn network_store(
     ))
 }
 
+// TODO: maybe replace or relocate: password-source resolution; four loose args suggest a missing type.
 /// The decryption password.
 fn password(
     initialized: bool,
@@ -246,6 +252,7 @@ fn setup(dir: &Path, network: SupportedNetwork) -> Result<Zeroizing<String>, any
     Ok(password)
 }
 
+// TODO: maybe replace or relocate: one of several stdin prompt helpers (see profile/mod.rs).
 /// Reads a password without echoing it when attached to a terminal.
 ///
 /// With stdin redirected there is no terminal to suppress echo on, so the password is read as
@@ -268,6 +275,7 @@ fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
     ))
 }
 
+// TODO: maybe replace or relocate: the Lock command handler lives in unlock.rs; give it its own Args::run.
 pub fn run_lock() -> Result<(), anyhow::Error> {
     if Session::clear()? {
         println!("Locked.");

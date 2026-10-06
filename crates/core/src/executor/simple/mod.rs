@@ -252,6 +252,7 @@ impl From<SimpleExecutorError> for ExecutorError {
     }
 }
 
+// TODO: maybe replace or relocate: one caller; inline into SimpleExecutor::send or make it a method.
 /// Fills the transaction's nonce, chain ID, gas limit, and fee parameters, then
 /// signs it with the wallet.
 async fn fill_and_sign(
@@ -278,6 +279,7 @@ async fn fill_and_sign(
     Ok(tx_envelope)
 }
 
+// TODO: maybe replace or relocate: receipt polling belongs on NetworkEndpoint.
 async fn await_authorization(
     provider: &dyn NetworkEndpoint,
     tx: B256,

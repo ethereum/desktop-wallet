@@ -149,6 +149,7 @@ impl From<SimpleProfileError> for ProfileError {
     }
 }
 
+// TODO: maybe replace or relocate: a BuildContext constructor for a fresh scope.
 /// Generates a fresh storage scope, builds a [`BuildContext`] against it, and runs
 /// `ctor` against that context.
 async fn build_scoped<T, E, F, Fut>(

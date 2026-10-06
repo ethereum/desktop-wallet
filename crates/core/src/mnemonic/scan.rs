@@ -43,6 +43,7 @@ impl EoaActivity {
     }
 }
 
+// TODO: maybe replace or relocate: builds an EoaActivity only to call is_used; one of them should go.
 /// Inspects `address` on `provider`. Short-circuits on the first used signal.
 pub async fn inspect_eoa(
     provider: &dyn NetworkEndpoint,
@@ -67,6 +68,7 @@ pub async fn inspect_eoa(
     .is_used())
 }
 
+// TODO: maybe replace or relocate: first param is the Mnemonic; a method on Mnemonic.
 /// Derives standard EOAs for `profile_index` and scans them in batches of 10
 /// until a fully unused batch, or until [`MAX_INDEX`].
 pub async fn scan_standard_eoas(

@@ -108,6 +108,7 @@ impl NetworkUseArgs {
     }
 }
 
+// TODO: maybe replace or relocate: validate at parse time with a clap value_parser or a Url type.
 fn http_url(url: &str) -> Result<&str, anyhow::Error> {
     let url = url.trim();
     if url.starts_with("http://") || url.starts_with("https://") {

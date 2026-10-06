@@ -174,6 +174,7 @@ impl fmt::Debug for MnemonicRecord {
     }
 }
 
+// TODO: maybe replace or relocate: every fn below takes the root store and hardcodes b"mnemonics"; a mnemonic store type should own them.
 /// Persists a mnemonic. Does not create a profile. Errors if the phrase is already stored.
 pub async fn add_mnemonic(
     store: Arc<dyn Database>,
@@ -201,6 +202,7 @@ pub async fn add_mnemonic(
     Ok(record)
 }
 
+// TODO: maybe replace or relocate: reaches into profile bootstrap from the mnemonic module.
 /// Generates and stores the first mnemonic on a new network instance, with profile 0.
 pub async fn seed_new_instance(
     store: Arc<dyn Database>,
@@ -212,12 +214,14 @@ pub async fn seed_new_instance(
     Ok(record)
 }
 
+// TODO: maybe replace or relocate: one-line wrapper over MnemonicDb::get_mnemonics; only tests call it.
 pub async fn load_mnemonics(
     store: Arc<dyn Database>,
 ) -> Result<Vec<MnemonicRecord>, MnemonicError> {
     Ok(store.scoped(b"mnemonics").get_mnemonics().await?)
 }
 
+// TODO: maybe replace or relocate: one-line wrapper over MnemonicDb::put_mnemonics; no callers.
 pub async fn put_mnemonics(
     store: Arc<dyn Database>,
     records: &[MnemonicRecord],
@@ -226,6 +230,7 @@ pub async fn put_mnemonics(
     Ok(())
 }
 
+// TODO: maybe replace or relocate: lookup on a slice of records; a method on a collection type.
 pub fn resolve_mnemonic(
     records: &[MnemonicRecord],
     index: u32,
@@ -236,6 +241,7 @@ pub fn resolve_mnemonic(
         .ok_or(MnemonicError::Unresolved(index))
 }
 
+// TODO: maybe replace or relocate: composes mnemonic and profile writes; belongs with the store type.
 /// Stores a new mnemonic and creates exactly one profile at `profile_index`.
 pub async fn import_as_profile(
     store: Arc<dyn Database>,
@@ -248,6 +254,7 @@ pub async fn import_as_profile(
     Ok((mnemonic, profile))
 }
 
+// TODO: maybe replace or relocate: composes mnemonic and profile writes; belongs with the store type.
 /// Generates a mnemonic and creates exactly one profile at `profile_index`.
 pub async fn generate_as_profile(
     store: Arc<dyn Database>,

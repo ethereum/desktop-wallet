@@ -175,6 +175,7 @@ impl SimpleDelegate {
     }
 }
 
+// TODO: maybe replace or relocate: a SimpleDelegate or NetworkEndpoint query, not a free fn.
 /// Returns whether the given address is delegated to act as the implementation
 /// for the given delegator.
 pub async fn is_delegated(

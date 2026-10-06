@@ -95,6 +95,7 @@ impl From<DynProvider> for SimpleNetworkEndpoint {
     }
 }
 
+// TODO: maybe replace or relocate: an error constructor; belongs on NetworkEndpointError.
 fn backend(error: impl std::error::Error + Send + Sync + 'static) -> NetworkEndpointError {
     NetworkEndpointError::Backend(Box::new(error))
 }

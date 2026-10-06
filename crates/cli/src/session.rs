@@ -42,6 +42,7 @@ impl Session {
         Some(session)
     }
 
+    // TODO: maybe replace or relocate: duplicates FileDatabase's private dir/file creation.
     pub fn store(&self) -> Result<(), anyhow::Error> {
         let directory =
             directory().context("XDG_RUNTIME_DIR is not set, so no session can be held")?;
@@ -81,6 +82,7 @@ impl Session {
     }
 }
 
+// TODO: maybe replace or relocate: resolve the data dir once where GlobalArgs is parsed.
 pub fn canonical_data_dir(path: &Path) -> PathBuf {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let mut suffix = PathBuf::new();
@@ -103,6 +105,7 @@ pub fn canonical_data_dir(path: &Path) -> PathBuf {
     }
 }
 
+// TODO: maybe replace or relocate: runtime-dir lookup plus a test hook; Session should own its path.
 fn directory() -> Option<PathBuf> {
     #[cfg(test)]
     if let Some(dir) = TEST_DIR.with(|slot| slot.borrow().clone()) {
@@ -112,10 +115,12 @@ fn directory() -> Option<PathBuf> {
     std::env::var_os("XDG_RUNTIME_DIR").map(|dir| PathBuf::from(dir).join("edw"))
 }
 
+// TODO: maybe replace or relocate: one-line wrapper over directory().
 fn path() -> Option<PathBuf> {
     Some(directory()?.join("session"))
 }
 
+// TODO: maybe replace or relocate: store a SystemTime deadline instead of a hand-rolled clock.
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -4,6 +4,7 @@ use alloy_rpc_types_eth::{Filter, Log};
 
 use super::endpoint::{NetworkEndpoint, NetworkEndpointError};
 
+// TODO: maybe replace or relocate: first param is the endpoint; a provided method on NetworkEndpoint. Only tests call it.
 /// Reads `filter` over `blocks` in spans of at most `span`, in ascending block order.
 ///
 /// Costs one request per span. A failing span aborts the read, so a returned `Vec` always
@@ -44,6 +45,7 @@ fn spans(blocks: RangeInclusive<u64>, span: NonZeroU64) -> Vec<RangeInclusive<u6
     }
 }
 
+// TODO: maybe replace or relocate: one-line, one-caller wrapper.
 /// Replaces whatever block bounds `filter` arrived with.
 fn bounded(filter: &Filter, span: &RangeInclusive<u64>) -> Filter {
     filter

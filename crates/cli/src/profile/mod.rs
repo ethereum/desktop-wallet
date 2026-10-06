@@ -81,6 +81,7 @@ impl Command {
     }
 }
 
+// TODO: maybe replace or relocate: other commands use XArgs::run; these handlers are loose fns.
 async fn list(global: &GlobalArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
     let mnemonics = context.mnemonics().await?;
@@ -111,6 +112,7 @@ async fn list(global: &GlobalArgs) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+// TODO: maybe replace or relocate: GenerateArgs::run.
 async fn generate(global: &GlobalArgs, args: &GenerateArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
     let profiles = context.profiles().await?;
@@ -132,6 +134,7 @@ async fn generate(global: &GlobalArgs, args: &GenerateArgs) -> Result<(), anyhow
     Ok(())
 }
 
+// TODO: maybe replace or relocate: ImportArgs::run.
 async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
     let phrase = read_phrase()?;
@@ -163,6 +166,7 @@ async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Er
     Ok(())
 }
 
+// TODO: maybe replace or relocate: AddArgs::run.
 async fn add(global: &GlobalArgs, args: &AddArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
     let mnemonics = context.mnemonics().await?;
@@ -196,6 +200,7 @@ async fn add(global: &GlobalArgs, args: &AddArgs) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+// TODO: maybe replace or relocate: RenameArgs::run.
 async fn rename(global: &GlobalArgs, args: &RenameArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
     let record = rename_profile(
@@ -213,6 +218,7 @@ async fn rename(global: &GlobalArgs, args: &RenameArgs) -> Result<(), anyhow::Er
     Ok(())
 }
 
+// TODO: maybe replace or relocate: one of several stdin prompt helpers.
 fn select_mnemonic(mnemonics: &[mnemonic::MnemonicRecord]) -> Result<u32, anyhow::Error> {
     println!("Select a mnemonic:");
     for record in mnemonics {
@@ -234,6 +240,7 @@ fn select_mnemonic(mnemonics: &[mnemonic::MnemonicRecord]) -> Result<u32, anyhow
     Ok(resolve_mnemonic(mnemonics, index)?.index)
 }
 
+// TODO: maybe replace or relocate: repeats core's empty_to_none and ensure_unique_display_name; unlock.rs reaches in for it.
 pub fn prompt_profile_name(
     explicit: Option<String>,
     profiles: &[ProfileRecord],
@@ -275,6 +282,7 @@ pub fn prompt_profile_name(
     Ok(name)
 }
 
+// TODO: maybe replace or relocate: duplicate of core profile::simple::bootstrap::empty_to_none.
 fn empty_name(name: String) -> Option<String> {
     if name.is_empty() || name == "-" {
         None
@@ -283,6 +291,7 @@ fn empty_name(name: String) -> Option<String> {
     }
 }
 
+// TODO: maybe replace or relocate: one of several stdin prompt helpers.
 fn read_phrase() -> Result<Zeroizing<String>, anyhow::Error> {
     if io::stdin().is_terminal() {
         print!("Mnemonic phrase: ");

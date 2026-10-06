@@ -46,6 +46,7 @@ pub enum SupportedNetwork {
 }
 
 impl SupportedNetwork {
+    // TODO: maybe replace or relocate: hand-written string mapping, mirrored in FromStr; strum derive.
     #[must_use]
     pub const fn slug(self) -> &'static str {
         match self {
@@ -98,6 +99,7 @@ impl fmt::Display for SupportedNetwork {
     }
 }
 
+// TODO: maybe replace or relocate: hand-written string mapping; strum derive.
 impl FromStr for SupportedNetwork {
     type Err = anyhow::Error;
 
@@ -114,6 +116,7 @@ impl FromStr for SupportedNetwork {
 }
 
 impl NetworkConfig {
+    // TODO: maybe replace or relocate: pass-through to NETWORK_PRESETS on an unrelated type; no callers.
     #[must_use]
     pub fn presets() -> &'static [NetworkPreset] {
         NETWORK_PRESETS

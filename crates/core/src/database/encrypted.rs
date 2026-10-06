@@ -385,6 +385,7 @@ impl Database for EncryptedDatabase {
     }
 }
 
+// TODO: maybe replace or relocate: a KeystoreHeader constructor.
 async fn read_header(db: &Arc<dyn Database>) -> Result<KeystoreHeader, EncryptedDatabaseError> {
     let Some(bytes) = db.get(HEADER_KEY).await? else {
         return Err(EncryptedDatabaseError::NotInitialized);
@@ -400,10 +401,12 @@ async fn read_header(db: &Arc<dyn Database>) -> Result<KeystoreHeader, Encrypted
     Ok(header)
 }
 
+// TODO: maybe replace or relocate: one-line wrapper over associated_data_in.
 fn associated_data(key: &[u8]) -> Vec<u8> {
     associated_data_in(RECORD_AAD_DOMAIN, key)
 }
 
+// TODO: maybe replace or relocate: one-line wrapper over associated_data_in.
 fn slot_associated_data(kind: &str) -> Vec<u8> {
     associated_data_in(SLOT_AAD_DOMAIN, kind.as_bytes())
 }
@@ -418,6 +421,7 @@ fn associated_data_in(domain: &[u8], context: &[u8]) -> Vec<u8> {
     aad
 }
 
+// TODO: maybe replace or relocate: first param is the key; a method on a key newtype.
 fn seal_with(
     key: &[u8; KEY_LEN],
     aad: &[u8],
@@ -444,6 +448,7 @@ fn seal_with(
     Ok(blob)
 }
 
+// TODO: maybe replace or relocate: first param is the key; a method on a key newtype.
 fn open_with(
     key: &[u8; KEY_LEN],
     aad: &[u8],
@@ -477,6 +482,7 @@ fn open_with(
     Ok(Zeroizing::new(plaintext))
 }
 
+// TODO: maybe replace or relocate: the constructor of that key newtype.
 fn derive_wrapping_key(
     password: &[u8],
     salt: &[u8],

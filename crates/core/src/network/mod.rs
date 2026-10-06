@@ -46,6 +46,7 @@ pub struct LocalNodeConfig {
 }
 
 impl NetworkConfigKind {
+    // TODO: maybe replace or relocate: hand-written string mapping; strum derive.
     #[must_use]
     pub const fn type_name(&self) -> &'static str {
         match self {
@@ -67,6 +68,7 @@ impl NetworkConfig {
     }
 }
 
+// TODO: maybe replace or relocate: first param is the endpoint; a provided method on NetworkEndpoint.
 /// Rejects `endpoint` unless it serves `expected`.
 ///
 /// Costs one round trip.

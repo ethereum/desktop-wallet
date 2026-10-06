@@ -20,6 +20,7 @@ pub enum ProfileBootstrapError {
     Unresolved(String),
 }
 
+// TODO: maybe replace or relocate: the store fns below take the root store and hardcode b"profiles"; a profile index type should own them.
 /// Writes a profile pointer and appends it to the instance index. Does not derive keys.
 pub async fn bootstrap_profile(
     store: Arc<dyn Database>,
@@ -53,6 +54,7 @@ pub async fn bootstrap_profile(
     Ok(record)
 }
 
+// TODO: maybe replace or relocate: only tests call it.
 /// Creates the next unused `profile_index` on `mnemonic_index`.
 pub async fn create_next_profile(
     store: Arc<dyn Database>,
@@ -64,6 +66,7 @@ pub async fn create_next_profile(
     bootstrap_profile(store, mnemonic_index, profile_index, name).await
 }
 
+// TODO: maybe replace or relocate: see bootstrap_profile.
 pub async fn rename_profile(
     store: Arc<dyn Database>,
     selector: &str,
@@ -80,6 +83,7 @@ pub async fn rename_profile(
     .await
 }
 
+// TODO: maybe replace or relocate: see bootstrap_profile.
 pub async fn set_profile_name(
     store: Arc<dyn Database>,
     mnemonic_index: u32,
@@ -104,6 +108,7 @@ pub async fn set_profile_name(
     Ok(updated)
 }
 
+// TODO: maybe replace or relocate: lookup on a slice of ProfileRecord; a method on a collection type.
 pub fn resolve_profile<'a>(
     profiles: &'a [ProfileRecord],
     selector: &str,
@@ -137,6 +142,7 @@ pub fn resolve_profile<'a>(
     }
 }
 
+// TODO: maybe replace or relocate: lookup on a slice of ProfileRecord; a method on a collection type.
 #[must_use]
 pub fn next_profile_index(profiles: &[ProfileRecord], mnemonic_index: u32) -> u32 {
     let mut used: Vec<u32> = profiles
@@ -156,16 +162,19 @@ pub fn next_profile_index(profiles: &[ProfileRecord], mnemonic_index: u32) -> u3
     next
 }
 
+// TODO: maybe replace or relocate: scope key for a profile; a ProfileRecord method or a key type.
 #[must_use]
 pub fn profile_scope(mnemonic_index: u32, profile_index: u32) -> String {
     format!("profile:{mnemonic_index}:{profile_index}")
 }
 
+// TODO: maybe replace or relocate: FromStr on a profile selector type.
 fn parse_profile_pair(selector: &str) -> Option<(u32, u32)> {
     let (left, right) = selector.split_once('/')?;
     Some((left.parse().ok()?, right.parse().ok()?))
 }
 
+// TODO: maybe replace or relocate: duplicated by the CLI's empty_name.
 fn empty_to_none(name: Option<String>) -> Option<String> {
     match name {
         Some(name) if name.is_empty() || name == "-" => None,
@@ -173,6 +182,7 @@ fn empty_to_none(name: Option<String>) -> Option<String> {
     }
 }
 
+// TODO: maybe replace or relocate: duplicated by the CLI's prompt_profile_name.
 fn ensure_unique_display_name(
     profiles: &[ProfileRecord],
     candidate: &ProfileRecord,
