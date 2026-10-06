@@ -4,6 +4,7 @@ use zeroize::Zeroizing;
 
 use super::{Database, DatabaseError};
 
+// TODO: maybe replace or relocate: extension trait with one impl; a public ScopedDatabase::new does the same.
 pub trait ScopedDatabaseExt {
     fn scoped(self, prefix: &[u8]) -> ScopedDatabase;
 }

@@ -16,7 +16,7 @@ use crate::{
         SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError, is_delegated,
     },
     executor::{CallId, CallReceipt, Executor, ExecutorError, ExecutorId},
-    factory::{BuildContext, Factory, FactoryError, try_build_signer},
+    factory::{BuildContext, Factory, FactoryError},
     network::endpoint::NetworkEndpointError,
     prelude::*,
     signer::{
@@ -148,7 +148,8 @@ impl SimpleExecutor {
     /// be created (see [`SimpleExecutor::new`]).
     pub async fn from_context(ctx: BuildContext) -> Result<Box<dyn Executor>, SimpleExecutorError> {
         let tag = ctx.db.get_signer_tag().await?;
-        let signer: Arc<dyn Signer> = Arc::from(try_build_signer(&tag, ctx.clone()).await?);
+        let signer: Arc<dyn Signer> =
+            Arc::from(Factory::<dyn Signer>::build(&tag, ctx.clone()).await?);
         let provider = ctx.provider;
         let db = ctx.db;
 
@@ -253,7 +254,7 @@ impl From<SimpleExecutorError> for ExecutorError {
 }
 
 // TODO: maybe replace or relocate: one caller; inline into SimpleExecutor::send or make it a method.
-/// Fills the transaction's nonce, chain ID, gas limit, and fee parameters, then
+/// Fills the transaction's nonce, network id, gas limit, and fee parameters, then
 /// signs it with the wallet.
 async fn fill_and_sign(
     tx: TransactionRequest,
@@ -262,13 +263,13 @@ async fn fill_and_sign(
 ) -> Result<TxEnvelope, SimpleExecutorError> {
     let from = wallet.default_signer().address();
     let nonce = provider.transaction_count(from).await?;
-    let chain_id = provider.chain_id().await?;
+    let network_id = provider.network_id().await?;
     let fees = provider.estimate_fees().await?;
 
     let tx = tx
         .from(from)
         .nonce(nonce)
-        .with_chain_id(chain_id)
+        .with_chain_id(network_id)
         .with_max_fee_per_gas(fees.max_fee_per_gas)
         .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas);
 
@@ -331,7 +332,7 @@ mod tests {
         let (db, address) = seeded_db().await;
         let asserter = Asserter::new();
         // The delegation lookup runs twice, once for `authorize_if_missing` and once for the
-        // delegate itself, and the delegate then reads the chain id for its EIP-712 domain.
+        // delegate itself, and the delegate then reads the network id for its EIP-712 domain.
         asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
         asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
         asserter.push_success(&U64::from(1));

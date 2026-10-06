@@ -31,54 +31,25 @@ impl<T: ?Sized> Factory<T> {
     pub const fn new(tag: &'static str, create: FactoryCreateFn<T>) -> Self {
         Self { tag, create }
     }
+
+    pub async fn build(tag: &str, build_ctx: BuildContext) -> Result<Box<T>, FactoryError>
+    where
+        Self: inventory::Collect,
+    {
+        for factory in inventory::iter::<Self> {
+            if factory.tag == tag {
+                return (factory.create)(build_ctx).await;
+            }
+        }
+
+        Err(FactoryError::NotFound(tag.to_string()))
+    }
 }
 
 impl BuildContext {
     pub fn new(provider: Arc<dyn NetworkEndpoint>, db: Arc<dyn Database>) -> Self {
         Self { provider, db }
     }
-}
-
-// TODO: maybe replace or relocate: three copies of one lookup; one generic Factory::<T>::build.
-pub async fn try_build_vault(
-    tag: &str,
-    build_ctx: BuildContext,
-) -> Result<Box<dyn Vault>, FactoryError> {
-    for factory in inventory::iter::<Factory<dyn Vault>> {
-        if factory.tag == tag {
-            return (factory.create)(build_ctx).await;
-        }
-    }
-
-    Err(FactoryError::NotFound(tag.to_string()))
-}
-
-// TODO: maybe replace or relocate: copy of try_build_vault.
-pub async fn try_build_executor(
-    tag: &str,
-    build_ctx: BuildContext,
-) -> Result<Box<dyn Executor>, FactoryError> {
-    for factory in inventory::iter::<Factory<dyn Executor>> {
-        if factory.tag == tag {
-            return (factory.create)(build_ctx).await;
-        }
-    }
-
-    Err(FactoryError::NotFound(tag.to_string()))
-}
-
-// TODO: maybe replace or relocate: copy of try_build_vault.
-pub async fn try_build_signer(
-    tag: &str,
-    build_ctx: BuildContext,
-) -> Result<Box<dyn Signer>, FactoryError> {
-    for factory in inventory::iter::<Factory<dyn Signer>> {
-        if factory.tag == tag {
-            return (factory.create)(build_ctx).await;
-        }
-    }
-
-    Err(FactoryError::NotFound(tag.to_string()))
 }
 
 inventory::collect!(Factory<dyn Executor>);

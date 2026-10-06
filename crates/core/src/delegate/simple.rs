@@ -51,7 +51,7 @@ pub const SIMPLE_DELEGATE_ADDRESS: Address = address!("0xACAe14c5d84EA4a1ddb84bF
 /// authorization, then execute signed batches of calls. This is used for atomic
 /// execution of multiple calls and gasless execution for the signer.
 pub struct SimpleDelegate {
-    chain_id: u64,
+    network_id: u64,
     signer: Arc<dyn Signer>,
     provider: Arc<dyn NetworkEndpoint>,
 }
@@ -83,9 +83,9 @@ impl SimpleDelegate {
             return Err(SimpleDelegateError::NotAuthorized);
         }
 
-        let chain_id = provider.chain_id().await?;
+        let network_id = provider.network_id().await?;
         Ok(Self {
-            chain_id,
+            network_id,
             signer,
             provider,
         })
@@ -102,10 +102,10 @@ impl SimpleDelegate {
         provider: &dyn NetworkEndpoint,
         implementation: Address,
     ) -> Result<SignedAuthorization, SimpleDelegateError> {
-        let chain_id = provider.chain_id().await?;
+        let network_id = provider.network_id().await?;
 
         let authorization = Authorization {
-            chain_id: U256::from(chain_id),
+            chain_id: U256::from(network_id),
             address: implementation,
             nonce,
         };
@@ -169,7 +169,7 @@ impl SimpleDelegate {
         eip712_domain! {
             name: "SimpleDelegate",
             version: "1",
-            chain_id: self.chain_id,
+            chain_id: self.network_id,
             verifying_contract: self.address(),
         }
     }

@@ -10,7 +10,7 @@ use edw_core::{
     mnemonic::{MnemonicRecord, db::MnemonicDb},
     network::{
         NetworkConfig, NetworkEndpoint, NetworkId, SimpleNetworkEndpoint, SupportedNetwork,
-        db::NetworkDb, verify_chain_id,
+        db::NetworkDb, verify_network_id,
     },
     profile::simple::{ProfileRecord, db::SimpleProfileDb, profile_scope},
 };
@@ -61,7 +61,7 @@ impl Context {
         Ok(self.profiles_index_db().list_profiles().await?)
     }
 
-    pub fn chain_id(&self) -> NetworkId {
+    pub fn network_id(&self) -> NetworkId {
         self.network.default_config().network_id
     }
 
@@ -70,13 +70,13 @@ impl Context {
     }
 
     pub async fn put_network_configs(&self, configs: &[NetworkConfig]) -> anyhow::Result<()> {
-        let chain = self.chain_id();
+        let network_id = self.network_id();
         for config in configs {
-            if config.network_id != chain {
+            if config.network_id != network_id {
                 anyhow::bail!(
-                    "networkConfig `{}` must be chain {}, not {}",
+                    "networkConfig `{}` must be network id {}, not {}",
                     config.name,
-                    chain.0,
+                    network_id.0,
                     config.network_id.0
                 );
             }
@@ -120,7 +120,7 @@ impl Context {
         };
         let endpoint: Arc<dyn NetworkEndpoint> =
             Arc::new(SimpleNetworkEndpoint::new_http(url.parse()?));
-        verify_chain_id(endpoint.as_ref(), self.chain_id())
+        verify_network_id(endpoint.as_ref(), self.network_id())
             .await
             .with_context(|| format!("endpoint {url} cannot be used for {}", self.network))?;
         Ok(endpoint)

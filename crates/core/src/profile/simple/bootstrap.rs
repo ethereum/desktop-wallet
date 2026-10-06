@@ -54,18 +54,6 @@ pub async fn bootstrap_profile(
     Ok(record)
 }
 
-// TODO: maybe replace or relocate: only tests call it.
-/// Creates the next unused `profile_index` on `mnemonic_index`.
-pub async fn create_next_profile(
-    store: Arc<dyn Database>,
-    mnemonic_index: u32,
-    name: Option<String>,
-) -> Result<ProfileRecord, ProfileBootstrapError> {
-    let profiles = store.clone().scoped(b"profiles").list_profiles().await?;
-    let profile_index = next_profile_index(&profiles, mnemonic_index);
-    bootstrap_profile(store, mnemonic_index, profile_index, name).await
-}
-
 // TODO: maybe replace or relocate: see bootstrap_profile.
 pub async fn rename_profile(
     store: Arc<dyn Database>,

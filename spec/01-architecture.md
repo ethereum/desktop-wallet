@@ -141,7 +141,7 @@ What v0.1.0 needs:
 ```rust
 #[async_trait]
 trait NetworkEndpoint {
-    async fn chain_id(&self) -> Result<u64, NetworkEndpointError>;
+    async fn network_id(&self) -> Result<u64, NetworkEndpointError>;
     async fn block_height(&self) -> Result<u64, NetworkEndpointError>;
 
     async fn balance(&self, address: Address) -> Result<U256, NetworkEndpointError>;
@@ -157,9 +157,9 @@ trait NetworkEndpoint {
 }
 ```
 
-The trait carries two of these today, `block_height` and `chain_id` under its older spelling `network_id`. The rest are calls the core already makes through the adapter, and they land on the trait when its consumers come to depend on it. `FeeEstimate` is the wallet's own two-field type, since alloy's equivalent lives in `alloy-provider`. The list grows with the work that needs it, a log-range read for private-state sync being the next known addition, and never by reaching around the seam to the wrapped provider.
+The trait carries two of these today, `block_height` and `network_id`. The rest are calls the core already makes through the adapter, and they land on the trait when its consumers come to depend on it. `FeeEstimate` is the wallet's own two-field type, since alloy's equivalent lives in `alloy-provider`. The list grows with the work that needs it, a log-range read for private-state sync being the next known addition, and never by reaching around the seam to the wrapped provider.
 
-An endpoint is configuration claiming to serve a given chain, and the claim holds only if the endpoint agrees. `chain_id` is what that check reads, and `NetworkEndpointError::ChainMismatch` is what a disagreement reports.
+An endpoint is configuration claiming to serve a given network, and the claim holds only if the endpoint agrees. `network_id` is what that check reads, and `NetworkEndpointError::NetworkMismatch` is what a disagreement reports.
 
 #### Dapp Sessions
 

@@ -2,7 +2,10 @@ use clap::Subcommand;
 
 use crate::{
     GlobalArgs,
-    network::add::{NetworkAddArgs, NetworkUseArgs},
+    network::{
+        add::{NetworkAddArgs, NetworkUseArgs},
+        list::NetworkListArgs,
+    },
 };
 
 pub mod add;
@@ -12,8 +15,8 @@ pub mod status;
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Show this network's networkConfigs.
-    View,
-    /// Add a named networkConfig for this chain.
+    View(NetworkListArgs),
+    /// Add a named networkConfig for this network.
     Add(NetworkAddArgs),
     /// Use this networkConfig at runtime.
     Use(NetworkUseArgs),
@@ -24,7 +27,7 @@ pub enum Command {
 impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match &self {
-            Command::View => list::run(global).await,
+            Command::View(args) => args.run(global).await,
             Command::Add(args) => args.run(global).await,
             Command::Use(args) => args.run(global).await,
             Command::Status => {

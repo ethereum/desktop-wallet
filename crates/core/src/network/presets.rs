@@ -27,8 +27,6 @@ const LOCAL: NetworkPreset = NetworkPreset {
     rpc_url: "http://127.0.0.1:8545",
 };
 
-pub const NETWORK_PRESETS: &[NetworkPreset] = &[MAINNET, SEPOLIA, LOCAL];
-
 pub struct NetworkPreset {
     pub network_id: NetworkId,
     pub name: &'static str,
@@ -112,14 +110,6 @@ impl FromStr for SupportedNetwork {
                 "unsupported network {s:?}; expected mainnet, sepolia, or local"
             )),
         }
-    }
-}
-
-impl NetworkConfig {
-    // TODO: maybe replace or relocate: pass-through to NETWORK_PRESETS on an unrelated type; no callers.
-    #[must_use]
-    pub fn presets() -> &'static [NetworkPreset] {
-        NETWORK_PRESETS
     }
 }
 

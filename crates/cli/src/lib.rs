@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::context::GlobalArgs;
+use crate::{context::GlobalArgs, session::Session};
 
 mod config;
 mod context;
@@ -48,7 +48,13 @@ impl Cli {
             Command::Database(args) => args.run(&self.global).await?,
             Command::Network(args) => args.run(&self.global).await?,
             Command::Unlock(args) => args.run(&self.global).await?,
-            Command::Lock => unlock::run_lock()?,
+            Command::Lock => {
+                if Session::clear()? {
+                    println!("Locked.");
+                } else {
+                    println!("Not unlocked; nothing to do.");
+                }
+            }
         }
 
         Ok(())

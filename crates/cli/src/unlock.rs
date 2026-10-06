@@ -274,13 +274,3 @@ fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
         password.trim_end_matches(['\r', '\n']).to_string(),
     ))
 }
-
-// TODO: maybe replace or relocate: the Lock command handler lives in unlock.rs; give it its own Args::run.
-pub fn run_lock() -> Result<(), anyhow::Error> {
-    if Session::clear()? {
-        println!("Locked.");
-    } else {
-        println!("Not unlocked; nothing to do.");
-    }
-    Ok(())
-}

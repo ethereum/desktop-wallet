@@ -77,7 +77,7 @@ impl NetworkAddArgs {
         config.name = self.name.clone();
         config.config = kind;
         println!(
-            "added {} {} (chain {})",
+            "added {} {} (network id {})",
             config.name,
             config.config.type_name(),
             config.network_id.0

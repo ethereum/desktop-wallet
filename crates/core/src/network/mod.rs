@@ -74,16 +74,16 @@ impl NetworkConfig {
 /// Costs one round trip.
 ///
 /// # Errors
-/// [`NetworkEndpointError::ChainMismatch`] if the endpoint serves another chain.
-pub async fn verify_chain_id(
+/// [`NetworkEndpointError::NetworkMismatch`] if the endpoint serves another network.
+pub async fn verify_network_id(
     endpoint: &dyn NetworkEndpoint,
     expected: NetworkId,
 ) -> Result<(), NetworkEndpointError> {
-    let found = endpoint.chain_id().await?;
+    let found = endpoint.network_id().await?;
     if found == expected.0 {
         return Ok(());
     }
-    Err(NetworkEndpointError::ChainMismatch {
+    Err(NetworkEndpointError::NetworkMismatch {
         expected: expected.0,
         found,
     })
@@ -98,34 +98,34 @@ mod tests {
     use crate::test_support::mocked_provider;
 
     #[tokio::test]
-    async fn an_endpoint_serving_the_expected_chain_is_accepted() {
+    async fn an_endpoint_serving_the_expected_network_id_is_accepted() {
         let asserter = Asserter::new();
         asserter.push_success(&U64::from(1));
 
-        verify_chain_id(mocked_provider(&asserter).as_ref(), NetworkId(1))
+        verify_network_id(mocked_provider(&asserter).as_ref(), NetworkId(1))
             .await
-            .expect("the endpoint serves the chain it was configured as");
+            .expect("the endpoint serves the network id it was configured as");
     }
 
     #[tokio::test]
-    async fn an_endpoint_serving_another_chain_is_rejected() {
+    async fn an_endpoint_serving_another_network_id_is_rejected() {
         let asserter = Asserter::new();
         asserter.push_success(&U64::from(1));
 
         let endpoint = mocked_provider(&asserter);
 
-        let Err(error) = verify_chain_id(endpoint.as_ref(), NetworkId(11_155_111)).await else {
+        let Err(error) = verify_network_id(endpoint.as_ref(), NetworkId(11_155_111)).await else {
             panic!("a mainnet endpoint must not pass as sepolia");
         };
         assert!(
             matches!(
                 error,
-                NetworkEndpointError::ChainMismatch {
+                NetworkEndpointError::NetworkMismatch {
                     expected: 11_155_111,
                     found: 1,
                 }
             ),
-            "expected the disagreement to name both chains, got {error}",
+            "expected the disagreement to name both network ids, got {error}",
         );
     }
 }

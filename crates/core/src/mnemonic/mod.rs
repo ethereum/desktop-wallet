@@ -214,22 +214,6 @@ pub async fn seed_new_instance(
     Ok(record)
 }
 
-// TODO: maybe replace or relocate: one-line wrapper over MnemonicDb::get_mnemonics; only tests call it.
-pub async fn load_mnemonics(
-    store: Arc<dyn Database>,
-) -> Result<Vec<MnemonicRecord>, MnemonicError> {
-    Ok(store.scoped(b"mnemonics").get_mnemonics().await?)
-}
-
-// TODO: maybe replace or relocate: one-line wrapper over MnemonicDb::put_mnemonics; no callers.
-pub async fn put_mnemonics(
-    store: Arc<dyn Database>,
-    records: &[MnemonicRecord],
-) -> Result<(), MnemonicError> {
-    store.scoped(b"mnemonics").put_mnemonics(records).await?;
-    Ok(())
-}
-
 // TODO: maybe replace or relocate: lookup on a slice of records; a method on a collection type.
 pub fn resolve_mnemonic(
     records: &[MnemonicRecord],
@@ -358,7 +342,12 @@ mod tests {
         assert_eq!(record.index, 0);
         assert_eq!(record.phrase, FIXTURE);
 
-        let loaded = load_mnemonics(store.clone()).await.unwrap();
+        let loaded = store
+            .clone()
+            .scoped(b"mnemonics")
+            .get_mnemonics()
+            .await
+            .unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].phrase, FIXTURE);
 
@@ -403,9 +392,7 @@ mod tests {
         let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
         seed_new_instance(store.clone(), false).await.unwrap();
 
-        let created = crate::profile::simple::create_next_profile(store.clone(), 0, None)
-            .await
-            .unwrap();
+        let created = bootstrap_profile(store.clone(), 0, 1, None).await.unwrap();
         assert_eq!(created.profile_index, 1);
         assert_eq!(created.display_name(), "profile #1");
 

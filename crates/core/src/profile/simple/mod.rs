@@ -2,8 +2,8 @@ use std::{future::Future, sync::Arc};
 
 use alloy_primitives::U256;
 pub use bootstrap::{
-    ProfileBootstrapError, bootstrap_profile, create_next_profile, next_profile_index,
-    profile_scope, rename_profile, resolve_profile, set_profile_name,
+    ProfileBootstrapError, bootstrap_profile, next_profile_index, profile_scope, rename_profile,
+    resolve_profile, set_profile_name,
 };
 pub use db::ProfileRecord;
 use db::{SimpleProfileDatabaseError, SimpleProfileDb};
@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     database::{Database, scoped::ScopedDatabaseExt},
-    factory::{BuildContext, FactoryError, try_build_executor, try_build_vault},
+    factory::{BuildContext, Factory, FactoryError},
     prelude::*,
     profile::{Profile, ProfileError},
     vault::{Vault, VaultError},
@@ -85,7 +85,7 @@ impl SimpleProfile {
             .map(|(id, tag)| async move {
                 let db = Arc::new(db_ref.clone().scoped(id.as_bytes()));
                 let ctx = BuildContext::new(provider_ref.clone(), db);
-                let v = try_build_vault(&tag, ctx).await?;
+                let v = Factory::<dyn Vault>::build(&tag, ctx).await?;
                 Ok::<_, SimpleProfileError>((id, v))
             })
             .collect::<Vec<_>>();
@@ -93,7 +93,7 @@ impl SimpleProfile {
 
         let executor_db = Arc::new(db.clone().scoped(executor_id.as_bytes()));
         let executor_ctx = BuildContext::new(provider.clone(), executor_db);
-        let executor = try_build_executor(&executor_tag, executor_ctx).await?;
+        let executor = Factory::<dyn Executor>::build(&executor_tag, executor_ctx).await?;
 
         Ok(Self {
             default_executor: (executor_id, executor),

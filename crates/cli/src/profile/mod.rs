@@ -14,7 +14,7 @@ use crate::GlobalArgs;
 #[derive(Subcommand)]
 pub enum Command {
     /// List profiles grouped by mnemonic.
-    List,
+    List(ListArgs),
     /// Generate a new mnemonic and one profile.
     Generate(GenerateArgs),
     /// Import a mnemonic phrase and one profile.
@@ -24,6 +24,9 @@ pub enum Command {
     /// Set or clear a profile's optional name.
     Rename(RenameArgs),
 }
+
+#[derive(Args, Debug)]
+pub struct ListArgs {}
 
 #[derive(Args, Debug)]
 pub struct GenerateArgs {
@@ -72,150 +75,155 @@ pub struct RenameArgs {
 impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match self {
-            Self::List => list(global).await,
-            Self::Generate(args) => generate(global, args).await,
-            Self::Import(args) => import(global, args).await,
-            Self::Add(args) => add(global, args).await,
-            Self::Rename(args) => rename(global, args).await,
+            Self::List(args) => args.run(global).await,
+            Self::Generate(args) => args.run(global).await,
+            Self::Import(args) => args.run(global).await,
+            Self::Add(args) => args.run(global).await,
+            Self::Rename(args) => args.run(global).await,
         }
     }
 }
 
-// TODO: maybe replace or relocate: other commands use XArgs::run; these handlers are loose fns.
-async fn list(global: &GlobalArgs) -> Result<(), anyhow::Error> {
-    let context = global.gather().await?;
-    let mnemonics = context.mnemonics().await?;
-    let profiles = context.profiles().await?;
-    if profiles.is_empty() {
-        println!("No profiles.");
-        return Ok(());
-    }
-
-    for mnemonic in &mnemonics {
-        let mut group: Vec<_> = profiles
-            .iter()
-            .filter(|profile| profile.mnemonic_index == mnemonic.index)
-            .collect();
-        if group.is_empty() {
-            continue;
+impl ListArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let context = global.gather().await?;
+        let mnemonics = context.mnemonics().await?;
+        let profiles = context.profiles().await?;
+        if profiles.is_empty() {
+            println!("No profiles.");
+            return Ok(());
         }
-        group.sort_by_key(|profile| profile.profile_index);
-        println!("Mnemonic {}", mnemonic.index);
-        for profile in group {
-            let _pointer = context
-                .profile_db(profile.mnemonic_index, profile.profile_index)
-                .get_pointer()
+
+        for mnemonic in &mnemonics {
+            let mut group: Vec<_> = profiles
+                .iter()
+                .filter(|profile| profile.mnemonic_index == mnemonic.index)
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            group.sort_by_key(|profile| profile.profile_index);
+            println!("Mnemonic {}", mnemonic.index);
+            for profile in group {
+                let _pointer = context
+                    .profile_db(profile.mnemonic_index, profile.profile_index)
+                    .get_pointer()
+                    .await?;
+                println!("  {}  {}", profile.profile_index, profile.display_name());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl GenerateArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let context = global.gather().await?;
+        let profiles = context.profiles().await?;
+        let name = prompt_profile_name(self.name.clone(), &profiles, self.index, None)?;
+        let (mnemonic, profile) =
+            mnemonic::generate_as_profile(context.store.clone(), self.long_seed, self.index, name)
                 .await?;
-            println!("  {}  {}", profile.profile_index, profile.display_name());
+        println!("Write this recovery phrase down now. It is shown only this once.");
+        println!();
+        println!("{}", mnemonic.phrase);
+        println!();
+        println!(
+            "Created mnemonic {} and profile {}/{} ({}).",
+            mnemonic.index,
+            profile.mnemonic_index,
+            profile.profile_index,
+            profile.display_name()
+        );
+        Ok(())
+    }
+}
+
+impl ImportArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let context = global.gather().await?;
+        let phrase = read_phrase()?;
+        let profiles = context.profiles().await?;
+        let name = prompt_profile_name(self.name.clone(), &profiles, self.index, None)?;
+        let (mnemonic, profile) =
+            mnemonic::import_as_profile(context.store.clone(), phrase, self.index, name).await?;
+        println!(
+            "Imported mnemonic {}; profile {}/{} ({}).",
+            mnemonic.index,
+            profile.mnemonic_index,
+            profile.profile_index,
+            profile.display_name()
+        );
+
+        let provider = context.endpoint(global.rpc_url.as_deref()).await?;
+        let parsed = mnemonic.mnemonic()?;
+        let scan = scan_standard_eoas(&parsed, self.index, provider.as_ref()).await?;
+        if !scan.addresses.is_empty() {
+            let addresses = scan
+                .addresses
+                .iter()
+                .map(|(index, address)| format!("{index}: {address}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("importing addresses {addresses}");
         }
+        println!("next unused eoa index: {}", scan.next_unused);
+        Ok(())
     }
-    Ok(())
 }
 
-// TODO: maybe replace or relocate: GenerateArgs::run.
-async fn generate(global: &GlobalArgs, args: &GenerateArgs) -> Result<(), anyhow::Error> {
-    let context = global.gather().await?;
-    let profiles = context.profiles().await?;
-    let name = prompt_profile_name(args.name.clone(), &profiles, args.index, None)?;
-    let (mnemonic, profile) =
-        mnemonic::generate_as_profile(context.store.clone(), args.long_seed, args.index, name)
-            .await?;
-    println!("Write this recovery phrase down now. It is shown only this once.");
-    println!();
-    println!("{}", mnemonic.phrase);
-    println!();
-    println!(
-        "Created mnemonic {} and profile {}/{} ({}).",
-        mnemonic.index,
-        profile.mnemonic_index,
-        profile.profile_index,
-        profile.display_name()
-    );
-    Ok(())
-}
+impl AddArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let context = global.gather().await?;
+        let mnemonics = context.mnemonics().await?;
+        if mnemonics.is_empty() {
+            anyhow::bail!("no mnemonics; unlock a new network or run `edw profile generate`");
+        }
 
-// TODO: maybe replace or relocate: ImportArgs::run.
-async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Error> {
-    let context = global.gather().await?;
-    let phrase = read_phrase()?;
-    let profiles = context.profiles().await?;
-    let name = prompt_profile_name(args.name.clone(), &profiles, args.index, None)?;
-    let (mnemonic, profile) =
-        mnemonic::import_as_profile(context.store.clone(), phrase, args.index, name).await?;
-    println!(
-        "Imported mnemonic {}; profile {}/{} ({}).",
-        mnemonic.index,
-        profile.mnemonic_index,
-        profile.profile_index,
-        profile.display_name()
-    );
+        let mnemonic_index = if let Some(index) = self.mnemonic {
+            resolve_mnemonic(&mnemonics, index)?.index
+        } else if mnemonics.len() == 1 {
+            mnemonics[0].index
+        } else {
+            select_mnemonic(&mnemonics)?
+        };
 
-    let provider = context.endpoint(global.rpc_url.as_deref()).await?;
-    let parsed = mnemonic.mnemonic()?;
-    let scan = scan_standard_eoas(&parsed, args.index, provider.as_ref()).await?;
-    if !scan.addresses.is_empty() {
-        let addresses = scan
-            .addresses
-            .iter()
-            .map(|(index, address)| format!("{index}: {address}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        println!("importing addresses {addresses}");
+        let profiles = context.profiles().await?;
+        let profile_index = if self.next {
+            next_profile_index(&profiles, mnemonic_index)
+        } else {
+            self.index
+        };
+        let name = prompt_profile_name(self.name.clone(), &profiles, profile_index, None)?;
+        let record =
+            bootstrap_profile(context.store.clone(), mnemonic_index, profile_index, name).await?;
+        println!(
+            "Created profile {}/{} ({}).",
+            record.mnemonic_index,
+            record.profile_index,
+            record.display_name()
+        );
+        Ok(())
     }
-    println!("next unused eoa index: {}", scan.next_unused);
-    Ok(())
 }
 
-// TODO: maybe replace or relocate: AddArgs::run.
-async fn add(global: &GlobalArgs, args: &AddArgs) -> Result<(), anyhow::Error> {
-    let context = global.gather().await?;
-    let mnemonics = context.mnemonics().await?;
-    if mnemonics.is_empty() {
-        anyhow::bail!("no mnemonics; unlock a new network or run `edw profile generate`");
+impl RenameArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let context = global.gather().await?;
+        let record = rename_profile(
+            context.store.clone(),
+            &self.selector,
+            Some(self.new_name.clone()),
+        )
+        .await?;
+        println!(
+            "Renamed profile {}/{} to {}.",
+            record.mnemonic_index,
+            record.profile_index,
+            record.display_name()
+        );
+        Ok(())
     }
-
-    let mnemonic_index = if let Some(index) = args.mnemonic {
-        resolve_mnemonic(&mnemonics, index)?.index
-    } else if mnemonics.len() == 1 {
-        mnemonics[0].index
-    } else {
-        select_mnemonic(&mnemonics)?
-    };
-
-    let profiles = context.profiles().await?;
-    let profile_index = if args.next {
-        next_profile_index(&profiles, mnemonic_index)
-    } else {
-        args.index
-    };
-    let name = prompt_profile_name(args.name.clone(), &profiles, profile_index, None)?;
-    let record =
-        bootstrap_profile(context.store.clone(), mnemonic_index, profile_index, name).await?;
-    println!(
-        "Created profile {}/{} ({}).",
-        record.mnemonic_index,
-        record.profile_index,
-        record.display_name()
-    );
-    Ok(())
-}
-
-// TODO: maybe replace or relocate: RenameArgs::run.
-async fn rename(global: &GlobalArgs, args: &RenameArgs) -> Result<(), anyhow::Error> {
-    let context = global.gather().await?;
-    let record = rename_profile(
-        context.store.clone(),
-        &args.selector,
-        Some(args.new_name.clone()),
-    )
-    .await?;
-    println!(
-        "Renamed profile {}/{} to {}.",
-        record.mnemonic_index,
-        record.profile_index,
-        record.display_name()
-    );
-    Ok(())
 }
 
 // TODO: maybe replace or relocate: one of several stdin prompt helpers.

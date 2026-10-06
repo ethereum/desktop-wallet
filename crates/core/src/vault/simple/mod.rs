@@ -6,7 +6,6 @@ use alloy_sol_types::{SolCall, sol};
 
 use crate::{
     delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
-    factory::try_build_signer,
     network::endpoint::NetworkEndpointError,
     prelude::*,
     signer::{
@@ -100,7 +99,8 @@ impl SimpleVault {
         let db = ctx.db.clone();
 
         let tag = ctx.db.get_signer_tag().await?;
-        let signer: Arc<dyn Signer> = Arc::from(try_build_signer(&tag, ctx.clone()).await?);
+        let signer: Arc<dyn Signer> =
+            Arc::from(Factory::<dyn Signer>::build(&tag, ctx.clone()).await?);
         let implementation = db.get_implementation().await?;
         let vault =
             SimpleVault::new_with_implementation(signer, implementation, provider, db).await?;
@@ -309,7 +309,7 @@ mod tests {
     async fn from_context_rebuilds_the_signer_named_by_the_stored_tag() {
         let (db, address) = seeded_db().await;
         let asserter = Asserter::new();
-        // The delegate checks the delegation, then reads the chain id for its EIP-712 domain.
+        // The delegate checks the delegation, then reads the network id for its EIP-712 domain.
         asserter.push_success(&delegation_designator_code(SIMPLE_DELEGATE_ADDRESS));
         asserter.push_success(&U64::from(1));
 

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait NetworkEndpoint: Send + Sync {
-    async fn chain_id(&self) -> Result<u64, NetworkEndpointError>;
+    async fn network_id(&self) -> Result<u64, NetworkEndpointError>;
     async fn block_height(&self) -> Result<u64, NetworkEndpointError>;
 
     async fn balance(&self, address: Address) -> Result<U256, NetworkEndpointError>;
@@ -42,6 +42,8 @@ pub enum NetworkEndpointError {
     /// The inner error type is not part of this API.
     #[error(transparent)]
     Backend(Box<dyn std::error::Error + Send + Sync>),
-    #[error("endpoint serves chain {found}, but the network is configured as chain {expected}")]
-    ChainMismatch { expected: u64, found: u64 },
+    #[error(
+        "endpoint serves network id {found}, but the network is configured as network id {expected}"
+    )]
+    NetworkMismatch { expected: u64, found: u64 },
 }
