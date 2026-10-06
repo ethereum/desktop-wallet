@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
-use alloy_sol_types::{SolCall, sol};
+use alloy_sol_types::SolCall;
 
 use crate::{
+    asset::Erc20,
     delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
     factory::try_build_signer,
     network::endpoint::NetworkEndpointError,
@@ -17,14 +18,6 @@ use crate::{
 };
 
 pub mod db;
-
-sol!(
-    contract Erc20 {
-        // ERC20
-        function balanceOf(address) external view returns (uint256);
-        function transfer(address to, uint256 amount) external returns (bool);
-    }
-);
 
 const SIMPLE_VAULT_TAG: &str = "simple-vault";
 
