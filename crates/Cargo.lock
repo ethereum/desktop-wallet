@@ -1838,6 +1838,7 @@ dependencies = [
  "inventory",
  "rpassword",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing-subscriber",

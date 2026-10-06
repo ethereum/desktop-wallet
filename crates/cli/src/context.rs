@@ -16,6 +16,7 @@ use edw_core::{
 };
 
 use crate::{
+    output,
     session::{self, Session},
     unlock,
 };
@@ -27,6 +28,9 @@ pub struct GlobalArgs {
     /// Overrides the unlocked network's endpoint for this invocation.
     #[arg(long, global = true, env = "RPC_URL")]
     pub rpc_url: Option<String>,
+    /// Emit one JSON document on stdout, never prompt, and fail if an input is missing.
+    #[arg(long, global = true)]
+    pub non_interactive: bool,
 }
 
 pub struct Context {
@@ -128,6 +132,14 @@ impl Context {
 }
 
 impl GlobalArgs {
+    pub fn mode(&self) -> output::Mode {
+        if self.non_interactive {
+            output::Mode::Json
+        } else {
+            output::Mode::Human
+        }
+    }
+
     pub async fn gather(&self) -> anyhow::Result<Context> {
         let session = Session::load().ok_or_else(unlock::locked_error)?;
         let data_dir = session::canonical_data_dir(&self.data_dir);
