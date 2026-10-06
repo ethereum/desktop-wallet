@@ -5,6 +5,7 @@ use crate::{global_args::GlobalArgs, session::Session};
 mod config;
 mod database;
 mod global_args;
+mod input;
 mod network;
 mod profile;
 mod session;

@@ -1,20 +1,18 @@
-use std::io::{self, BufRead, IsTerminal, Write};
-
-use clap::{Args, Subcommand};
+use anyhow::Context;
+use clap::{ArgGroup, Args, Subcommand};
+use edw_core::profile::ProfileRecord;
 use zeroize::Zeroizing;
 
-use crate::GlobalArgs;
+use crate::{GlobalArgs, input::Input};
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// List profiles grouped by mnemonic.
+    /// List profiles.
     List(ListArgs),
-    /// Generate a new mnemonic and one profile.
-    Generate(GenerateArgs),
-    /// Import a mnemonic phrase and one profile.
+    /// Create a profile on a new recovery phrase, or on one another profile uses.
+    New(NewArgs),
+    /// Create a profile from an existing recovery phrase.
     Import(ImportArgs),
-    /// Add a profile on an existing mnemonic.
-    Add(AddArgs),
     /// Set or clear a profile's optional name.
     Rename(RenameArgs),
 }
@@ -23,15 +21,22 @@ pub enum Command {
 pub struct ListArgs {}
 
 #[derive(Args, Debug)]
-pub struct GenerateArgs {
+#[command(group = ArgGroup::new("phrase").args(["new_phrase", "phrase_of"]))]
+pub struct NewArgs {
     #[arg(long)]
     name: Option<String>,
-    /// Generate a 24-word phrase instead of 12.
+    /// Create the profile on a new recovery phrase.
     #[arg(long)]
+    new_phrase: bool,
+    /// Create the profile on the recovery phrase this profile uses.
+    #[arg(long, value_name = "PROFILE")]
+    phrase_of: Option<String>,
+    /// Generate a 24-word phrase instead of 12.
+    #[arg(long, conflicts_with = "phrase_of")]
     long_seed: bool,
-    /// Profile index to create. Defaults to 0.
-    #[arg(long, default_value_t = 0)]
-    index: u32,
+    /// Profile index to create. Defaults to 0 on a new phrase, else the smallest unused.
+    #[arg(long)]
+    index: Option<u32>,
 }
 
 #[derive(Args, Debug)]
@@ -44,23 +49,8 @@ pub struct ImportArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct AddArgs {
-    #[arg(long)]
-    name: Option<String>,
-    /// Mnemonic index. Prompted when more than one mnemonic exists.
-    #[arg(long)]
-    mnemonic: Option<u32>,
-    /// Profile index to create. Defaults to 0.
-    #[arg(long, default_value_t = 0, conflicts_with = "next")]
-    index: u32,
-    /// Create the smallest unused profile index on the mnemonic.
-    #[arg(long, conflicts_with = "index")]
-    next: bool,
-}
-
-#[derive(Args, Debug)]
 pub struct RenameArgs {
-    /// Profile as `mnemonic/profile` or a unique name.
+    /// Profile to rename, by name.
     selector: String,
     /// New name. Pass `-` or an empty string to clear it.
     new_name: String,
@@ -70,9 +60,8 @@ impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match self {
             Self::List(args) => args.run(global).await,
-            Self::Generate(args) => args.run(global).await,
+            Self::New(args) => args.run(global).await,
             Self::Import(args) => args.run(global).await,
-            Self::Add(args) => args.run(global).await,
             Self::Rename(args) => args.run(global).await,
         }
     }
@@ -82,43 +71,49 @@ impl ListArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let mut profiles = global.open().await?.profiles().await?;
         if profiles.is_empty() {
-            println!(
-                "No profiles. Create one with `edw profile generate` or `edw profile import`."
-            );
+            println!("No profiles. Create one with `edw profile new` or `edw profile import`.");
             return Ok(());
         }
 
         profiles.sort_by_key(|profile| (profile.mnemonic_index, profile.profile_index));
-        let mut mnemonic = None;
         for profile in &profiles {
-            if mnemonic != Some(profile.mnemonic_index) {
-                mnemonic = Some(profile.mnemonic_index);
-                println!("Mnemonic {}", profile.mnemonic_index);
-            }
-            println!("  {}  {}", profile.profile_index, profile.display_name());
+            println!("{}", profile.display_name());
         }
         Ok(())
     }
 }
 
-impl GenerateArgs {
+impl NewArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
-        let name = prompt_profile_name(self.name.clone())?;
-        let (mnemonic, profile) = instance
-            .generate_profile(self.long_seed, self.index, name)
+        let input = global.input();
+        let shared = if self.new_phrase {
+            None
+        } else if let Some(selector) = &self.phrase_of {
+            Some(instance.profile(selector).await?.mnemonic_index)
+        } else {
+            choose_phrase(&instance.profiles().await?, input)?
+        };
+        if self.long_seed && shared.is_some() {
+            anyhow::bail!("--long-seed only applies to a new recovery phrase");
+        }
+        let name = prompt_profile_name(self.name.clone(), input)?;
+
+        let Some(mnemonic_index) = shared else {
+            let (mnemonic, profile) = instance
+                .generate_profile(self.long_seed, self.index.unwrap_or(0), name)
+                .await?;
+            println!("Write this recovery phrase down now. It is shown only this once.");
+            println!();
+            println!("{}", mnemonic.phrase);
+            println!();
+            println!("Created profile {}.", profile.display_name());
+            return Ok(());
+        };
+        let profile = instance
+            .add_profile(mnemonic_index, self.index, name)
             .await?;
-        println!("Write this recovery phrase down now. It is shown only this once.");
-        println!();
-        println!("{}", mnemonic.phrase);
-        println!();
-        println!(
-            "Created mnemonic {} and profile {}/{} ({}).",
-            mnemonic.index,
-            profile.mnemonic_index,
-            profile.profile_index,
-            profile.display_name()
-        );
+        println!("Created profile {}.", profile.display_name());
         Ok(())
     }
 }
@@ -126,16 +121,14 @@ impl GenerateArgs {
 impl ImportArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
-        let phrase = read_phrase()?;
-        let name = prompt_profile_name(self.name.clone())?;
-        let (mnemonic, profile) = instance.import_profile(phrase, self.index, name).await?;
-        println!(
-            "Imported mnemonic {}; profile {}/{} ({}).",
-            mnemonic.index,
-            profile.mnemonic_index,
-            profile.profile_index,
-            profile.display_name()
-        );
+        let phrase = global
+            .input()
+            .secret("Recovery phrase: ")?
+            .context("no recovery phrase; pipe it on stdin")?;
+        let phrase = Zeroizing::new(phrase.split_whitespace().collect::<Vec<_>>().join(" "));
+        let name = prompt_profile_name(self.name.clone(), global.input())?;
+        let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
+        println!("Imported profile {}.", profile.display_name());
 
         let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
         let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
@@ -153,33 +146,6 @@ impl ImportArgs {
     }
 }
 
-impl AddArgs {
-    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let instance = global.open().await?;
-        let indices = instance.mnemonic_indices().await?;
-        let mnemonic_index = match (self.mnemonic, indices.as_slice()) {
-            (_, []) => {
-                anyhow::bail!("no mnemonics; run `edw profile generate` or `edw profile import`")
-            }
-            (Some(index), _) => index,
-            (None, [only]) => *only,
-            (None, _) => select_mnemonic(&indices)?,
-        };
-        let profile_index = (!self.next).then_some(self.index);
-        let name = prompt_profile_name(self.name.clone())?;
-        let record = instance
-            .add_profile(mnemonic_index, profile_index, name)
-            .await?;
-        println!(
-            "Created profile {}/{} ({}).",
-            record.mnemonic_index,
-            record.profile_index,
-            record.display_name()
-        );
-        Ok(())
-    }
-}
-
 impl RenameArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let record = global
@@ -187,59 +153,53 @@ impl RenameArgs {
             .await?
             .rename_profile(&self.selector, Some(self.new_name.clone()))
             .await?;
-        println!(
-            "Renamed profile {}/{} to {}.",
-            record.mnemonic_index,
-            record.profile_index,
-            record.display_name()
-        );
+        println!("Renamed profile to {}.", record.display_name());
         Ok(())
     }
 }
 
-/// `explicit` when given, else a name typed at the terminal. Validation is the instance's.
-fn prompt_profile_name(explicit: Option<String>) -> Result<Option<String>, anyhow::Error> {
-    if explicit.is_some() || !io::stdin().is_terminal() {
+/// `explicit` when given, else a name typed at an interactive terminal. Validation is the
+/// instance's.
+fn prompt_profile_name(
+    explicit: Option<String>,
+    input: Input,
+) -> Result<Option<String>, anyhow::Error> {
+    if explicit.is_some() || input != Input::Terminal {
         return Ok(explicit);
     }
-    print!("Profile name: ");
-    io::stdout().flush()?;
-    let mut line = String::new();
-    io::stdin().lock().read_line(&mut line)?;
-    let trimmed = line.trim();
-    Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
+    Ok(input
+        .line("Profile name: ")?
+        .filter(|name| !name.is_empty()))
 }
 
-// TODO: maybe replace or relocate: one of several stdin prompt helpers.
-fn select_mnemonic(indices: &[u32]) -> Result<u32, anyhow::Error> {
-    println!("Select a mnemonic:");
-    for index in indices {
-        println!("  mnemonic {index}");
+/// `None` for a new recovery phrase, else the stored phrase to create the profile on.
+///
+/// With no stored phrase there is nothing to pick, so it is a new one.
+fn choose_phrase(profiles: &[ProfileRecord], input: Input) -> Result<Option<u32>, anyhow::Error> {
+    let mut phrases: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut sorted: Vec<&ProfileRecord> = profiles.iter().collect();
+    sorted.sort_by_key(|profile| (profile.mnemonic_index, profile.profile_index));
+    for profile in sorted {
+        match phrases.last_mut() {
+            Some((index, names)) if *index == profile.mnemonic_index => {
+                names.push(profile.display_name());
+            }
+            _ => phrases.push((profile.mnemonic_index, vec![profile.display_name()])),
+        }
     }
-    if io::stdin().is_terminal() {
-        print!("> ");
-        io::stdout().flush()?;
+    if phrases.is_empty() {
+        return Ok(None);
     }
-    let mut line = String::new();
-    io::stdin().lock().read_line(&mut line)?;
-    let selector = line.trim();
-    if selector.is_empty() {
-        anyhow::bail!("no mnemonic selected");
-    }
-    selector
-        .parse()
-        .map_err(|_| anyhow::anyhow!("mnemonic index must be a number"))
-}
 
-// TODO: maybe replace or relocate: one of several stdin prompt helpers.
-fn read_phrase() -> Result<Zeroizing<String>, anyhow::Error> {
-    if io::stdin().is_terminal() {
-        print!("Mnemonic phrase: ");
-        io::stdout().flush()?;
-    }
-    let mut phrase = Zeroizing::new(String::new());
-    io::stdin().lock().read_line(&mut phrase)?;
-    Ok(Zeroizing::new(
-        phrase.split_whitespace().collect::<Vec<_>>().join(" "),
-    ))
+    let labels: Vec<String> = std::iter::once("a new recovery phrase".to_string())
+        .chain(
+            phrases
+                .iter()
+                .map(|(_, names)| format!("the recovery phrase of {}", names.join(", "))),
+        )
+        .collect();
+    let choice = input
+        .choose("Create the profile on:", &labels)?
+        .context("pass --new-phrase or --phrase-of <profile>")?;
+    Ok(choice.checked_sub(1).map(|index| phrases[index].0))
 }

@@ -10,7 +10,7 @@ use crate::{
         scan::{EoaScan, scan_standard_eoas},
     },
     network::NetworkEndpoint,
-    profile::simple::{ProfileRecord, bootstrap, db::SimpleProfileDb},
+    profile::{ProfileRecord, bootstrap, db::ProfileDb},
 };
 
 impl Instance {
@@ -23,13 +23,9 @@ impl Instance {
             .await?)
     }
 
-    pub async fn mnemonic_indices(&self) -> Result<Vec<u32>, InstanceError> {
-        Ok(self
-            .mnemonics()
-            .await?
-            .iter()
-            .map(|record| record.index)
-            .collect())
+    /// The profile `selector` names, as `mnemonic/profile` or a unique name.
+    pub async fn profile(&self, selector: &str) -> Result<ProfileRecord, InstanceError> {
+        Ok(bootstrap::resolve_profile(&self.profiles().await?, selector)?.clone())
     }
 
     /// Generates a mnemonic and creates exactly one profile on it, at `profile_index`.

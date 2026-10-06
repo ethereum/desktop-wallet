@@ -1,45 +1,22 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use super::bootstrap::ProfileBootstrapError;
+use super::bootstrap::ProfileError;
 use crate::database::{Database, DatabaseError};
 
 #[async_trait::async_trait]
-pub trait SimpleProfileDb: Database {
-    async fn get_executor(&self) -> Result<Option<(Uuid, String)>, SimpleProfileDatabaseError> {
-        let Some(bytes) = self.get(b"executor").await? else {
-            return Ok(None);
-        };
-        let executor = postcard::from_bytes(&bytes)?;
-        Ok(Some(executor))
-    }
-
-    async fn get_pointer(&self) -> Result<Option<(u32, u32)>, SimpleProfileDatabaseError> {
+pub trait ProfileDb: Database {
+    async fn get_pointer(&self) -> Result<Option<(u32, u32)>, ProfileDatabaseError> {
         let Some(bytes) = self.get(b"pointer").await? else {
             return Ok(None);
         };
         Ok(Some(postcard::from_bytes(&bytes)?))
     }
 
-    async fn get_vaults(&self) -> Result<Vec<(Uuid, String)>, SimpleProfileDatabaseError> {
-        let Some(bytes) = self.get(b"vaults").await? else {
-            return Ok(vec![]);
-        };
-        let vaults = postcard::from_bytes(&bytes)?;
-        Ok(vaults)
-    }
-
-    async fn put_executor(&self, executor: (Uuid, &str)) -> Result<(), SimpleProfileDatabaseError> {
-        let bytes = postcard::to_stdvec(&executor)?;
-        self.put(b"executor", &bytes).await?;
-        Ok(())
-    }
-
     async fn put_pointer(
         &self,
         mnemonic_index: u32,
         profile_index: u32,
-    ) -> Result<(), SimpleProfileDatabaseError> {
+    ) -> Result<(), ProfileDatabaseError> {
         self.put(
             b"pointer",
             &postcard::to_stdvec(&(mnemonic_index, profile_index))?,
@@ -48,23 +25,14 @@ pub trait SimpleProfileDb: Database {
         Ok(())
     }
 
-    async fn put_vaults(&self, vaults: &[(Uuid, &str)]) -> Result<(), SimpleProfileDatabaseError> {
-        let bytes = postcard::to_stdvec(vaults)?;
-        self.put(b"vaults", &bytes).await?;
-        Ok(())
-    }
-
-    async fn list_profiles(&self) -> Result<Vec<ProfileRecord>, SimpleProfileDatabaseError> {
+    async fn list_profiles(&self) -> Result<Vec<ProfileRecord>, ProfileDatabaseError> {
         let Some(bytes) = self.get(b"index").await? else {
             return Ok(vec![]);
         };
         Ok(postcard::from_bytes(&bytes)?)
     }
 
-    async fn put_profiles(
-        &self,
-        profiles: &[ProfileRecord],
-    ) -> Result<(), SimpleProfileDatabaseError> {
+    async fn put_profiles(&self, profiles: &[ProfileRecord]) -> Result<(), ProfileDatabaseError> {
         self.put(b"index", &postcard::to_stdvec(profiles)?).await?;
         Ok(())
     }
@@ -78,14 +46,14 @@ pub struct ProfileRecord {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum SimpleProfileDatabaseError {
+pub enum ProfileDatabaseError {
     #[error(transparent)]
     Database(#[from] DatabaseError),
     #[error("serialization error: {0}")]
     Serialization(#[from] postcard::Error),
 }
 
-impl<D: Database + ?Sized> SimpleProfileDb for D {}
+impl<D: Database + ?Sized> ProfileDb for D {}
 
 impl ProfileRecord {
     /// Treats an empty name or `-` as no name.
@@ -99,7 +67,7 @@ impl ProfileRecord {
     }
 
     /// Rejects `self` if another profile in `profiles` has the same display name.
-    pub fn check_unique_name(&self, profiles: &[Self]) -> Result<(), ProfileBootstrapError> {
+    pub fn check_unique_name(&self, profiles: &[Self]) -> Result<(), ProfileError> {
         let display = self.display_name();
         let taken = profiles.iter().any(|profile| {
             (profile.mnemonic_index, profile.profile_index)
@@ -107,7 +75,7 @@ impl ProfileRecord {
                 && profile.display_name() == display
         });
         if taken {
-            Err(ProfileBootstrapError::DuplicateName(display))
+            Err(ProfileError::DuplicateName(display))
         } else {
             Ok(())
         }

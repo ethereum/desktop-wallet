@@ -10,7 +10,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use crate::{
     database::{Database, scoped::ScopedDatabaseExt},
     mnemonic::db::{MnemonicDatabaseError, MnemonicDb},
-    profile::simple::{ProfileRecord, bootstrap_profile, db::SimpleProfileDb},
+    profile::{ProfileRecord, bootstrap_profile, db::ProfileDb},
 };
 
 pub mod db;
@@ -46,18 +46,16 @@ pub enum MnemonicError {
     TooMany,
     #[error("no mnemonic {0}")]
     Unresolved(u32),
-    #[error(
-        "this phrase is already stored as mnemonic {index}; add another profile with `edw profile add --mnemonic {index} --next`"
-    )]
+    #[error("this recovery phrase is already stored")]
     DuplicatePhrase { index: u32 },
     #[error("EOA scan exceeded {0} addresses without an unused gap")]
     ScanLimit(u32),
     #[error(transparent)]
     Database(#[from] MnemonicDatabaseError),
     #[error(transparent)]
-    Profile(#[from] crate::profile::simple::ProfileBootstrapError),
+    Profile(#[from] crate::profile::ProfileError),
     #[error(transparent)]
-    ProfileDatabase(#[from] crate::profile::simple::db::SimpleProfileDatabaseError),
+    ProfileDatabase(#[from] crate::profile::db::ProfileDatabaseError),
     #[error("network error: {0}")]
     Network(#[from] crate::network::endpoint::NetworkEndpointError),
 }
@@ -257,7 +255,7 @@ pub async fn generate_as_profile(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::{database::memory::MemoryDatabase, profile::simple::ProfileBootstrapError};
+    use crate::{database::memory::MemoryDatabase, profile::ProfileError};
 
     const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     const SECOND_FIXTURE: &str =
@@ -459,7 +457,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            MnemonicError::Profile(ProfileBootstrapError::DuplicateName(_))
+            MnemonicError::Profile(ProfileError::DuplicateName(_))
         ));
         let stored = store.scoped(b"mnemonics").get_mnemonics().await.unwrap();
         assert_eq!(stored.len(), 1);

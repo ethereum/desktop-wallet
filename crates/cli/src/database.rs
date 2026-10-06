@@ -21,7 +21,7 @@ impl Command {
                     "{}",
                     global
                         .data_dir()
-                        .instance_dir(instance.network_id())
+                        .instance_dir(instance.network().id)
                         .display()
                 );
                 Ok(())

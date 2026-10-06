@@ -42,6 +42,8 @@ pub enum NetworkEndpointError {
     /// The inner error type is not part of this API.
     #[error(transparent)]
     Backend(Box<dyn std::error::Error + Send + Sync>),
+    #[error("RPC URL `{0}` must be an http or https URL")]
+    InvalidUrl(String),
     #[error(
         "endpoint serves network id {found}, but the network is configured as network id {expected}"
     )]

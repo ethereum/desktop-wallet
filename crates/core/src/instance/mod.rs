@@ -4,26 +4,33 @@ use std::{
 };
 
 pub use data_dir::DataDir;
-pub use networks::NetworkConfigSpec;
 
 use crate::{
     database::{
         Database,
         encrypted::{EncryptedDatabase, EncryptedDatabaseError},
         file::{FileDatabase, FileDatabaseError},
+        scoped::ScopedDatabaseExt,
     },
     mnemonic::{MnemonicError, db::MnemonicDatabaseError},
-    network::{NetworkId, db::NetworkDatabaseError, endpoint::NetworkEndpointError},
-    profile::simple::{ProfileBootstrapError, db::SimpleProfileDatabaseError},
+    network::{
+        Network, NetworkId,
+        db::{NetworkDatabaseError, NetworkDb},
+        endpoint::NetworkEndpointError,
+    },
+    profile::{ProfileError, db::ProfileDatabaseError},
 };
 
 mod data_dir;
 mod networks;
 mod profiles;
 
+/// Scope holding the [`Network`] record and its endpoint configs.
+const NETWORK_SCOPE: &[u8] = b"network";
+
 /// One opened wallet instance: the encrypted store of a single network.
 pub struct Instance {
-    network_id: NetworkId,
+    network: Network,
     store: Arc<dyn Database>,
 }
 
@@ -41,25 +48,27 @@ pub enum InstanceError {
     Create(#[source] EncryptedDatabaseError),
     #[error("error unlocking the store")]
     Unlock(#[source] EncryptedDatabaseError),
-    #[error("networkConfig name cannot be empty")]
-    EmptyConfigName,
-    #[error("networkConfig `{0}` already exists")]
-    DuplicateConfig(String),
-    #[error("no networkConfig `{0}`")]
-    UnknownConfig(String),
-    #[error("no networkConfigs")]
-    NoConfigs,
-    #[error("network {0} has no default RPC URL; pass one")]
-    MissingRpcUrl(NetworkId),
-    #[error("RPC URL `{0}` must be an http or https URL")]
-    InvalidRpcUrl(String),
-    #[error("endpoint {url} cannot be used for {network_id}")]
+    #[error("the {0} instance has no network record; run `edw unlock --network {0}`")]
+    MissingNetwork(NetworkId),
+    #[error("endpoint name cannot be empty")]
+    EmptyEndpointName,
+    #[error("endpoint `{0}` already exists")]
+    DuplicateEndpoint(String),
+    #[error("no endpoint `{0}`")]
+    UnknownEndpoint(String),
+    #[error(
+        "no endpoint configured; add your own with `edw network endpoint add <name> --url <url>`"
+    )]
+    NoEndpoints,
+    #[error("endpoint `{name}` cannot be used for {network_id}")]
     UnusableEndpoint {
-        url: String,
+        name: String,
         network_id: NetworkId,
         #[source]
         source: NetworkEndpointError,
     },
+    #[error(transparent)]
+    Endpoint(#[from] NetworkEndpointError),
     #[error(transparent)]
     Mnemonic(#[from] MnemonicError),
     #[error(transparent)]
@@ -67,9 +76,9 @@ pub enum InstanceError {
     #[error(transparent)]
     NetworkDatabase(#[from] NetworkDatabaseError),
     #[error(transparent)]
-    Profile(#[from] ProfileBootstrapError),
+    Profile(#[from] ProfileError),
     #[error(transparent)]
-    ProfileDatabase(#[from] SimpleProfileDatabaseError),
+    ProfileDatabase(#[from] ProfileDatabaseError),
 }
 
 impl Instance {
@@ -83,32 +92,40 @@ impl Instance {
         if !data_dir.has_instance(network_id) {
             return Err(InstanceError::NotFound { network_id, dir });
         }
-        Ok(Self {
-            network_id,
-            store: Self::store(&dir, password, true).await?,
-        })
+        let store = Self::store(&dir, password, true).await?;
+        let network = store
+            .clone()
+            .scoped(NETWORK_SCOPE)
+            .get_network()
+            .await?
+            .ok_or(InstanceError::MissingNetwork(network_id))?;
+        Ok(Self { network, store })
     }
 
     /// Opens the instance for `network_id`, and creates an empty one on first use.
     ///
-    /// An instance without networkConfigs gets its preset's default, if it has a preset.
+    /// Records the network on first use. Never adds an endpoint: the user brings their own.
     pub async fn open_or_create(
         data_dir: &DataDir,
         network_id: NetworkId,
         password: &[u8],
     ) -> Result<Self, InstanceError> {
         let exists = data_dir.has_instance(network_id);
-        let instance = Self {
-            network_id,
-            store: Self::store(&data_dir.instance_dir(network_id), password, exists).await?,
+        let store = Self::store(&data_dir.instance_dir(network_id), password, exists).await?;
+        let records = store.clone().scoped(NETWORK_SCOPE);
+        let network = if let Some(network) = records.get_network().await? {
+            network
+        } else {
+            let network = Network::new(network_id);
+            records.put_network(&network).await?;
+            network
         };
-        instance.seed_default_network_config().await?;
-        Ok(instance)
+        Ok(Self { network, store })
     }
 
     #[must_use]
-    pub const fn network_id(&self) -> NetworkId {
-        self.network_id
+    pub const fn network(&self) -> &Network {
+        &self.network
     }
 
     async fn store(

@@ -3,6 +3,7 @@ use std::{fmt, num::NonZeroU64, str::FromStr};
 pub use alloy::SimpleNetworkEndpoint;
 pub use endpoint::NetworkEndpoint;
 use endpoint::NetworkEndpointError;
+pub use endpoint_config::{NetworkEndpointConfig, NetworkEndpointKind};
 pub use logs::logs_in_range;
 pub use presets::NetworkPreset;
 use serde::{Deserialize, Serialize};
@@ -10,41 +11,24 @@ use serde::{Deserialize, Serialize};
 pub mod alloy;
 pub mod db;
 pub mod endpoint;
+pub mod endpoint_config;
 pub mod logs;
 pub mod presets;
 
 pub const DEFAULT_EVENT_BLOCK_RANGE: NonZeroU64 = NonZeroU64::new(499).expect("non-zero");
-pub const DEFAULT_LOCAL_NODE_PORT: u16 = 8545;
+
+/// Native asset of a network without a preset.
+const DEFAULT_NATIVE_ASSET: &str = "eth";
 
 /// An EVM network id. Displays and parses as a preset name when one matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NetworkId(pub u64);
 
+/// A chain the wallet operates on. Each network is a separate wallet instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NetworkConfig {
-    pub network_id: NetworkId,
-    pub name: String,
+pub struct Network {
+    pub id: NetworkId,
     pub native_asset: String,
-    pub config: NetworkConfigKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, strum::Display)]
-#[strum(serialize_all = "kebab-case")]
-pub enum NetworkConfigKind {
-    SimpleProvider(SimpleProviderConfig),
-    LocalNode(LocalNodeConfig),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SimpleProviderConfig {
-    pub url: String,
-    pub event_block_range: NonZeroU64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LocalNodeConfig {
-    pub port: u16,
-    pub event_block_range: NonZeroU64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -73,15 +57,17 @@ impl FromStr for NetworkId {
     }
 }
 
-impl NetworkConfig {
+impl Network {
+    /// The preset's network, or one with a generic native asset for any other id.
     #[must_use]
-    pub fn http_rpc_url(&self) -> String {
-        match &self.config {
-            NetworkConfigKind::SimpleProvider(config) => config.url.clone(),
-            NetworkConfigKind::LocalNode(config) => {
-                format!("http://127.0.0.1:{}", config.port)
-            }
-        }
+    pub fn new(id: NetworkId) -> Self {
+        NetworkPreset::from_network_id(id).map_or_else(
+            || Self {
+                id,
+                native_asset: DEFAULT_NATIVE_ASSET.to_string(),
+            },
+            NetworkPreset::network,
+        )
     }
 }
 

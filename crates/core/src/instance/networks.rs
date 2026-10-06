@@ -1,162 +1,92 @@
-use std::{num::NonZeroU64, sync::Arc};
+use std::sync::Arc;
 
-use reqwest::Url;
-
-use super::{Instance, InstanceError};
+use super::{Instance, InstanceError, NETWORK_SCOPE};
 use crate::{
     database::scoped::{ScopedDatabase, ScopedDatabaseExt},
     network::{
-        DEFAULT_EVENT_BLOCK_RANGE, DEFAULT_LOCAL_NODE_PORT, LocalNodeConfig, NetworkConfig,
-        NetworkConfigKind, NetworkEndpoint, NetworkPreset, SimpleNetworkEndpoint,
-        SimpleProviderConfig, db::NetworkDb, verify_network_id,
+        DEFAULT_EVENT_BLOCK_RANGE, NetworkEndpoint, NetworkEndpointConfig, db::NetworkDb,
+        verify_network_id,
     },
 };
 
-/// Native asset of a network without a preset.
-const DEFAULT_NATIVE_ASSET: &str = "eth";
-
-/// A networkConfig to add, with every field the instance can default left open.
-pub enum NetworkConfigSpec {
-    /// Defaults to the preset's RPC URL.
-    SimpleProvider { url: Option<String> },
-    /// Defaults to [`DEFAULT_LOCAL_NODE_PORT`].
-    LocalNode { port: Option<u16> },
-}
-
 impl Instance {
-    pub async fn network_configs(&self) -> Result<Vec<NetworkConfig>, InstanceError> {
-        Ok(self.preferences().get_network_configs().await?)
+    pub async fn endpoint_configs(&self) -> Result<Vec<NetworkEndpointConfig>, InstanceError> {
+        Ok(self.network_db().get_endpoint_configs().await?)
     }
 
-    pub async fn active_network_config_name(&self) -> Result<Option<String>, InstanceError> {
-        Ok(self.preferences().get_active().await?)
+    pub async fn active_endpoint_name(&self) -> Result<Option<String>, InstanceError> {
+        Ok(self.network_db().get_active_endpoint().await?)
     }
 
-    /// Adds a networkConfig, and makes it active when none is.
-    pub async fn add_network_config(
+    /// Adds an endpoint config, and makes it active when none is.
+    pub async fn add_endpoint_config(
         &self,
-        name: String,
-        spec: NetworkConfigSpec,
-        event_block_range: Option<NonZeroU64>,
-    ) -> Result<NetworkConfig, InstanceError> {
-        if name.is_empty() {
-            return Err(InstanceError::EmptyConfigName);
+        config: NetworkEndpointConfig,
+    ) -> Result<(), InstanceError> {
+        if config.name.is_empty() {
+            return Err(InstanceError::EmptyEndpointName);
         }
-        let mut configs = self.network_configs().await?;
-        if configs.iter().any(|config| config.name == name) {
-            return Err(InstanceError::DuplicateConfig(name));
+        let mut configs = self.endpoint_configs().await?;
+        if configs.iter().any(|existing| existing.name == config.name) {
+            return Err(InstanceError::DuplicateEndpoint(config.name));
         }
 
-        let preset = NetworkPreset::from_network_id(self.network_id);
-        let event_block_range = event_block_range.unwrap_or(DEFAULT_EVENT_BLOCK_RANGE);
-        let kind = match spec {
-            NetworkConfigSpec::SimpleProvider { url } => {
-                let url = match url {
-                    Some(url) => {
-                        let url = url.trim();
-                        if !(url.starts_with("http://") || url.starts_with("https://")) {
-                            return Err(InstanceError::InvalidRpcUrl(url.to_string()));
-                        }
-                        url.to_string()
-                    }
-                    None => preset
-                        .ok_or(InstanceError::MissingRpcUrl(self.network_id))?
-                        .rpc_url()
-                        .to_string(),
-                };
-                NetworkConfigKind::SimpleProvider(SimpleProviderConfig {
-                    url,
-                    event_block_range,
-                })
-            }
-            NetworkConfigSpec::LocalNode { port } => {
-                NetworkConfigKind::LocalNode(LocalNodeConfig {
-                    port: port.unwrap_or(DEFAULT_LOCAL_NODE_PORT),
-                    event_block_range,
-                })
-            }
-        };
-        let config = NetworkConfig {
-            network_id: self.network_id,
-            name,
-            native_asset: preset
-                .map_or(DEFAULT_NATIVE_ASSET, NetworkPreset::native_asset)
-                .to_string(),
-            config: kind,
-        };
-
-        configs.push(config.clone());
-        let preferences = self.preferences();
-        preferences.put_network_configs(&configs).await?;
-        if preferences.get_active().await?.is_none() {
-            preferences.put_active(&config.name).await?;
+        let records = self.network_db();
+        if records.get_active_endpoint().await?.is_none() {
+            records.put_active_endpoint(&config.name).await?;
         }
-        Ok(config)
-    }
-
-    pub async fn use_network_config(&self, name: &str) -> Result<(), InstanceError> {
-        let configs = self.network_configs().await?;
-        if !configs.iter().any(|config| config.name == name) {
-            return Err(InstanceError::UnknownConfig(name.to_string()));
-        }
-        self.preferences().put_active(name).await?;
+        configs.push(config);
+        records.put_endpoint_configs(&configs).await?;
         Ok(())
     }
 
-    /// Connects to `rpc_url`, or else to the active networkConfig, and rejects an endpoint that
-    /// serves another network. Costs one round trip.
+    pub async fn use_endpoint_config(&self, name: &str) -> Result<(), InstanceError> {
+        let configs = self.endpoint_configs().await?;
+        if !configs.iter().any(|config| config.name == name) {
+            return Err(InstanceError::UnknownEndpoint(name.to_string()));
+        }
+        self.network_db().put_active_endpoint(name).await?;
+        Ok(())
+    }
+
+    /// Connects to `rpc_url`, or else through the active endpoint config, and rejects an
+    /// endpoint that serves another network. Costs one round trip.
     pub async fn endpoint(
         &self,
         rpc_url: Option<&str>,
     ) -> Result<Arc<dyn NetworkEndpoint>, InstanceError> {
-        let url = match rpc_url {
-            Some(url) => url.to_string(),
-            None => self.active_network_config().await?.http_rpc_url(),
+        let config = match rpc_url {
+            Some(url) => {
+                NetworkEndpointConfig::http(url.to_string(), url, DEFAULT_EVENT_BLOCK_RANGE)?
+            }
+            None => self.active_endpoint_config().await?,
         };
-        let parsed: Url = url
-            .parse()
-            .map_err(|_| InstanceError::InvalidRpcUrl(url.clone()))?;
-        let endpoint: Arc<dyn NetworkEndpoint> = Arc::new(SimpleNetworkEndpoint::new_http(parsed));
-        verify_network_id(endpoint.as_ref(), self.network_id)
+        let endpoint = config.connect()?;
+        verify_network_id(endpoint.as_ref(), self.network.id)
             .await
             .map_err(|source| InstanceError::UnusableEndpoint {
-                url,
-                network_id: self.network_id,
+                name: config.name,
+                network_id: self.network.id,
                 source,
             })?;
         Ok(endpoint)
     }
 
-    pub(super) async fn seed_default_network_config(&self) -> Result<(), InstanceError> {
-        let Some(preset) = NetworkPreset::from_network_id(self.network_id) else {
-            return Ok(());
-        };
-        let preferences = self.preferences();
-        if preferences.get_network_configs().await?.is_empty() {
-            let config = preset.default_config();
-            preferences
-                .put_network_configs(std::slice::from_ref(&config))
-                .await?;
-            preferences.put_active(&config.name).await?;
-        }
-        Ok(())
-    }
-
-    /// The active networkConfig, or the first one when none is marked active.
-    async fn active_network_config(&self) -> Result<NetworkConfig, InstanceError> {
-        let mut configs = self.network_configs().await?;
+    /// The active endpoint config, or the first one when none is marked active.
+    async fn active_endpoint_config(&self) -> Result<NetworkEndpointConfig, InstanceError> {
+        let mut configs = self.endpoint_configs().await?;
         if configs.is_empty() {
-            return Err(InstanceError::NoConfigs);
+            return Err(InstanceError::NoEndpoints);
         }
         let index = self
-            .active_network_config_name()
+            .active_endpoint_name()
             .await?
             .and_then(|active| configs.iter().position(|config| config.name == active))
             .unwrap_or(0);
         Ok(configs.swap_remove(index))
     }
 
-    fn preferences(&self) -> ScopedDatabase {
-        self.store.clone().scoped(b"preferences")
+    fn network_db(&self) -> ScopedDatabase {
+        self.store.clone().scoped(NETWORK_SCOPE)
     }
 }

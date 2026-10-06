@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use super::db::{ProfileRecord, SimpleProfileDatabaseError, SimpleProfileDb};
+use super::db::{ProfileDatabaseError, ProfileDb, ProfileRecord};
 use crate::database::{Database, scoped::ScopedDatabaseExt};
 
 #[derive(Debug, thiserror::Error)]
-pub enum ProfileBootstrapError {
+pub enum ProfileError {
     #[error("profile name `{0}` is ambiguous")]
     Ambiguous(String),
     #[error("database error: {0}")]
-    Database(#[from] SimpleProfileDatabaseError),
+    Database(#[from] ProfileDatabaseError),
     #[error("profile {mnemonic_index}/{profile_index} already exists")]
     Duplicate {
         mnemonic_index: u32,
@@ -27,13 +27,13 @@ pub async fn bootstrap_profile(
     mnemonic_index: u32,
     profile_index: u32,
     name: Option<String>,
-) -> Result<ProfileRecord, ProfileBootstrapError> {
+) -> Result<ProfileRecord, ProfileError> {
     let index_db = store.clone().scoped(b"profiles");
     let mut profiles = index_db.list_profiles().await?;
     if profiles.iter().any(|profile| {
         profile.mnemonic_index == mnemonic_index && profile.profile_index == profile_index
     }) {
-        return Err(ProfileBootstrapError::Duplicate {
+        return Err(ProfileError::Duplicate {
             mnemonic_index,
             profile_index,
         });
@@ -55,7 +55,7 @@ pub async fn rename_profile(
     store: Arc<dyn Database>,
     selector: &str,
     new_name: Option<String>,
-) -> Result<ProfileRecord, ProfileBootstrapError> {
+) -> Result<ProfileRecord, ProfileError> {
     let profiles = store.clone().scoped(b"profiles").list_profiles().await?;
     let current = resolve_profile(&profiles, selector)?;
     set_profile_name(
@@ -73,14 +73,14 @@ pub async fn set_profile_name(
     mnemonic_index: u32,
     profile_index: u32,
     name: Option<String>,
-) -> Result<ProfileRecord, ProfileBootstrapError> {
+) -> Result<ProfileRecord, ProfileError> {
     let index_db = store.scoped(b"profiles");
     let mut profiles = index_db.list_profiles().await?;
     let updated = {
         let Some(record) = profiles.iter_mut().find(|profile| {
             profile.mnemonic_index == mnemonic_index && profile.profile_index == profile_index
         }) else {
-            return Err(ProfileBootstrapError::Unresolved(format!(
+            return Err(ProfileError::Unresolved(format!(
                 "{mnemonic_index}/{profile_index}"
             )));
         };
@@ -96,7 +96,7 @@ pub async fn set_profile_name(
 pub fn resolve_profile<'a>(
     profiles: &'a [ProfileRecord],
     selector: &str,
-) -> Result<&'a ProfileRecord, ProfileBootstrapError> {
+) -> Result<&'a ProfileRecord, ProfileError> {
     if let Some((mnemonic_index, profile_index)) = parse_profile_pair(selector)
         && let Some(record) = profiles.iter().find(|profile| {
             profile.mnemonic_index == mnemonic_index && profile.profile_index == profile_index
@@ -112,7 +112,7 @@ pub fn resolve_profile<'a>(
     match named.as_slice() {
         [record] => return Ok(record),
         [] => {}
-        _ => return Err(ProfileBootstrapError::Ambiguous(selector.to_string())),
+        _ => return Err(ProfileError::Ambiguous(selector.to_string())),
     }
 
     let displayed: Vec<_> = profiles
@@ -121,8 +121,8 @@ pub fn resolve_profile<'a>(
         .collect();
     match displayed.as_slice() {
         [record] => Ok(record),
-        [] => Err(ProfileBootstrapError::Unresolved(selector.to_string())),
-        _ => Err(ProfileBootstrapError::Ambiguous(selector.to_string())),
+        [] => Err(ProfileError::Unresolved(selector.to_string())),
+        _ => Err(ProfileError::Ambiguous(selector.to_string())),
     }
 }
 
@@ -176,7 +176,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             duplicate_pair,
-            ProfileBootstrapError::Duplicate {
+            ProfileError::Duplicate {
                 mnemonic_index: 0,
                 profile_index: 0
             }
@@ -185,7 +185,7 @@ mod tests {
         let duplicate_name = bootstrap_profile(store, 1, 0, None).await.unwrap_err();
         assert!(matches!(
             duplicate_name,
-            ProfileBootstrapError::DuplicateName(name) if name == "default"
+            ProfileError::DuplicateName(name) if name == "default"
         ));
     }
 
@@ -204,7 +204,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             error,
-            ProfileBootstrapError::DuplicateName(name) if name == "work"
+            ProfileError::DuplicateName(name) if name == "work"
         ));
     }
 

@@ -1,5 +1,3 @@
-use std::io::{BufRead, IsTerminal};
-
 use anyhow::Context;
 use clap::Args;
 use edw_core::{
@@ -8,7 +6,7 @@ use edw_core::{
 };
 use zeroize::Zeroizing;
 
-use crate::{GlobalArgs, session::Session};
+use crate::{GlobalArgs, input::Input, session::Session};
 
 /// Where a script may pass the decryption password.
 ///
@@ -16,6 +14,9 @@ use crate::{GlobalArgs, session::Session};
 /// An environment variable is readable by anything running as the user, so this exists for
 /// automation and the terminal session is what interactive use should rely on.
 const PASSWORD_ENV: &str = "EDW_DECRYPTION_PASSWORD";
+
+const MISSING_PASSWORD: &str =
+    "no decryption password; set EDW_DECRYPTION_PASSWORD or pipe it on stdin";
 
 #[derive(Args, Debug)]
 pub struct UnlockArgs {
@@ -36,7 +37,7 @@ impl UnlockArgs {
             .is_some_and(|s| s.network == network && s.data_dir == data_dir.path());
         let previous_network = previous.as_ref().map(|s| s.network);
 
-        let password = password(&data_dir, network)?;
+        let password = password(&data_dir, network, global.input())?;
         Instance::open_or_create(&data_dir, network, password.as_bytes()).await?;
 
         if !existed {
@@ -44,7 +45,8 @@ impl UnlockArgs {
                 "Encrypted store created at {}.",
                 data_dir.instance_dir(network).display()
             );
-            println!("Create a profile with `edw profile generate` or `edw profile import`.");
+            println!("Add your RPC endpoint with `edw network endpoint add <name> --url <url>`.");
+            println!("Create a profile with `edw profile new` or `edw profile import`.");
         }
 
         let session = Session {
@@ -74,8 +76,50 @@ impl UnlockArgs {
     }
 }
 
-/// The decryption password, from the environment, the session, or the terminal.
-fn password(data_dir: &DataDir, network: NetworkId) -> Result<Zeroizing<String>, anyhow::Error> {
+/// Unlocks an existing instance at a terminal, for a command that found no session.
+///
+/// Picks the only instance under `data_dir`, or asks which one when there are several, and
+/// keeps the session as `edw unlock` would. Creates nothing.
+pub async fn prompt_unlock(data_dir: &DataDir, input: Input) -> Result<Instance, anyhow::Error> {
+    let network = match data_dir.instances().as_slice() {
+        [] => anyhow::bail!(
+            "no wallet instance at {}; run `edw unlock`",
+            data_dir.path().display()
+        ),
+        [only] => *only,
+        several => {
+            let labels: Vec<String> = several.iter().map(ToString::to_string).collect();
+            let choice = input
+                .choose("Select a network to unlock:", &labels)?
+                .context(
+                    "several wallet instances exist; run `edw unlock --network <name or id>`",
+                )?;
+            several[choice]
+        }
+    };
+
+    eprintln!("Wallet is locked; unlocking {network}.");
+    let password = input
+        .secret("Decryption password: ")?
+        .context(MISSING_PASSWORD)?;
+    let instance = Instance::open(data_dir, network, password.as_bytes()).await?;
+    let session = Session {
+        data_dir: data_dir.path().to_path_buf(),
+        network,
+        password,
+    };
+    if let Err(error) = session.store() {
+        eprintln!("Password accepted, but a session could not be saved: {error:#}");
+    }
+    Ok(instance)
+}
+
+/// The decryption password, from the environment, the session, or `input`.
+fn password(
+    data_dir: &DataDir,
+    network: NetworkId,
+    input: Input,
+) -> Result<Zeroizing<String>, anyhow::Error> {
     if let Some(value) = std::env::var_os(PASSWORD_ENV) {
         let value = value
             .into_string()
@@ -91,14 +135,23 @@ fn password(data_dir: &DataDir, network: NetworkId) -> Result<Zeroizing<String>,
     }
 
     if data_dir.has_instance(network) {
-        Ok(prompt("Decryption password: ")?)
+        input
+            .secret("Decryption password: ")?
+            .context(MISSING_PASSWORD)
     } else {
-        Ok(setup(data_dir, network)?)
+        setup(data_dir, network, input)
     }
 }
 
 /// Walks a first run through choosing a decryption password.
-fn setup(data_dir: &DataDir, network: NetworkId) -> Result<Zeroizing<String>, anyhow::Error> {
+fn setup(
+    data_dir: &DataDir,
+    network: NetworkId,
+    input: Input,
+) -> Result<Zeroizing<String>, anyhow::Error> {
+    if input == Input::Disabled {
+        anyhow::bail!("{MISSING_PASSWORD}; nothing was created");
+    }
     println!(
         "No wallet instance exists for {network} at {}.",
         data_dir.instance_dir(network).display()
@@ -106,42 +159,23 @@ fn setup(data_dir: &DataDir, network: NetworkId) -> Result<Zeroizing<String>, an
     println!("A decryption password must be set up before anything can be stored.");
     println!("There is no recovery path if it is lost: the data is encrypted under it alone.");
 
-    let password = prompt("New decryption password: ")?;
+    let password = input
+        .secret("New decryption password: ")?
+        .context(MISSING_PASSWORD)?;
     if password.is_empty() {
         anyhow::bail!("the decryption password cannot be empty; nothing was created");
     }
 
-    // Only a typed password can hold a typo worth catching; a redirected stdin would just be
+    // Only a typed password can hold a typo worth catching; piped stdin would just be
     // repeating itself.
-    if std::io::stdin().is_terminal() {
-        let confirmation = prompt("Confirm decryption password: ")?;
+    if input == Input::Terminal {
+        let confirmation = input
+            .secret("Confirm decryption password: ")?
+            .context(MISSING_PASSWORD)?;
         if password.as_str() != confirmation.as_str() {
             anyhow::bail!("the passwords do not match; nothing was created");
         }
     }
 
     Ok(password)
-}
-
-// TODO: maybe replace or relocate: one of several stdin prompt helpers (see profile/mod.rs).
-/// Reads a password without echoing it when attached to a terminal.
-///
-/// With stdin redirected there is no terminal to suppress echo on, so the password is read as
-/// a plain line. That is what makes the command scriptable and testable; it is not a weaker
-/// path, because a redirected stdin was never being echoed to begin with.
-fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
-    if std::io::stdin().is_terminal() {
-        return Ok(Zeroizing::new(
-            rpassword::prompt_password(label).context("error reading the decryption password")?,
-        ));
-    }
-
-    let mut password = Zeroizing::new(String::new());
-    std::io::stdin()
-        .lock()
-        .read_line(&mut password)
-        .context("error reading the decryption password from stdin")?;
-    Ok(Zeroizing::new(
-        password.trim_end_matches(['\r', '\n']).to_string(),
-    ))
 }

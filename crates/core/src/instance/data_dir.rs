@@ -51,11 +51,30 @@ impl DataDir {
         fs::read_dir(self.instance_dir(network_id))
             .is_ok_and(|mut entries| entries.next().is_some())
     }
+
+    /// The networks with an instance here, in network id order.
+    #[must_use]
+    pub fn instances(&self) -> Vec<NetworkId> {
+        let Ok(entries) = fs::read_dir(&self.0) else {
+            return Vec::new();
+        };
+        let mut instances: Vec<NetworkId> = entries
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name().into_string().ok()?;
+                let network_id = name.parse::<NetworkId>().ok()?;
+                (network_id.to_string() == name && self.has_instance(network_id))
+                    .then_some(network_id)
+            })
+            .collect();
+        instances.sort_by_key(|network_id| network_id.0);
+        instances
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     #[test]
     fn a_missing_leaf_resolves_under_its_canonical_parent() {
@@ -77,6 +96,29 @@ mod tests {
         assert_eq!(
             data_dir.instance_dir(NetworkId(1337)),
             Path::new("/edw/1337")
+        );
+    }
+
+    #[test]
+    fn instances_lists_only_non_empty_canonically_named_instance_dirs() {
+        let root = TempDir::new();
+        for (dir, populated) in [
+            ("1337", true),
+            ("mainnet", true),
+            ("sepolia", false),
+            ("1", true),
+            ("notes", true),
+        ] {
+            let dir = root.path().join(dir);
+            fs::create_dir_all(&dir).unwrap();
+            if populated {
+                fs::write(dir.join("record"), b"x").unwrap();
+            }
+        }
+
+        assert_eq!(
+            DataDir::new(root.path()).instances(),
+            vec![NetworkId(1), NetworkId(1337)]
         );
     }
 }
