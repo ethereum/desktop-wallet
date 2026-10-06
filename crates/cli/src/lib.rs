@@ -2,6 +2,8 @@ use clap::{Parser, Subcommand};
 
 use crate::{global_args::GlobalArgs, session::SessionFile};
 
+mod asset;
+mod balance;
 mod config;
 mod database;
 mod global_args;
@@ -29,6 +31,11 @@ enum Command {
     /// Manages wallet profiles.
     #[command(subcommand)]
     Profile(profile::Command),
+    /// Manages the network's assets and which profiles and accounts track them.
+    #[command(subcommand)]
+    Asset(asset::Command),
+    /// Shows what profiles hold of their enabled assets.
+    Balance(balance::BalanceArgs),
     /// Manages profile databases.
     #[command(subcommand)]
     Database(database::Command),
@@ -46,6 +53,8 @@ impl Cli {
         match &self.command {
             Command::Config(args) => args.run(&self.global).await,
             Command::Profile(args) => args.run(&self.global).await?,
+            Command::Asset(args) => args.run(&self.global).await?,
+            Command::Balance(args) => args.run(&self.global).await?,
             Command::Database(args) => args.run(&self.global).await?,
             Command::Network(args) => args.run(&self.global).await?,
             Command::Unlock(args) => args.run(&self.global).await?,

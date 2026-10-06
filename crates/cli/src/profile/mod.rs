@@ -1,6 +1,6 @@
 use anyhow::Context;
 use clap::{ArgGroup, Args, Subcommand};
-use edw_core::profile::ProfileRecord;
+use edw_core::{account::AccountKind, instance::Instance, profile::ProfileRecord};
 use zeroize::Zeroizing;
 
 use crate::{GlobalArgs, input::Input};
@@ -9,6 +9,8 @@ use crate::{GlobalArgs, input::Input};
 pub enum Command {
     /// List profiles.
     List(ListArgs),
+    /// Show a profile's accounts and enabled assets.
+    Show(ShowArgs),
     /// Create a profile on a new recovery phrase, or on one another profile uses.
     New(NewArgs),
     /// Create a profile from an existing recovery phrase.
@@ -19,6 +21,12 @@ pub enum Command {
 
 #[derive(Args, Debug)]
 pub struct ListArgs {}
+
+#[derive(Args, Debug)]
+pub struct ShowArgs {
+    /// Profile to show. May be omitted when there is only one.
+    profile: Option<String>,
+}
 
 #[derive(Args, Debug)]
 #[command(group = ArgGroup::new("phrase").args(["new_phrase", "phrase_of"]))]
@@ -60,6 +68,7 @@ impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match self {
             Self::List(args) => args.run(global).await,
+            Self::Show(args) => args.run(global).await,
             Self::New(args) => args.run(global).await,
             Self::Import(args) => args.run(global).await,
             Self::Rename(args) => args.run(global).await,
@@ -78,6 +87,46 @@ impl ListArgs {
         profiles.sort_by_key(|profile| (profile.mnemonic_index, profile.profile_index));
         for profile in &profiles {
             println!("{}", profile.display_name());
+        }
+        Ok(())
+    }
+}
+
+impl ShowArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let instance = global.open().await?;
+        let profile = pick_profile(&instance, self.profile.as_deref(), global.input()).await?;
+        let assets = instance.assets().await?;
+        let symbol = |id| {
+            assets
+                .iter()
+                .find(|asset| asset.id == id)
+                .map_or_else(|| id.to_string(), |asset| asset.symbol.clone())
+        };
+
+        println!("{}", profile.display_name());
+        let enabled: Vec<String> = instance
+            .profile_assets(&profile)
+            .await?
+            .into_iter()
+            .map(symbol)
+            .collect();
+        if !enabled.is_empty() {
+            println!("  assets {}", enabled.join(", "));
+        }
+        for account in instance.accounts(&profile).await? {
+            match &account.kind {
+                AccountKind::Address { index, address } => {
+                    println!("  account {}  address {index}  {address}", account.id);
+                }
+                AccountKind::Stealth { meta_address, .. } => {
+                    println!("  account {}  stealth  {meta_address}", account.id);
+                }
+            }
+            if !account.assets.is_empty() {
+                let enabled: Vec<String> = account.assets.iter().copied().map(symbol).collect();
+                println!("    assets {}", enabled.join(", "));
+            }
         }
         Ok(())
     }
@@ -195,4 +244,29 @@ fn choose_phrase(profiles: &[ProfileRecord], input: Input) -> Result<Option<u32>
         .choose("Create the profile on:", &labels)?
         .context("pass --new-phrase or --phrase-of <profile>")?;
     Ok(choice.checked_sub(1).map(|index| phrases[index].0))
+}
+
+/// The profile `selector` names. Without one, the only profile, or a choice at an interactive
+/// terminal.
+pub async fn pick_profile(
+    instance: &Instance,
+    selector: Option<&str>,
+    input: Input,
+) -> Result<ProfileRecord, anyhow::Error> {
+    if let Some(selector) = selector {
+        return Ok(instance.profile(selector).await?);
+    }
+    let mut profiles = instance.profiles().await?;
+    profiles.sort_by_key(ProfileRecord::key);
+    match profiles.as_slice() {
+        [] => anyhow::bail!("no profiles; run `edw profile new` or `edw profile import`"),
+        [only] => Ok(only.clone()),
+        _ => {
+            let names: Vec<String> = profiles.iter().map(ProfileRecord::display_name).collect();
+            let choice = input
+                .choose("Select a profile:", &names)?
+                .context("several profiles exist; name one")?;
+            Ok(profiles.swap_remove(choice))
+        }
+    }
 }

@@ -1,30 +1,24 @@
 use clap::Subcommand;
 
-use crate::{GlobalArgs, network::view::NetworkViewArgs};
+use crate::{GlobalArgs, network::status::NetworkStatusArgs};
 
 pub mod endpoint;
-pub mod view;
+pub mod status;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Show the unlocked network and its active endpoint.
-    View(NetworkViewArgs),
+    /// Show the unlocked network, its active endpoint, and the endpoint's latest block.
+    Status(NetworkStatusArgs),
     /// Manage how this network is reached.
     #[command(subcommand)]
     Endpoint(endpoint::Command),
-    /// View network status, latest reported block-height, etc
-    Status,
 }
 
 impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match &self {
-            Command::View(args) => args.run(global).await,
+            Command::Status(args) => args.run(global).await,
             Command::Endpoint(command) => command.run(global).await,
-            Command::Status => {
-                println!("Unimplemented");
-                Ok(())
-            }
         }
     }
 }

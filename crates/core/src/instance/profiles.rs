@@ -141,7 +141,7 @@ impl Instance {
         Keyring::new(self.store.clone())
     }
 
-    fn profile_index(&self) -> ProfileIndex {
+    pub(super) fn profile_index(&self) -> ProfileIndex {
         ProfileIndex::new(self.store.clone())
     }
 }

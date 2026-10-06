@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
+use alloy_rpc_types_eth::SignedAuthorization;
 use alloy_sol_types::{SolCall, sol};
 
 use crate::{
@@ -165,10 +165,10 @@ impl Vault for SimpleVault {
     }
 
     async fn balance(&self, asset: &AssetId) -> Result<U256, VaultError> {
-        match asset {
-            AssetId::Native => Ok(self.balance_native().await?),
-            AssetId::Erc20(token) => Ok(self.balance_erc20(*token).await?),
-        }
+        asset
+            .balance_of(self.address(), self.provider.as_ref())
+            .await
+            .map_err(|error| VaultError::Other(Box::new(error)))
     }
 
     async fn deposit(
@@ -180,6 +180,7 @@ impl Vault for SimpleVault {
         let calls = match asset {
             AssetId::Native => self.deposit_native(amount),
             AssetId::Erc20(token) => self.deposit_erc20(*token, amount),
+            AssetId::Erc1155 { .. } => return Err(VaultError::UnsupportedAsset(*asset)),
         };
         Ok(calls)
     }
@@ -198,6 +199,7 @@ impl Vault for SimpleVault {
         let calls = match asset {
             AssetId::Native => self.withdraw_native(*address, amount).await?,
             AssetId::Erc20(token) => self.withdraw_erc20(*address, *token, amount).await?,
+            AssetId::Erc1155 { .. } => return Err(VaultError::UnsupportedAsset(*asset)),
         };
         Ok(calls)
     }
@@ -206,26 +208,6 @@ impl Vault for SimpleVault {
 impl SimpleVault {
     fn address(&self) -> Address {
         self.delegate.address()
-    }
-
-    async fn balance_native(&self) -> Result<U256, SimpleVaultError> {
-        let balance = self.provider.balance(self.address()).await?;
-        Ok(balance)
-    }
-
-    async fn balance_erc20(&self, token: Address) -> Result<U256, SimpleVaultError> {
-        let call = Erc20::balanceOfCall::new((self.address(),));
-        let data = self
-            .provider
-            .call(
-                TransactionRequest::default()
-                    .to(token)
-                    .input(call.abi_encode().into()),
-            )
-            .await?;
-
-        let balance = Erc20::balanceOfCall::abi_decode_returns(&data)?;
-        Ok(balance)
     }
 
     fn deposit_native(&self, amount: U256) -> Vec<Call> {

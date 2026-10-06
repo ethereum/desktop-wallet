@@ -3,9 +3,11 @@ use std::{
     sync::Arc,
 };
 
+pub use assets::AccountBalances;
 pub use data_dir::DataDir;
 
 use crate::{
+    asset::{AssetError, AssetId},
     database::{
         Database,
         encrypted::{EncryptedDatabase, EncryptedDatabaseError},
@@ -21,6 +23,7 @@ use crate::{
     profile::ProfileError,
 };
 
+mod assets;
 mod data_dir;
 mod networks;
 mod profiles;
@@ -67,6 +70,14 @@ pub enum InstanceError {
         #[source]
         source: NetworkEndpointError,
     },
+    #[error("asset {0} is already configured")]
+    DuplicateAsset(AssetId),
+    #[error("no asset `{0}`")]
+    UnknownAsset(String),
+    #[error("`{0}` names more than one asset; use its symbol")]
+    AmbiguousAsset(String),
+    #[error(transparent)]
+    Asset(#[from] AssetError),
     #[error(transparent)]
     Endpoint(#[from] NetworkEndpointError),
     #[error(transparent)]

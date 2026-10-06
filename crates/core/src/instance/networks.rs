@@ -84,7 +84,7 @@ impl Instance {
         Ok(configs.swap_remove(index))
     }
 
-    fn network_db(&self) -> ScopedDatabase {
+    pub(super) fn network_db(&self) -> ScopedDatabase {
         ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE)
     }
 }

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::index::ProfileError;
 use crate::{
     account::AccountRecord,
+    asset::AssetId,
     database::{Database, DatabaseError},
 };
 
@@ -18,6 +19,18 @@ pub trait ProfileDb: Database {
     async fn put_accounts(&self, accounts: &[AccountRecord]) -> Result<(), ProfileDatabaseError> {
         self.put(b"accounts", &postcard::to_stdvec(accounts)?)
             .await?;
+        Ok(())
+    }
+
+    async fn get_assets(&self) -> Result<Vec<AssetId>, ProfileDatabaseError> {
+        let Some(bytes) = self.get(b"assets").await? else {
+            return Ok(vec![]);
+        };
+        Ok(postcard::from_bytes(&bytes)?)
+    }
+
+    async fn put_assets(&self, assets: &[AssetId]) -> Result<(), ProfileDatabaseError> {
+        self.put(b"assets", &postcard::to_stdvec(assets)?).await?;
         Ok(())
     }
 

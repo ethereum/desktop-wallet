@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::db::{ProfileDatabaseError, ProfileDb, ProfileRecord};
 use crate::{
     account::{AccountKind, AccountRecord},
+    asset::AssetId,
     database::{Database, scoped::ScopedDatabase},
 };
 
@@ -26,6 +27,8 @@ pub enum ProfileError {
     DuplicateName(String),
     #[error("no profile matches `{0}`")]
     Unresolved(String),
+    #[error("the profile has no account {0}")]
+    UnknownAccount(u32),
 }
 
 impl ProfileIndex {
@@ -151,6 +154,7 @@ impl ProfileIndex {
                 id,
                 kind,
                 label: None,
+                assets: Vec::new(),
             };
             accounts.push(account.clone());
             added.push(account);
@@ -159,6 +163,36 @@ impl ProfileIndex {
             scope.put_accounts(&accounts).await?;
         }
         Ok(added)
+    }
+
+    /// Assets enabled for every account of `profile`.
+    pub async fn assets(&self, profile: &ProfileRecord) -> Result<Vec<AssetId>, ProfileError> {
+        Ok(self.profile_scope(profile).get_assets().await?)
+    }
+
+    pub async fn set_assets(
+        &self,
+        profile: &ProfileRecord,
+        assets: &[AssetId],
+    ) -> Result<(), ProfileError> {
+        Ok(self.profile_scope(profile).put_assets(assets).await?)
+    }
+
+    pub async fn set_account_assets(
+        &self,
+        profile: &ProfileRecord,
+        account_id: u32,
+        assets: Vec<AssetId>,
+    ) -> Result<(), ProfileError> {
+        let scope = self.profile_scope(profile);
+        let mut accounts = scope.get_accounts().await?;
+        let account = accounts
+            .iter_mut()
+            .find(|account| account.id == account_id)
+            .ok_or(ProfileError::UnknownAccount(account_id))?;
+        account.assets = assets;
+        scope.put_accounts(&accounts).await?;
+        Ok(())
     }
 
     pub async fn rename(

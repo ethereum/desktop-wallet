@@ -1,7 +1,10 @@
 use alloy_primitives::{Address, Bytes};
 use serde::{Deserialize, Serialize};
 
-use crate::mnemonic::{Mnemonic, MnemonicError};
+use crate::{
+    asset::AssetId,
+    mnemonic::{Mnemonic, MnemonicError},
+};
 
 /// The ERC-5564 scheme stealth accounts use: secp256k1 with view tags.
 const STEALTH_SCHEME: u32 = 1;
@@ -12,6 +15,8 @@ pub struct AccountRecord {
     pub id: u32,
     pub kind: AccountKind,
     pub label: Option<String>,
+    /// Assets enabled for this account on top of its profile's.
+    pub assets: Vec<AssetId>,
 }
 
 /// Each kind keeps the public side of what it derives, so reading an account never needs the
@@ -23,6 +28,17 @@ pub enum AccountKind {
     /// The ERC-5564 meta-address: compressed spending and viewing public keys from
     /// `m/44'/60'/x'/5564'/scheme'/{0,1}`.
     Stealth { scheme: u32, meta_address: Bytes },
+}
+
+impl AccountRecord {
+    /// The address this account holds funds at, if it has a single one.
+    #[must_use]
+    pub const fn address(&self) -> Option<Address> {
+        match &self.kind {
+            AccountKind::Address { address, .. } => Some(*address),
+            AccountKind::Stealth { .. } => None,
+        }
+    }
 }
 
 impl AccountKind {

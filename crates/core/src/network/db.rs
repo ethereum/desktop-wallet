@@ -1,5 +1,8 @@
 use super::{Network, NetworkEndpointConfig};
-use crate::database::{Database, DatabaseError};
+use crate::{
+    asset::Asset,
+    database::{Database, DatabaseError},
+};
 
 #[async_trait::async_trait]
 pub trait NetworkDb: Database {
@@ -43,6 +46,18 @@ pub trait NetworkDb: Database {
     async fn put_active_endpoint(&self, name: &str) -> Result<(), NetworkDatabaseError> {
         self.put(b"activeEndpoint", &postcard::to_stdvec(&name)?)
             .await?;
+        Ok(())
+    }
+
+    async fn get_assets(&self) -> Result<Vec<Asset>, NetworkDatabaseError> {
+        let Some(bytes) = self.get(b"assets").await? else {
+            return Ok(vec![]);
+        };
+        Ok(postcard::from_bytes(&bytes)?)
+    }
+
+    async fn put_assets(&self, assets: &[Asset]) -> Result<(), NetworkDatabaseError> {
+        self.put(b"assets", &postcard::to_stdvec(assets)?).await?;
         Ok(())
     }
 }

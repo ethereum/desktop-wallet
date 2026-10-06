@@ -35,6 +35,16 @@ pub trait NetworkEndpoint: Send + Sync {
     async fn receipt(&self, tx: TxHash)
     -> Result<Option<TransactionReceipt>, NetworkEndpointError>;
 
+    /// Calls the contract at `to` with ABI-encoded `data` against the latest block.
+    async fn call_contract(
+        &self,
+        to: Address,
+        data: Vec<u8>,
+    ) -> Result<Bytes, NetworkEndpointError> {
+        self.call(TransactionRequest::default().to(to).input(data.into()))
+            .await
+    }
+
     /// Rejects this endpoint unless it serves `expected`. Costs one round trip.
     async fn verify_network_id(&self, expected: NetworkId) -> Result<(), NetworkEndpointError> {
         let found = self.network_id().await?;

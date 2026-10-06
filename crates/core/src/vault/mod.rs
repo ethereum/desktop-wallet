@@ -44,6 +44,8 @@ pub enum VaultId {
 pub enum VaultError {
     #[error("unsupported vault id: {0:?}")]
     UnsupportedVaultId(VaultId),
+    #[error("this vault cannot move {0}")]
+    UnsupportedAsset(AssetId),
     #[error(transparent)]
     Other(Box<dyn std::error::Error + Send + Sync>),
 }
