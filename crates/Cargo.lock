@@ -1861,7 +1861,6 @@ dependencies = [
  "alloy-signer-local",
  "alloy-sol-types",
  "alloy-transport",
- "anyhow",
  "argon2",
  "async-trait",
  "bip32",

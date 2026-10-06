@@ -82,7 +82,9 @@ impl ListArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let mut profiles = global.open().await?.profiles().await?;
         if profiles.is_empty() {
-            println!("No profiles.");
+            println!(
+                "No profiles. Create one with `edw profile generate` or `edw profile import`."
+            );
             return Ok(());
         }
 
@@ -157,7 +159,7 @@ impl AddArgs {
         let indices = instance.mnemonic_indices().await?;
         let mnemonic_index = match (self.mnemonic, indices.as_slice()) {
             (_, []) => {
-                anyhow::bail!("no mnemonics; unlock a new network or run `edw profile generate`")
+                anyhow::bail!("no mnemonics; run `edw profile generate` or `edw profile import`")
             }
             (Some(index), _) => index,
             (None, [only]) => *only,
@@ -196,7 +198,7 @@ impl RenameArgs {
 }
 
 /// `explicit` when given, else a name typed at the terminal. Validation is the instance's.
-pub fn prompt_profile_name(explicit: Option<String>) -> Result<Option<String>, anyhow::Error> {
+fn prompt_profile_name(explicit: Option<String>) -> Result<Option<String>, anyhow::Error> {
     if explicit.is_some() || !io::stdin().is_terminal() {
         return Ok(explicit);
     }

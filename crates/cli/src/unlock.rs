@@ -8,7 +8,7 @@ use edw_core::{
 };
 use zeroize::Zeroizing;
 
-use crate::{GlobalArgs, profile::prompt_profile_name, session::Session};
+use crate::{GlobalArgs, session::Session};
 
 /// Where a script may pass the decryption password.
 ///
@@ -37,30 +37,14 @@ impl UnlockArgs {
         let previous_network = previous.as_ref().map(|s| s.network);
 
         let password = password(&data_dir, network)?;
-        let (instance, created) =
-            Instance::open_or_create(&data_dir, network, password.as_bytes()).await?;
+        Instance::open_or_create(&data_dir, network, password.as_bytes()).await?;
 
         if !existed {
             println!(
                 "Encrypted store created at {}.",
                 data_dir.instance_dir(network).display()
             );
-        }
-
-        if let Some(mnemonic) = created {
-            println!("Write this recovery phrase down now. It is shown only this once.");
-            println!();
-            println!("{}", mnemonic.phrase);
-            println!();
-
-            if std::io::stdin().is_terminal() {
-                let name = prompt_profile_name(None)?;
-                if name.is_some() {
-                    instance.set_profile_name(0, 0, name).await?;
-                }
-            }
-
-            println!("Mnemonic 0 and profile 0 were created.");
+            println!("Create a profile with `edw profile generate` or `edw profile import`.");
         }
 
         let session = Session {

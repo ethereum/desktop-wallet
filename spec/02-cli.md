@@ -27,8 +27,8 @@ instance, `networkConfig` rows hold the RPC endpoints and are all pinned to that
 chain ID, so there is no wallet-wide network list to enumerate.
 
 **Profiles are what users name.** Mnemonics are numbered background state (`mnemonic 0`,
-`mnemonic 1`) with no commands of their own. First unlock of a new instance generates a
-12-word seed, creates mnemonic 0 and profile 0, and prints the phrase once. Display names are
+`mnemonic 1`) with no commands of their own. `edw profile generate` or `import` creates them;
+unlock never does. Display names are
 unique within an instance, and an unnamed index 0 displays as `default`.
 
 Both are defined in [`vocabulary.md`](./vocabulary.md). Signers, executors, and vaults stay
@@ -93,16 +93,16 @@ in [Missing arguments](#missing-arguments).
 This is the one place the two halves of the model pull against each other.
 
 Opening an instance never happens as a side effect: a command against a locked wallet fails
-and says to run `edw unlock`. But first unlock of a _new_ instance does create state, since it
-generates a seed and profile 0 so the user has something to hold.
+and says to run `edw unlock`. First unlock of a _new_ instance creates only the empty
+encrypted store under the chosen password.
 
 **Proposed: `unlock` is the single command allowed to create, and it creates only on first
 use of an instance.** Everything else fails rather than bootstrapping. Stated as a rule with
 one named exception, so neither behavior is a surprise:
 
 - `edw <anything>` on a locked instance: fails, tells the user to unlock.
-- `edw unlock --network <name>` on a fresh instance: creates it, generates mnemonic 0 and
-  profile 0, prints the phrase once.
+- `edw unlock --network <name>` on a fresh instance: creates the empty store. Profiles and
+  mnemonics come from `edw profile generate` or `import`.
 - `edw unlock --network <name>` on an existing instance: opens it, creates nothing.
 
 The alternative is an explicit `edw init` that first unlock refuses to stand in for. That is
@@ -166,7 +166,7 @@ directly here:
 - **`edw profile reveal-seed` has no `--non-interactive` mode**, and is the one exception to
   the rule above. A machine-readable seed phrase is the thing that rule exists to prevent.
 
-The command stays. The wallet already prints a seed phrase once at first unlock, so seed
+The command stays. The wallet already prints a seed phrase once at `profile generate`, so seed
 material on a terminal is a flow the product has; a backup command the user can re-run
 deliberately is safer than leaving them to screenshot the one-time print. Note that
 [`00-vision.md`](./00-vision.md) scopes the safety basic to a "seed-backup flow at creation",

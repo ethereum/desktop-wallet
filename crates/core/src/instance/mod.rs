@@ -12,7 +12,7 @@ use crate::{
         encrypted::{EncryptedDatabase, EncryptedDatabaseError},
         file::{FileDatabase, FileDatabaseError},
     },
-    mnemonic::{self, MnemonicError, MnemonicRecord, db::MnemonicDatabaseError},
+    mnemonic::{MnemonicError, db::MnemonicDatabaseError},
     network::{NetworkId, db::NetworkDatabaseError, endpoint::NetworkEndpointError},
     profile::simple::{ProfileBootstrapError, db::SimpleProfileDatabaseError},
 };
@@ -89,28 +89,21 @@ impl Instance {
         })
     }
 
-    /// Opens the instance for `network_id`, and creates it on first use.
+    /// Opens the instance for `network_id`, and creates an empty one on first use.
     ///
-    /// A created instance gets mnemonic 0 with profile 0, returned so its phrase can be shown
-    /// once. An instance without networkConfigs gets its preset's default, if it has a preset.
+    /// An instance without networkConfigs gets its preset's default, if it has a preset.
     pub async fn open_or_create(
         data_dir: &DataDir,
         network_id: NetworkId,
         password: &[u8],
-    ) -> Result<(Self, Option<MnemonicRecord>), InstanceError> {
+    ) -> Result<Self, InstanceError> {
         let exists = data_dir.has_instance(network_id);
         let instance = Self {
             network_id,
             store: Self::store(&data_dir.instance_dir(network_id), password, exists).await?,
         };
         instance.seed_default_network_config().await?;
-
-        let created = if exists {
-            None
-        } else {
-            Some(mnemonic::seed_new_instance(instance.store.clone(), false).await?)
-        };
-        Ok((instance, created))
+        Ok(instance)
     }
 
     #[must_use]

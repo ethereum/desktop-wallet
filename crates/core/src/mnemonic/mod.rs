@@ -202,18 +202,6 @@ pub async fn add_mnemonic(
     Ok(record)
 }
 
-// TODO: maybe replace or relocate: reaches into profile bootstrap from the mnemonic module.
-/// Generates and stores the first mnemonic on a new network instance, with profile 0.
-pub async fn seed_new_instance(
-    store: Arc<dyn Database>,
-    long_seed: bool,
-) -> Result<MnemonicRecord, MnemonicError> {
-    let mnemonic = Mnemonic::generate(long_seed)?;
-    let record = add_mnemonic(store.clone(), mnemonic.phrase()).await?;
-    bootstrap_profile(store, record.index, 0, None).await?;
-    Ok(record)
-}
-
 // TODO: maybe replace or relocate: lookup on a slice of records; a method on a collection type.
 pub fn resolve_mnemonic(
     records: &[MnemonicRecord],
@@ -389,9 +377,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seed_new_instance_creates_default_mnemonic_and_profile() {
+    async fn generate_on_an_empty_instance_creates_mnemonic_0_and_profile_0() {
         let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        let record = seed_new_instance(store.clone(), false).await.unwrap();
+        let (record, _) = generate_as_profile(store.clone(), false, 0, None)
+            .await
+            .unwrap();
         assert_eq!(record.index, 0);
         assert_eq!(record.phrase.split_whitespace().count(), 12);
 
@@ -405,7 +395,9 @@ mod tests {
     #[tokio::test]
     async fn import_creates_only_the_requested_index() {
         let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        seed_new_instance(store.clone(), false).await.unwrap();
+        generate_as_profile(store.clone(), false, 0, None)
+            .await
+            .unwrap();
 
         let created = bootstrap_profile(store.clone(), 0, 1, None).await.unwrap();
         assert_eq!(created.profile_index, 1);
@@ -452,7 +444,9 @@ mod tests {
     #[tokio::test]
     async fn import_with_a_taken_name_stores_no_mnemonic() {
         let store: Arc<dyn Database> = Arc::new(MemoryDatabase::new());
-        seed_new_instance(store.clone(), false).await.unwrap();
+        generate_as_profile(store.clone(), false, 0, None)
+            .await
+            .unwrap();
 
         let error = import_as_profile(
             store.clone(),
