@@ -1,135 +1,94 @@
 use std::{
-    fs,
-    io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
-use edw_core::network::SupportedNetwork;
+use edw_core::{
+    database::{Database, file::FileDatabase},
+    network::NetworkId,
+};
 use zeroize::Zeroizing;
 
 const TTL: Duration = Duration::from_mins(15);
 
+const RECORD: &[u8] = b"session";
+
+/// The unlocked network and its password, kept between commands for [`TTL`] after last use.
 pub struct Session {
     pub data_dir: PathBuf,
-    pub network: SupportedNetwork,
+    pub network: NetworkId,
     pub password: Zeroizing<String>,
 }
 
-impl Session {
-    pub fn load() -> Option<Self> {
-        let path = path()?;
-        let raw = Zeroizing::new(fs::read_to_string(&path).ok()?);
-        let mut parts = raw.splitn(4, '\n');
-        let deadline = parts.next()?;
+/// Where the session is kept: a private store under `$XDG_RUNTIME_DIR/edw`. Without a
+/// runtime dir nothing can be kept, so every command finds the wallet locked.
+pub struct SessionFile(Option<FileDatabase>);
+
+impl SessionFile {
+    pub fn runtime() -> Self {
+        Self(
+            std::env::var_os("XDG_RUNTIME_DIR")
+                .and_then(|dir| FileDatabase::open(PathBuf::from(dir).join("edw")).ok()),
+        )
+    }
+
+    /// The live session, renewed for another [`TTL`]. An expired one is removed.
+    pub async fn load(&self) -> Option<Session> {
+        let store = self.0.as_ref()?;
+        let raw = store.get(RECORD).await.ok()??;
+        let mut parts = std::str::from_utf8(&raw).ok()?.splitn(4, '\n');
+        let deadline = UNIX_EPOCH.checked_add(Duration::from_secs(parts.next()?.parse().ok()?))?;
         let data_dir = parts.next()?;
         let network = parts.next()?;
         let password = parts.next()?;
 
-        if now() >= deadline.parse::<u64>().ok()? {
-            let _ = fs::remove_file(&path);
+        if SystemTime::now() >= deadline {
+            let _ = store.delete(RECORD).await;
             return None;
         }
 
-        let session = Self {
+        let session = Session {
             data_dir: PathBuf::from(data_dir),
             network: network.parse().ok()?,
             password: Zeroizing::new(password.to_string()),
         };
-        let _ = session.store();
+        let _ = self.store(&session).await;
         Some(session)
     }
 
-    pub fn store(&self) -> Result<(), anyhow::Error> {
-        let directory =
-            directory().context("XDG_RUNTIME_DIR is not set, so no session can be held")?;
-        fs::create_dir_all(&directory)
-            .with_context(|| format!("error creating {}", directory.display()))?;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-
-        let path = directory.join("session");
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .with_context(|| format!("error writing {}", path.display()))?;
-
-        write!(
-            file,
-            "{}\n{}\n{}\n{}",
-            now() + TTL.as_secs(),
-            self.data_dir.display(),
-            self.network,
-            self.password.as_str()
-        )?;
+    pub async fn store(&self, session: &Session) -> Result<(), anyhow::Error> {
+        let store = self
+            .0
+            .as_ref()
+            .context("XDG_RUNTIME_DIR is not set, so no session can be held")?;
+        let deadline = SystemTime::now()
+            .checked_add(TTL)
+            .and_then(|deadline| deadline.duration_since(UNIX_EPOCH).ok())
+            .context("the system clock is out of range")?
+            .as_secs();
+        let record = Zeroizing::new(format!(
+            "{deadline}\n{}\n{}\n{}",
+            session.data_dir.display(),
+            session.network,
+            session.password.as_str()
+        ));
+        store.put(RECORD, record.as_bytes()).await?;
         Ok(())
     }
 
-    pub fn clear() -> Result<bool, anyhow::Error> {
-        let Some(path) = path() else {
+    /// Whether there was a session to remove.
+    pub async fn clear(&self) -> Result<bool, anyhow::Error> {
+        let Some(store) = &self.0 else {
             return Ok(false);
         };
-        match fs::remove_file(&path) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error).with_context(|| format!("error removing {}", path.display())),
-        }
+        let existed = store.get(RECORD).await?.is_some();
+        store.delete(RECORD).await?;
+        Ok(existed)
     }
-}
-
-pub fn canonical_data_dir(path: &Path) -> PathBuf {
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut suffix = PathBuf::new();
-    let mut cursor = absolute.as_path();
-    loop {
-        if let Ok(canonical) = fs::canonicalize(cursor) {
-            return if suffix.as_os_str().is_empty() {
-                canonical
-            } else {
-                canonical.join(suffix)
-            };
-        }
-        match (cursor.file_name(), cursor.parent()) {
-            (Some(name), Some(parent)) if parent != cursor => {
-                suffix = Path::new(name).join(suffix);
-                cursor = parent;
-            }
-            _ => return absolute,
-        }
-    }
-}
-
-fn directory() -> Option<PathBuf> {
-    #[cfg(test)]
-    if let Some(dir) = TEST_DIR.with(|slot| slot.borrow().clone()) {
-        return Some(dir);
-    }
-
-    std::env::var_os("XDG_RUNTIME_DIR").map(|dir| PathBuf::from(dir).join("edw"))
-}
-
-fn path() -> Option<PathBuf> {
-    Some(directory()?.join("session"))
-}
-
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 #[cfg(test)]
-thread_local! {
-    static TEST_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -137,19 +96,16 @@ mod tests {
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
-    fn isolated(test: impl FnOnce()) {
+    fn isolated() -> (SessionFile, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "edw-session-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        TEST_DIR.with(|slot| *slot.borrow_mut() = Some(dir.clone()));
-        test();
-        TEST_DIR.with(|slot| *slot.borrow_mut() = None);
-        let _ = fs::remove_dir_all(dir);
+        (SessionFile(Some(FileDatabase::open(&dir).unwrap())), dir)
     }
 
-    fn sample(network: SupportedNetwork) -> Session {
+    fn sample(network: NetworkId) -> Session {
         Session {
             data_dir: PathBuf::from("/tmp/edw-data"),
             network,
@@ -157,32 +113,38 @@ mod tests {
         }
     }
 
-    #[test]
-    fn canonical_data_dir_resolves_a_missing_leaf() {
-        let parent = std::env::temp_dir();
-        let missing = parent.join("edw-missing-leaf");
-        assert_eq!(
-            canonical_data_dir(&missing),
-            fs::canonicalize(&parent).unwrap().join("edw-missing-leaf")
-        );
+    #[tokio::test]
+    async fn load_returns_what_was_stored() {
+        let (sessions, dir) = isolated();
+        sessions
+            .store(&sample(NetworkId(11_155_111)))
+            .await
+            .unwrap();
+        let loaded = sessions.load().await.unwrap();
+        assert_eq!(loaded.network, NetworkId(11_155_111));
+        assert_eq!(loaded.password.as_str(), "secret");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn load_returns_what_was_stored() {
-        isolated(|| {
-            sample(SupportedNetwork::Sepolia).store().unwrap();
-            let loaded = Session::load().unwrap();
-            assert_eq!(loaded.network, SupportedNetwork::Sepolia);
-            assert_eq!(loaded.password.as_str(), "secret");
-        });
+    #[tokio::test]
+    async fn store_replaces_the_unlocked_network() {
+        let (sessions, dir) = isolated();
+        sessions
+            .store(&sample(NetworkId(11_155_111)))
+            .await
+            .unwrap();
+        sessions.store(&sample(NetworkId(1337))).await.unwrap();
+        assert_eq!(sessions.load().await.unwrap().network, NetworkId(1337));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn store_replaces_the_unlocked_network() {
-        isolated(|| {
-            sample(SupportedNetwork::Sepolia).store().unwrap();
-            sample(SupportedNetwork::Mainnet).store().unwrap();
-            assert_eq!(Session::load().unwrap().network, SupportedNetwork::Mainnet);
-        });
+    #[tokio::test]
+    async fn clear_reports_whether_a_session_existed() {
+        let (sessions, dir) = isolated();
+        sessions.store(&sample(NetworkId(1))).await.unwrap();
+        assert!(sessions.clear().await.unwrap());
+        assert!(!sessions.clear().await.unwrap());
+        assert!(sessions.load().await.is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

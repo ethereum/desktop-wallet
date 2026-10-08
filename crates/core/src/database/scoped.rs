@@ -4,10 +4,6 @@ use zeroize::Zeroizing;
 
 use super::{Database, DatabaseError};
 
-pub trait ScopedDatabaseExt {
-    fn scoped(self, prefix: &[u8]) -> ScopedDatabase;
-}
-
 /// Confines an inner [`Database`] to a keyspace.
 ///
 /// Scoping alone is namespacing. Layered over [`super::encrypted::EncryptedDatabase`], the
@@ -17,14 +13,8 @@ pub struct ScopedDatabase {
     prefix: Vec<u8>,
 }
 
-impl ScopedDatabaseExt for Arc<dyn Database> {
-    fn scoped(self, prefix: &[u8]) -> ScopedDatabase {
-        ScopedDatabase::new(self, prefix)
-    }
-}
-
 impl ScopedDatabase {
-    fn new(db: Arc<dyn Database>, prefix: &[u8]) -> Self {
+    pub fn new(db: Arc<dyn Database>, prefix: &[u8]) -> Self {
         Self {
             db,
             prefix: prefix.to_vec(),

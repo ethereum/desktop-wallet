@@ -10,7 +10,7 @@ use alloy_signer_local::PrivateKeySigner;
 
 use crate::{
     database::Database,
-    factory::{BuildContext, Factory, FactoryError, try_build_signer},
+    factory::{BuildContext, Factory, FactoryError},
     signer::{
         Signer, SignerError, SignerId,
         simple::db::{SimpleSignerDatabaseError, SimpleSignerDb},
@@ -153,13 +153,13 @@ impl From<SimpleSignerError> for SignerError {
 impl dyn Signer {
     /// Rebuilds this signer from `ctx.db` through the factory, and records its tag once that
     /// has succeeded, so a signer that cannot be recovered leaves no tag behind for a later
-    /// [`try_build_signer`] to trip over.
+    /// [`Factory::build`] to trip over.
     ///
     /// Callers that submit on-chain authorization must do this first: otherwise a
     /// [`SimpleSigner::from_key`] (or any signer that has not stored what it needs)
     /// can land a 7702 delegation that cannot be recovered after restart.
     pub async fn persist_and_rebuild(&self, ctx: BuildContext) -> Result<(), FactoryError> {
-        let rebuilt = try_build_signer(self.tag(), ctx.clone()).await?;
+        let rebuilt = Factory::<dyn Signer>::build(self.tag(), ctx.clone()).await?;
         if rebuilt.id() != self.id() {
             return Err(FactoryError::Other(Box::new(SignerMismatch {
                 persisted: rebuilt.id().to_string(),
@@ -199,7 +199,7 @@ mod tests {
             .expect("persist");
 
         let tag = db.get_signer_tag().await.expect("load tag");
-        let rebuilt = try_build_signer(&tag, BuildContext::new(provider(), db))
+        let rebuilt = Factory::<dyn Signer>::build(&tag, BuildContext::new(provider(), db))
             .await
             .expect("rebuild from stored tag");
         assert_eq!(rebuilt.id(), original.id());

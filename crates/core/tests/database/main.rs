@@ -11,7 +11,7 @@ use edw_core::database::{
     encrypted::{EncryptedDatabase, EncryptedDatabaseError},
     file::FileDatabase,
     memory::MemoryDatabase,
-    scoped::ScopedDatabaseExt,
+    scoped::ScopedDatabase,
 };
 use uuid::Uuid;
 
@@ -113,8 +113,8 @@ async fn scoped_records_are_isolated() {
             .await
             .expect("create"),
     );
-    let first = store.clone().scoped(Uuid::new_v4().as_bytes());
-    let second = store.clone().scoped(Uuid::new_v4().as_bytes());
+    let first = ScopedDatabase::new(store.clone(), Uuid::new_v4().as_bytes());
+    let second = ScopedDatabase::new(store.clone(), Uuid::new_v4().as_bytes());
 
     first.put(b"pk", b"first secret").await.expect("put");
     second.put(b"pk", b"second secret").await.expect("put");

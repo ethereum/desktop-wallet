@@ -4,6 +4,8 @@ pub mod database;
 pub mod delegate;
 pub mod executor;
 pub mod factory;
+pub mod instance;
+pub mod keyring;
 pub mod mnemonic;
 pub mod network;
 pub mod prelude;

@@ -1,6 +1,6 @@
 use clap::Subcommand;
 
-use crate::{GlobalArgs, unlock};
+use crate::GlobalArgs;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -16,10 +16,13 @@ impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match self {
             Command::Path => {
-                let context = global.gather().await?;
+                let instance = global.open().await?;
                 println!(
                     "{}",
-                    unlock::network_dir(&global.data_dir, context.network).display()
+                    global
+                        .data_dir()
+                        .instance_dir(instance.network().id)
+                        .display()
                 );
                 Ok(())
             }

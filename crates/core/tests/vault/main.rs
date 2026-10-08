@@ -50,16 +50,12 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
         .connect_http(rpc_url.parse()?)
         .erased();
     let endpoint: Arc<dyn NetworkEndpoint> = Arc::new(SimpleNetworkEndpoint::new(provider.clone()));
-
-    //? Deploy the SimpleDelegate contract
     let delegate_contract = SimpleDelegateContract::deploy(provider.clone()).await?;
     let implementation_addr = *delegate_contract.address();
     info!(
         "Deployed SimpleDelegate contract at: {:?}",
         implementation_addr
     );
-
-    //? Create SimpleExecutor
     let executor_db: Arc<dyn Database> = Arc::new(MemoryDatabase::default());
     let executor_signer: Arc<dyn Signer> =
         Arc::new(SimpleSigner::new(executor_signer.credential().clone(), &executor_db).await?);
@@ -71,8 +67,6 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     info!("Created SimpleExecutor with ID {:?}", executor.id());
-
-    //? Create and authorize SimpleVault
     let (vault_signer, vault_db) = signer_with_db(&vault_signer).await?;
     let auth = SimpleVault::authorize_implementation(
         vault_signer.as_ref(),
@@ -95,8 +89,6 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     info!("Created SimpleVault with ID {:?}", vault.id());
-
-    //? Deposit into the vault
     info!("Depositing into the vault...");
     let deposit_asset = AssetId::Native;
     let deposit_amount = U256::from(10000);
@@ -107,16 +99,12 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let deposit_call = executor.execute(&deposit_calls).await?;
     executor.await_call(deposit_call, MINING_TIMEOUT).await?;
     info!("Deposit completed successfully.");
-
-    //? Verify balance
     info!("Verifying balance after deposit...");
     let balance = vault.balance(&deposit_asset).await?;
     assert_eq!(
         balance, deposit_amount,
         "Expected vault balance to match deposited amount"
     );
-
-    //? Withdraw
     info!("Withdrawing from the vault...");
     let withdraw_amount = U256::from(1234);
     let withdraw_target = Address::from_slice(&[1; 20]);
@@ -133,8 +121,6 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     let withdraw_call = executor.execute(&withdraw_calls).await?;
     executor.await_call(withdraw_call, MINING_TIMEOUT).await?;
     info!("Withdrawal completed successfully.");
-
-    //? Verify balance after withdrawal
     info!("Verifying balance after withdrawal...");
     let balance_after_withdrawal = vault.balance(&deposit_asset).await?;
     assert_eq!(
@@ -142,8 +128,6 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
         deposit_amount - withdraw_amount,
         "Expected vault balance to match after withdrawal"
     );
-
-    //? Verify that the withdraw target received the funds
     let target_balance = provider.get_balance(withdraw_target).await?;
     assert_eq!(
         target_balance,

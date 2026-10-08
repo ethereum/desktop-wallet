@@ -1,65 +1,48 @@
 use std::{num::NonZeroU64, ops::RangeInclusive};
 
-use alloy_rpc_types_eth::{Filter, Log};
+use alloy_rpc_types_eth::Filter;
 
-use super::endpoint::{NetworkEndpoint, NetworkEndpointError};
-
-/// Reads `filter` over `blocks` in spans of at most `span`, in ascending block order.
-///
-/// Costs one request per span. A failing span aborts the read, so a returned `Vec` always
-/// covers the whole range.
-///
-/// # Errors
-/// Whatever the endpoint reports for the first span that fails.
-pub async fn logs_in_range(
-    endpoint: &dyn NetworkEndpoint,
+/// `filter`, bounded to each span of at most `span` blocks across `blocks`, in ascending order.
+/// An empty range, which includes an inverted one, yields none.
+pub(super) fn span_filters(
     filter: &Filter,
     blocks: RangeInclusive<u64>,
     span: NonZeroU64,
-) -> Result<Vec<Log>, NetworkEndpointError> {
-    let mut logs = Vec::new();
-    for chunk in spans(blocks, span) {
-        logs.extend(endpoint.logs(&bounded(filter, &chunk)).await?);
-    }
-    Ok(logs)
-}
-
-/// An empty range, which includes an inverted one, yields no spans.
-fn spans(blocks: RangeInclusive<u64>, span: NonZeroU64) -> Vec<RangeInclusive<u64>> {
+) -> Vec<Filter> {
     if blocks.is_empty() {
         return Vec::new();
     }
 
     let to = *blocks.end();
     let width = span.get();
-    let mut spans = Vec::new();
+    let mut filters = Vec::new();
     let mut start = *blocks.start();
     loop {
         let end = start.saturating_add(width - 1).min(to);
-        spans.push(start..=end);
+        filters.push(filter.clone().from_block(start).to_block(end));
         if end >= to {
-            return spans;
+            return filters;
         }
         start = end.saturating_add(1);
     }
 }
 
-/// Replaces whatever block bounds `filter` arrived with.
-fn bounded(filter: &Filter, span: &RangeInclusive<u64>) -> Filter {
-    filter
-        .clone()
-        .from_block(*span.start())
-        .to_block(*span.end())
-}
-
 #[cfg(test)]
 mod tests {
+    use alloy_rpc_types_eth::Log;
     use alloy_transport::mock::Asserter;
 
     use super::*;
     use crate::test_support::mocked_provider;
 
     const SPAN_500: NonZeroU64 = NonZeroU64::new(500).expect("non-zero");
+
+    fn bounds(blocks: RangeInclusive<u64>) -> Vec<(Option<u64>, Option<u64>)> {
+        span_filters(&Filter::new(), blocks, SPAN_500)
+            .iter()
+            .map(|filter| (filter.get_from_block(), filter.get_to_block()))
+            .collect()
+    }
 
     fn log_at(block: u64) -> Log {
         Log {
@@ -70,29 +53,28 @@ mod tests {
 
     #[test]
     fn a_range_that_divides_exactly_has_no_trailing_span() {
-        assert_eq!(spans(0..=999, SPAN_500), vec![0..=499, 500..=999]);
+        assert_eq!(
+            bounds(0..=999),
+            vec![(Some(0), Some(499)), (Some(500), Some(999))]
+        );
     }
 
     #[test]
     fn a_range_with_a_remainder_ends_with_a_short_span() {
         assert_eq!(
-            spans(0..=1100, SPAN_500),
-            vec![0..=499, 500..=999, 1000..=1100],
+            bounds(0..=1100),
+            vec![
+                (Some(0), Some(499)),
+                (Some(500), Some(999)),
+                (Some(1000), Some(1100))
+            ],
         );
     }
 
     #[test]
     fn an_inverted_range_yields_no_spans() {
         let (from, to) = (10, 5);
-        assert!(spans(from..=to, SPAN_500).is_empty());
-    }
-
-    #[test]
-    fn each_span_bounds_the_filter_to_its_own_blocks() {
-        let filter = bounded(&Filter::new(), &(500..=999));
-
-        assert_eq!(filter.get_from_block(), Some(500));
-        assert_eq!(filter.get_to_block(), Some(999));
+        assert!(bounds(from..=to).is_empty());
     }
 
     #[tokio::test]
@@ -100,9 +82,9 @@ mod tests {
         let asserter = Asserter::new();
         asserter.push_success(&vec![log_at(10)]);
         asserter.push_success(&vec![log_at(600)]);
-        let endpoint = mocked_provider(&asserter);
 
-        let logs = logs_in_range(endpoint.as_ref(), &Filter::new(), 0..=999, SPAN_500)
+        let logs = mocked_provider(&asserter)
+            .logs_in_range(&Filter::new(), 0..=999, SPAN_500)
             .await
             .expect("both spans answer");
 
@@ -116,9 +98,10 @@ mod tests {
     async fn a_failing_span_aborts_the_whole_range() {
         let asserter = Asserter::new();
         asserter.push_success(&vec![log_at(10)]);
-        let endpoint = mocked_provider(&asserter);
 
-        let result = logs_in_range(endpoint.as_ref(), &Filter::new(), 0..=999, SPAN_500).await;
+        let result = mocked_provider(&asserter)
+            .logs_in_range(&Filter::new(), 0..=999, SPAN_500)
+            .await;
 
         assert!(
             result.is_err(),
