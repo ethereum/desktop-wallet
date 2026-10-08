@@ -170,8 +170,10 @@ impl Vault for SimpleVault {
             AssetId::Erc20(token) => Ok(self.balance_erc20(*token).await?),
         }
     }
+}
 
-    async fn deposit(
+impl SimpleVault {
+    pub async fn deposit(
         &self,
         _from: Address,
         asset: &AssetId,
@@ -184,7 +186,7 @@ impl Vault for SimpleVault {
         Ok(calls)
     }
 
-    async fn withdraw(
+    pub async fn withdraw(
         &self,
         to: &VaultId,
         asset: &AssetId,
@@ -201,9 +203,7 @@ impl Vault for SimpleVault {
         };
         Ok(calls)
     }
-}
 
-impl SimpleVault {
     fn address(&self) -> Address {
         self.delegate.address()
     }
