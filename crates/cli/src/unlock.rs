@@ -1,6 +1,6 @@
 use std::{
-    fs,
-    io::{self, BufRead, IsTerminal, Write},
+    fmt, fs,
+    io::{BufRead, IsTerminal},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -20,7 +20,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     GlobalArgs,
-    output::{self, Report},
+    report::Report,
     session::{self, Session},
 };
 
@@ -47,6 +47,11 @@ struct UnlockReport {
     locked: Option<String>,
     /// `None` when the session was held, so the next command needs no unlock.
     session_error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LockReport {
+    was_unlocked: bool,
 }
 
 impl UnlockReport {
@@ -78,32 +83,33 @@ impl UnlockReport {
 impl Report for UnlockReport {
     const KIND: &'static str = "edw/unlock";
     const VERSION: u32 = 1;
+}
 
-    fn render(&self, out: &mut dyn Write) -> io::Result<()> {
+impl fmt::Display for UnlockReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(error) = &self.session_error {
             writeln!(
-                out,
+                f,
                 "Password accepted, but a session could not be saved: {error}"
             )?;
-            return writeln!(out, "The next command will require `edw unlock` again.");
+            return write!(f, "The next command will require `edw unlock` again.");
         }
 
         if self.already_unlocked {
-            writeln!(out, "Already unlocked for {}.", self.network)?;
+            write!(f, "Already unlocked for {}.", self.network)
         } else if let Some(locked) = &self.locked {
-            writeln!(
-                out,
+            write!(
+                f,
                 "Unlocked {}; {locked} is now locked. Run `edw lock` to lock the wallet.",
                 self.network
-            )?;
+            )
         } else {
-            writeln!(
-                out,
+            write!(
+                f,
                 "Unlocked {}. Run `edw lock` to lock the wallet.",
                 self.network
-            )?;
+            )
         }
-        Ok(())
     }
 }
 
@@ -135,7 +141,8 @@ impl UnlockArgs {
                     open_existing_store(&sess.data_dir, sess.network, sess.password.as_bytes())
                         .await?;
                 let profiles = store.clone().scoped(b"profiles").list_profiles().await?;
-                let name = crate::profile::prompt_profile_name(None, &profiles, 0, Some((0, 0)))?;
+                let name =
+                    crate::profile::prompt_profile_name(None, true, &profiles, 0, Some((0, 0)))?;
                 if name.is_some() {
                     set_profile_name(store, 0, 0, name).await?;
                 }
@@ -145,7 +152,22 @@ impl UnlockArgs {
         }
 
         let report = UnlockReport::new(network, !existed, was_same, previous_network, sess.store());
-        output::emit(global.mode(), &report)
+        report.emit(global.mode())
+    }
+}
+
+impl Report for LockReport {
+    const KIND: &'static str = "edw/lock";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for LockReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.was_unlocked {
+            write!(f, "Locked.")
+        } else {
+            write!(f, "Not unlocked; nothing to do.")
+        }
     }
 }
 
@@ -327,13 +349,11 @@ fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
     ))
 }
 
-pub fn run_lock() -> Result<(), anyhow::Error> {
-    if Session::clear()? {
-        println!("Locked.");
-    } else {
-        println!("Not unlocked; nothing to do.");
-    }
-    Ok(())
+pub fn run_lock(global: &GlobalArgs) -> Result<(), anyhow::Error> {
+    let report = LockReport {
+        was_unlocked: Session::clear()?,
+    };
+    report.emit(global.mode())
 }
 
 #[cfg(test)]

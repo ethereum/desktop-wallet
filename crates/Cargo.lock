@@ -1836,6 +1836,7 @@ dependencies = [
  "edw-core",
  "futures",
  "inventory",
+ "libc",
  "rpassword",
  "serde",
  "serde_json",

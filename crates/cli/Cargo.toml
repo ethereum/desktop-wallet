@@ -7,6 +7,7 @@ edition = "2024"
 clap = { version = "4.6.6", features = ["derive", "env"] }
 
 edw-core = { workspace = true }
+libc = "0.2"
 rpassword = { workspace = true }
 zeroize = { workspace = true }
 

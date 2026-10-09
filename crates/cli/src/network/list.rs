@@ -1,12 +1,9 @@
-use std::io::{self, Write};
+use std::fmt;
 
 use edw_core::network::db::NetworkDb;
 use serde::Serialize;
 
-use crate::{
-    GlobalArgs,
-    output::{self, Report},
-};
+use crate::{GlobalArgs, report::Report};
 
 #[derive(Serialize)]
 struct NetworkConfigsReport {
@@ -24,22 +21,23 @@ struct NetworkConfigRow {
 impl Report for NetworkConfigsReport {
     const KIND: &'static str = "edw/network-view";
     const VERSION: u32 = 1;
+}
 
-    fn render(&self, out: &mut dyn Write) -> io::Result<()> {
+impl fmt::Display for NetworkConfigsReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.configs.is_empty() {
-            writeln!(out, "No networkConfigs.")?;
-            return writeln!(out, "Add one with `edw network add <name> <type>`.");
+            writeln!(f, "No networkConfigs.")?;
+            return write!(f, "Add one with `edw network add <name> <type>`.");
         }
 
-        for config in &self.configs {
+        let rows = self.configs.iter().map(|config| {
             let mark = if config.active { "*" } else { " " };
-            writeln!(
-                out,
+            format!(
                 "{mark} {} {} (chain {})",
                 config.name, config.r#type, config.chain_id
-            )?;
-        }
-        Ok(())
+            )
+        });
+        write!(f, "{}", rows.collect::<Vec<_>>().join("\n"))
     }
 }
 
@@ -60,5 +58,5 @@ pub async fn run(global: &GlobalArgs) -> Result<(), anyhow::Error> {
             .collect(),
     };
 
-    output::emit(global.mode(), &report)
+    report.emit(global.mode())
 }

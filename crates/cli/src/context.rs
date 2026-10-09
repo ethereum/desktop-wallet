@@ -16,7 +16,7 @@ use edw_core::{
 };
 
 use crate::{
-    output,
+    report,
     session::{self, Session},
     unlock,
 };
@@ -132,11 +132,11 @@ impl Context {
 }
 
 impl GlobalArgs {
-    pub fn mode(&self) -> output::Mode {
+    pub fn mode(&self) -> report::Mode {
         if self.non_interactive {
-            output::Mode::Json
+            report::Mode::Json
         } else {
-            output::Mode::Human
+            report::Mode::Human
         }
     }
 

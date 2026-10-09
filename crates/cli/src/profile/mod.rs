@@ -1,4 +1,8 @@
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::{
+    fmt,
+    io::{self, BufRead, IsTerminal, Write},
+    path::PathBuf,
+};
 
 use clap::{Args, Subcommand};
 use edw_core::{
@@ -7,9 +11,12 @@ use edw_core::{
         ProfileRecord, bootstrap_profile, db::SimpleProfileDb, next_profile_index, rename_profile,
     },
 };
+use serde::Serialize;
 use zeroize::Zeroizing;
 
-use crate::GlobalArgs;
+use crate::{GlobalArgs, report::Report, secret_file};
+
+const MNEMONIC_FILE_MAX_BYTES: u64 = 4096;
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -41,6 +48,10 @@ pub struct GenerateArgs {
 pub struct ImportArgs {
     #[arg(long)]
     name: Option<String>,
+    /// Read the phrase from this file instead of stdin. It must be owned by you with mode 0400
+    /// or 0600.
+    #[arg(long, value_name = "PATH")]
+    mnemonic_file: Option<PathBuf>,
     /// Profile index to create. Defaults to 0.
     #[arg(long, default_value_t = 0)]
     index: u32,
@@ -69,6 +80,174 @@ pub struct RenameArgs {
     new_name: String,
 }
 
+#[derive(Serialize)]
+struct ProfileSummary {
+    mnemonic_index: u32,
+    profile_index: u32,
+    name: Option<String>,
+    #[serde(skip)]
+    display_name: String,
+}
+
+#[derive(Serialize)]
+struct ProfileListReport {
+    profiles: Vec<ProfileSummary>,
+}
+
+/// What `profile generate` created. It never carries the recovery phrase, which
+/// `--non-interactive` withholds.
+#[derive(Serialize)]
+struct GenerateReport {
+    mnemonic_index: u32,
+    profile: ProfileSummary,
+}
+
+#[derive(Serialize)]
+struct ScannedAddress {
+    index: u32,
+    address: String,
+}
+
+#[derive(Serialize)]
+struct ImportReport {
+    mnemonic_index: u32,
+    profile: ProfileSummary,
+    addresses: Vec<ScannedAddress>,
+    /// `None` when the scan failed; the import itself still happened.
+    next_unused: Option<u32>,
+    scan_error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AddReport {
+    profile: ProfileSummary,
+}
+
+#[derive(Serialize)]
+struct RenameReport {
+    profile: ProfileSummary,
+}
+
+impl From<&ProfileRecord> for ProfileSummary {
+    fn from(record: &ProfileRecord) -> Self {
+        Self {
+            mnemonic_index: record.mnemonic_index,
+            profile_index: record.profile_index,
+            name: record.name.clone(),
+            display_name: record.display_name(),
+        }
+    }
+}
+
+impl fmt::Display for ProfileSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}/{} ({})",
+            self.mnemonic_index, self.profile_index, self.display_name
+        )
+    }
+}
+
+impl Report for ProfileListReport {
+    const KIND: &'static str = "edw/profile-list";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for ProfileListReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.profiles.is_empty() {
+            return write!(f, "No profiles.");
+        }
+
+        let mut lines = Vec::new();
+        let mut current = None;
+        for profile in &self.profiles {
+            if current != Some(profile.mnemonic_index) {
+                current = Some(profile.mnemonic_index);
+                lines.push(format!("Mnemonic {}", profile.mnemonic_index));
+            }
+            lines.push(format!(
+                "  {}  {}",
+                profile.profile_index, profile.display_name
+            ));
+        }
+        write!(f, "{}", lines.join("\n"))
+    }
+}
+
+impl Report for GenerateReport {
+    const KIND: &'static str = "edw/profile-generate";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for GenerateReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Created mnemonic {} and profile {}.",
+            self.mnemonic_index, self.profile
+        )
+    }
+}
+
+impl Report for ImportReport {
+    const KIND: &'static str = "edw/profile-import";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for ImportReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Imported mnemonic {}; profile {}.",
+            self.mnemonic_index, self.profile
+        )?;
+        if let Some(error) = &self.scan_error {
+            return write!(f, "\nThe address scan failed: {error}");
+        }
+        if !self.addresses.is_empty() {
+            let addresses = self
+                .addresses
+                .iter()
+                .map(|scanned| format!("{}: {}", scanned.index, scanned.address))
+                .collect::<Vec<_>>()
+                .join(" ");
+            write!(f, "\nimporting addresses {addresses}")?;
+        }
+        if let Some(next_unused) = self.next_unused {
+            write!(f, "\nnext unused eoa index: {next_unused}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Report for AddReport {
+    const KIND: &'static str = "edw/profile-add";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for AddReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Created profile {}.", self.profile)
+    }
+}
+
+impl Report for RenameReport {
+    const KIND: &'static str = "edw/profile-rename";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for RenameReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Renamed profile {}/{} to {}.",
+            self.profile.mnemonic_index, self.profile.profile_index, self.profile.display_name
+        )
+    }
+}
+
 impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match self {
@@ -85,11 +264,8 @@ async fn list(global: &GlobalArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
     let mnemonics = context.mnemonics().await?;
     let profiles = context.profiles().await?;
-    if profiles.is_empty() {
-        println!("No profiles.");
-        return Ok(());
-    }
 
+    let mut listed = Vec::new();
     for mnemonic in &mnemonics {
         let mut group: Vec<_> = profiles
             .iter()
@@ -99,68 +275,89 @@ async fn list(global: &GlobalArgs) -> Result<(), anyhow::Error> {
             continue;
         }
         group.sort_by_key(|profile| profile.profile_index);
-        println!("Mnemonic {}", mnemonic.index);
         for profile in group {
             let _pointer = context
                 .profile_db(profile.mnemonic_index, profile.profile_index)
                 .get_pointer()
                 .await?;
-            println!("  {}  {}", profile.profile_index, profile.display_name());
+            listed.push(ProfileSummary::from(profile));
         }
     }
-    Ok(())
+    ProfileListReport { profiles: listed }.emit(global.mode())
 }
 
 async fn generate(global: &GlobalArgs, args: &GenerateArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
     let profiles = context.profiles().await?;
-    let name = prompt_profile_name(args.name.clone(), &profiles, args.index, None)?;
+    let name = prompt_profile_name(
+        args.name.clone(),
+        !global.non_interactive,
+        &profiles,
+        args.index,
+        None,
+    )?;
     let (mnemonic, profile) =
         mnemonic::generate_as_profile(context.store.clone(), args.long_seed, args.index, name)
             .await?;
-    println!("Write this recovery phrase down now. It is shown only this once.");
-    println!();
-    println!("{}", mnemonic.phrase);
-    println!();
-    println!(
-        "Created mnemonic {} and profile {}/{} ({}).",
-        mnemonic.index,
-        profile.mnemonic_index,
-        profile.profile_index,
-        profile.display_name()
-    );
-    Ok(())
+    if !global.non_interactive {
+        println!("Write this recovery phrase down now. It is shown only this once.");
+        println!();
+        println!("{}", mnemonic.phrase);
+        println!();
+    }
+    GenerateReport {
+        mnemonic_index: mnemonic.index,
+        profile: ProfileSummary::from(&profile),
+    }
+    .emit(global.mode())
 }
 
 async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
-    let phrase = read_phrase()?;
+    let phrase = match &args.mnemonic_file {
+        Some(path) => secret_file::read(path, "mnemonic", MNEMONIC_FILE_MAX_BYTES)?,
+        None => read_phrase(global.non_interactive)?,
+    };
+    let phrase = Zeroizing::new(phrase.split_whitespace().collect::<Vec<_>>().join(" "));
     let profiles = context.profiles().await?;
-    let name = prompt_profile_name(args.name.clone(), &profiles, args.index, None)?;
+    let name = prompt_profile_name(
+        args.name.clone(),
+        !global.non_interactive,
+        &profiles,
+        args.index,
+        None,
+    )?;
     let (mnemonic, profile) =
         mnemonic::import_as_profile(context.store.clone(), phrase, args.index, name).await?;
-    println!(
-        "Imported mnemonic {}; profile {}/{} ({}).",
-        mnemonic.index,
-        profile.mnemonic_index,
-        profile.profile_index,
-        profile.display_name()
-    );
 
-    let provider = context.endpoint(global.rpc_url.as_deref()).await?;
-    let parsed = mnemonic.mnemonic()?;
-    let scan = scan_standard_eoas(&parsed, args.index, provider.as_ref()).await?;
-    if !scan.addresses.is_empty() {
-        let addresses = scan
-            .addresses
-            .iter()
-            .map(|(index, address)| format!("{index}: {address}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        println!("importing addresses {addresses}");
+    let scan = async {
+        let provider = context.endpoint(global.rpc_url.as_deref()).await?;
+        let parsed = mnemonic.mnemonic()?;
+        anyhow::Ok(scan_standard_eoas(&parsed, args.index, provider.as_ref()).await?)
     }
-    println!("next unused eoa index: {}", scan.next_unused);
-    Ok(())
+    .await;
+    let (addresses, next_unused, scan_error) = match scan {
+        Ok(scan) => (
+            scan.addresses
+                .iter()
+                .map(|(index, address)| ScannedAddress {
+                    index: *index,
+                    address: address.to_string(),
+                })
+                .collect(),
+            Some(scan.next_unused),
+            None,
+        ),
+        Err(error) => (Vec::new(), None, Some(format!("{error:#}"))),
+    };
+    ImportReport {
+        mnemonic_index: mnemonic.index,
+        profile: ProfileSummary::from(&profile),
+        addresses,
+        next_unused,
+        scan_error,
+    }
+    .emit(global.mode())
 }
 
 async fn add(global: &GlobalArgs, args: &AddArgs) -> Result<(), anyhow::Error> {
@@ -174,6 +371,10 @@ async fn add(global: &GlobalArgs, args: &AddArgs) -> Result<(), anyhow::Error> {
         resolve_mnemonic(&mnemonics, index)?.index
     } else if mnemonics.len() == 1 {
         mnemonics[0].index
+    } else if global.non_interactive {
+        anyhow::bail!(
+            "--mnemonic is required when using --non-interactive and more than one mnemonic exists"
+        );
     } else {
         select_mnemonic(&mnemonics)?
     };
@@ -184,16 +385,19 @@ async fn add(global: &GlobalArgs, args: &AddArgs) -> Result<(), anyhow::Error> {
     } else {
         args.index
     };
-    let name = prompt_profile_name(args.name.clone(), &profiles, profile_index, None)?;
+    let name = prompt_profile_name(
+        args.name.clone(),
+        !global.non_interactive,
+        &profiles,
+        profile_index,
+        None,
+    )?;
     let record =
         bootstrap_profile(context.store.clone(), mnemonic_index, profile_index, name).await?;
-    println!(
-        "Created profile {}/{} ({}).",
-        record.mnemonic_index,
-        record.profile_index,
-        record.display_name()
-    );
-    Ok(())
+    AddReport {
+        profile: ProfileSummary::from(&record),
+    }
+    .emit(global.mode())
 }
 
 async fn rename(global: &GlobalArgs, args: &RenameArgs) -> Result<(), anyhow::Error> {
@@ -204,13 +408,10 @@ async fn rename(global: &GlobalArgs, args: &RenameArgs) -> Result<(), anyhow::Er
         Some(args.new_name.clone()),
     )
     .await?;
-    println!(
-        "Renamed profile {}/{} to {}.",
-        record.mnemonic_index,
-        record.profile_index,
-        record.display_name()
-    );
-    Ok(())
+    RenameReport {
+        profile: ProfileSummary::from(&record),
+    }
+    .emit(global.mode())
 }
 
 fn select_mnemonic(mnemonics: &[mnemonic::MnemonicRecord]) -> Result<u32, anyhow::Error> {
@@ -234,15 +435,17 @@ fn select_mnemonic(mnemonics: &[mnemonic::MnemonicRecord]) -> Result<u32, anyhow
     Ok(resolve_mnemonic(mnemonics, index)?.index)
 }
 
+/// Resolves a new profile's name, prompting for it only when `interactive` and on a terminal.
 pub fn prompt_profile_name(
     explicit: Option<String>,
+    interactive: bool,
     profiles: &[ProfileRecord],
     profile_index: u32,
     except: Option<(u32, u32)>,
 ) -> Result<Option<String>, anyhow::Error> {
     let name = if let Some(name) = explicit {
         empty_name(name)
-    } else if io::stdin().is_terminal() {
+    } else if interactive && io::stdin().is_terminal() {
         print!("Profile name: ");
         io::stdout().flush()?;
         let mut line = String::new();
@@ -283,14 +486,17 @@ fn empty_name(name: String) -> Option<String> {
     }
 }
 
-fn read_phrase() -> Result<Zeroizing<String>, anyhow::Error> {
+fn read_phrase(non_interactive: bool) -> Result<Zeroizing<String>, anyhow::Error> {
     if io::stdin().is_terminal() {
+        if non_interactive {
+            anyhow::bail!(
+                "--mnemonic-file or a phrase piped on stdin is required when using --non-interactive"
+            );
+        }
         print!("Mnemonic phrase: ");
         io::stdout().flush()?;
     }
     let mut phrase = Zeroizing::new(String::new());
     io::stdin().lock().read_line(&mut phrase)?;
-    Ok(Zeroizing::new(
-        phrase.split_whitespace().collect::<Vec<_>>().join(" "),
-    ))
+    Ok(phrase)
 }

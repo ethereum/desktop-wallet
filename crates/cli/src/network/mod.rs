@@ -27,10 +27,7 @@ impl Command {
             Command::View => list::run(global).await,
             Command::Add(args) => args.run(global).await,
             Command::Use(args) => args.run(global).await,
-            Command::Status => {
-                println!("Unimplemented");
-                Ok(())
-            }
+            Command::Status => anyhow::bail!("network status is not implemented"),
         }
     }
 }

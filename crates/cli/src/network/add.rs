@@ -1,12 +1,13 @@
-use std::num::NonZeroU64;
+use std::{fmt, num::NonZeroU64};
 
 use clap::{Args, ValueEnum};
 use edw_core::network::{
     DEFAULT_EVENT_BLOCK_RANGE, DEFAULT_LOCAL_NODE_PORT, LocalNodeConfig, NetworkConfigKind,
     SimpleProviderConfig, db::NetworkDb,
 };
+use serde::Serialize;
 
-use crate::GlobalArgs;
+use crate::{GlobalArgs, report::Report};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NetworkConfigType {
@@ -33,6 +34,46 @@ pub struct NetworkAddArgs {
 #[derive(Args, Debug)]
 pub struct NetworkUseArgs {
     name: String,
+}
+
+#[derive(Serialize)]
+struct NetworkAddReport {
+    name: String,
+    r#type: String,
+    chain_id: u64,
+    /// Whether this became the active networkConfig, as the first one added does.
+    active: bool,
+}
+
+#[derive(Serialize)]
+struct NetworkUseReport {
+    name: String,
+}
+
+impl Report for NetworkAddReport {
+    const KIND: &'static str = "edw/network-add";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for NetworkAddReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "added {} {} (chain {})",
+            self.name, self.r#type, self.chain_id
+        )
+    }
+}
+
+impl Report for NetworkUseReport {
+    const KIND: &'static str = "edw/network-use";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for NetworkUseReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "active {}", self.name)
+    }
 }
 
 impl NetworkAddArgs {
@@ -76,18 +117,18 @@ impl NetworkAddArgs {
         let mut config = context.network.default_config();
         config.name = self.name.clone();
         config.config = kind;
-        println!(
-            "added {} {} (chain {})",
-            config.name,
-            config.config.type_name(),
-            config.network_id.0
-        );
+        let report = NetworkAddReport {
+            name: config.name.clone(),
+            r#type: config.config.type_name().to_string(),
+            chain_id: config.network_id.0,
+            active: context.preferences_db().get_active().await?.is_none(),
+        };
         configs.push(config);
         context.put_network_configs(&configs).await?;
-        if context.preferences_db().get_active().await?.is_none() {
+        if report.active {
             context.preferences_db().put_active(&self.name).await?;
         }
-        Ok(())
+        report.emit(global.mode())
     }
 }
 
@@ -103,8 +144,10 @@ impl NetworkUseArgs {
             anyhow::bail!("no networkConfig `{}`", self.name);
         }
         context.preferences_db().put_active(&self.name).await?;
-        println!("active {}", self.name);
-        Ok(())
+        NetworkUseReport {
+            name: self.name.clone(),
+        }
+        .emit(global.mode())
     }
 }
 

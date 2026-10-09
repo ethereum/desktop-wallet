@@ -6,8 +6,9 @@ mod config;
 mod context;
 mod database;
 mod network;
-mod output;
 mod profile;
+mod report;
+mod secret_file;
 mod session;
 mod unlock;
 
@@ -41,30 +42,15 @@ enum Command {
     Lock,
 }
 
-impl Command {
-    fn emits_json(&self) -> bool {
-        matches!(
-            self,
-            Self::Unlock(_) | Self::Network(network::Command::View)
-        )
-    }
-}
-
 impl Cli {
     pub async fn run(&self) -> Result<(), anyhow::Error> {
-        if self.global.non_interactive && !self.command.emits_json() {
-            anyhow::bail!(
-                "this command has no --non-interactive output yet; run it without the flag"
-            );
-        }
-
         match &self.command {
-            Command::Config(args) => args.run(&self.global),
+            Command::Config(args) => args.run(&self.global)?,
             Command::Profile(args) => args.run(&self.global).await?,
             Command::Database(args) => args.run(&self.global).await?,
             Command::Network(args) => args.run(&self.global).await?,
             Command::Unlock(args) => args.run(&self.global).await?,
-            Command::Lock => unlock::run_lock()?,
+            Command::Lock => unlock::run_lock(&self.global)?,
         }
 
         Ok(())
