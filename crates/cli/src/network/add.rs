@@ -41,7 +41,6 @@ struct NetworkAddReport {
     name: String,
     r#type: String,
     chain_id: u64,
-    /// Whether this became the active networkConfig, as the first one added does.
     active: bool,
 }
 

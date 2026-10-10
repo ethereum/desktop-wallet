@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    io::{self, BufRead, IsTerminal, Write},
+    io::{self, BufRead, IsTerminal, Read, Write},
     path::PathBuf,
 };
 
@@ -9,14 +9,18 @@ use edw_core::{
     mnemonic::{self, resolve_mnemonic, scan::scan_standard_eoas},
     profile::simple::{
         ProfileRecord, bootstrap_profile, db::SimpleProfileDb, next_profile_index, rename_profile,
+        resolve_profile,
     },
 };
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use crate::{GlobalArgs, report::Report, secret_file};
+use crate::{GlobalArgs, report::Report, secret_file, session, unlock};
 
-const MNEMONIC_FILE_MAX_BYTES: u64 = 4096;
+const MNEMONIC_MAX_BYTES: u64 = 4096;
+
+pub const PHRASE_WITHHELD: &str =
+    "The recovery phrase was not shown. Run `edw profile reveal-seed` at a terminal to back it up.";
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -30,6 +34,8 @@ pub enum Command {
     Add(AddArgs),
     /// Set or clear a profile's optional name.
     Rename(RenameArgs),
+    /// Show the recovery phrase behind a profile. Runs only at a terminal.
+    RevealSeed(RevealSeedArgs),
 }
 
 #[derive(Args, Debug)]
@@ -61,7 +67,8 @@ pub struct ImportArgs {
 pub struct AddArgs {
     #[arg(long)]
     name: Option<String>,
-    /// Mnemonic index. Prompted when more than one mnemonic exists.
+    /// Mnemonic index. Prompted for when more than one mnemonic exists; required then with
+    /// --non-interactive.
     #[arg(long)]
     mnemonic: Option<u32>,
     /// Profile index to create. Defaults to 0.
@@ -80,6 +87,12 @@ pub struct RenameArgs {
     new_name: String,
 }
 
+#[derive(Args, Debug)]
+pub struct RevealSeedArgs {
+    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
+    selector: Option<String>,
+}
+
 #[derive(Serialize)]
 struct ProfileSummary {
     mnemonic_index: u32,
@@ -94,8 +107,6 @@ struct ProfileListReport {
     profiles: Vec<ProfileSummary>,
 }
 
-/// What `profile generate` created. It never carries the recovery phrase, which
-/// `--non-interactive` withholds.
 #[derive(Serialize)]
 struct GenerateReport {
     mnemonic_index: u32,
@@ -113,9 +124,7 @@ struct ImportReport {
     mnemonic_index: u32,
     profile: ProfileSummary,
     addresses: Vec<ScannedAddress>,
-    /// `None` when the scan failed; the import itself still happened.
     next_unused: Option<u32>,
-    scan_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -203,9 +212,6 @@ impl fmt::Display for ImportReport {
             "Imported mnemonic {}; profile {}.",
             self.mnemonic_index, self.profile
         )?;
-        if let Some(error) = &self.scan_error {
-            return write!(f, "\nThe address scan failed: {error}");
-        }
         if !self.addresses.is_empty() {
             let addresses = self
                 .addresses
@@ -256,6 +262,7 @@ impl Command {
             Self::Import(args) => import(global, args).await,
             Self::Add(args) => add(global, args).await,
             Self::Rename(args) => rename(global, args).await,
+            Self::RevealSeed(args) => reveal_seed(global, args).await,
         }
     }
 }
@@ -299,8 +306,10 @@ async fn generate(global: &GlobalArgs, args: &GenerateArgs) -> Result<(), anyhow
     let (mnemonic, profile) =
         mnemonic::generate_as_profile(context.store.clone(), args.long_seed, args.index, name)
             .await?;
-    if !global.non_interactive {
-        println!("Write this recovery phrase down now. It is shown only this once.");
+    if global.non_interactive {
+        eprintln!("{PHRASE_WITHHELD}");
+    } else {
+        println!("Write this recovery phrase down now.");
         println!();
         println!("{}", mnemonic.phrase);
         println!();
@@ -315,7 +324,7 @@ async fn generate(global: &GlobalArgs, args: &GenerateArgs) -> Result<(), anyhow
 async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Error> {
     let context = global.gather().await?;
     let phrase = match &args.mnemonic_file {
-        Some(path) => secret_file::read(path, "mnemonic", MNEMONIC_FILE_MAX_BYTES)?,
+        Some(path) => secret_file::read(path, "mnemonic", MNEMONIC_MAX_BYTES)?,
         None => read_phrase(global.non_interactive)?,
     };
     let phrase = Zeroizing::new(phrase.split_whitespace().collect::<Vec<_>>().join(" "));
@@ -336,7 +345,8 @@ async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Er
         anyhow::Ok(scan_standard_eoas(&parsed, args.index, provider.as_ref()).await?)
     }
     .await;
-    let (addresses, next_unused, scan_error) = match scan {
+    // The error can name the RPC URL, which may carry an API key, so it stays off stdout.
+    let (addresses, next_unused) = match scan {
         Ok(scan) => (
             scan.addresses
                 .iter()
@@ -346,16 +356,17 @@ async fn import(global: &GlobalArgs, args: &ImportArgs) -> Result<(), anyhow::Er
                 })
                 .collect(),
             Some(scan.next_unused),
-            None,
         ),
-        Err(error) => (Vec::new(), None, Some(format!("{error:#}"))),
+        Err(error) => {
+            eprintln!("The address scan failed: {error:#}");
+            (Vec::new(), None)
+        }
     };
     ImportReport {
         mnemonic_index: mnemonic.index,
         profile: ProfileSummary::from(&profile),
         addresses,
         next_unused,
-        scan_error,
     }
     .emit(global.mode())
 }
@@ -414,6 +425,72 @@ async fn rename(global: &GlobalArgs, args: &RenameArgs) -> Result<(), anyhow::Er
     .emit(global.mode())
 }
 
+async fn reveal_seed(global: &GlobalArgs, args: &RevealSeedArgs) -> Result<(), anyhow::Error> {
+    if global.non_interactive {
+        anyhow::bail!("profile reveal-seed never prints the phrase with --non-interactive");
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        anyhow::bail!("profile reveal-seed only runs at a terminal");
+    }
+
+    let context = global.gather().await?;
+    // An unlocked session alone must not be enough to read the seed.
+    let password = unlock::prompt("Decryption password: ")?;
+    unlock::open_existing_store(
+        &session::canonical_data_dir(&global.data_dir),
+        context.network,
+        password.as_bytes(),
+    )
+    .await?;
+
+    let profiles = context.profiles().await?;
+    let profile = match (&args.selector, profiles.as_slice()) {
+        (Some(selector), _) => resolve_profile(&profiles, selector)?,
+        (None, []) => anyhow::bail!("no profiles"),
+        (None, [only]) => only,
+        (None, _) => select_profile(&profiles)?,
+    };
+    let mnemonics = context.mnemonics().await?;
+    let mnemonic = resolve_mnemonic(&mnemonics, profile.mnemonic_index)?;
+
+    println!(
+        "Anyone who sees this phrase can take the funds of every profile on mnemonic {}.",
+        mnemonic.index
+    );
+    if !confirm(&format!(
+        "Show the recovery phrase for profile {}?",
+        ProfileSummary::from(profile)
+    ))? {
+        println!("Not shown.");
+        return Ok(());
+    }
+    println!();
+    println!("{}", mnemonic.phrase);
+    println!();
+    println!("Store it offline, then clear your terminal scrollback.");
+    Ok(())
+}
+
+fn select_profile(profiles: &[ProfileRecord]) -> Result<&ProfileRecord, anyhow::Error> {
+    println!("Select a profile:");
+    for profile in profiles {
+        println!("  {}", ProfileSummary::from(profile));
+    }
+    print!("> ");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    Ok(resolve_profile(profiles, line.trim())?)
+}
+
+fn confirm(question: &str) -> Result<bool, anyhow::Error> {
+    print!("{question} [y/N] ");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    Ok(matches!(line.trim(), "y" | "Y" | "yes"))
+}
+
 fn select_mnemonic(mnemonics: &[mnemonic::MnemonicRecord]) -> Result<u32, anyhow::Error> {
     println!("Select a mnemonic:");
     for record in mnemonics {
@@ -435,7 +512,6 @@ fn select_mnemonic(mnemonics: &[mnemonic::MnemonicRecord]) -> Result<u32, anyhow
     Ok(resolve_mnemonic(mnemonics, index)?.index)
 }
 
-/// Resolves a new profile's name, prompting for it only when `interactive` and on a terminal.
 pub fn prompt_profile_name(
     explicit: Option<String>,
     interactive: bool,
@@ -495,8 +571,20 @@ fn read_phrase(non_interactive: bool) -> Result<Zeroizing<String>, anyhow::Error
         }
         print!("Mnemonic phrase: ");
         io::stdout().flush()?;
+        let mut phrase = Zeroizing::new(String::new());
+        io::stdin().lock().read_line(&mut phrase)?;
+        return Ok(phrase);
     }
+
     let mut phrase = Zeroizing::new(String::new());
-    io::stdin().lock().read_line(&mut phrase)?;
+    io::stdin()
+        .lock()
+        .take(MNEMONIC_MAX_BYTES + 1)
+        .read_to_string(&mut phrase)?;
+    if phrase.len() as u64 > MNEMONIC_MAX_BYTES {
+        anyhow::bail!(
+            "the mnemonic phrase on stdin is too large (maximum {MNEMONIC_MAX_BYTES} bytes)"
+        );
+    }
     Ok(phrase)
 }

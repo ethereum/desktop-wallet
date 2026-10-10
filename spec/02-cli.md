@@ -161,8 +161,9 @@ directly here:
 
 - **No secret material in `--non-interactive` output, from any command.** That is the path
   that gets redirected to a file and archived by a runner.
-- **Interactive reveal requires a TTY and an explicit confirmation.** `edw profile reveal-seed`
-  refuses to run when stdout is not a terminal.
+- **Interactive reveal requires a TTY, the decryption password and an explicit confirmation.**
+  `edw profile reveal-seed` refuses to run when stdout is not a terminal, and asks for the
+  password even in an unlocked session.
 - **`edw profile reveal-seed` has no `--non-interactive` mode**, and is the one exception to
   the rule above. A machine-readable seed phrase is the thing that rule exists to prevent.
 
@@ -215,7 +216,7 @@ All of these are in `v0.1.0`, against the capability list in [`00-vision.md`](./
 | `edw profile add`           | another profile on a stored mnemonic                |
 | `edw profile list`          | profiles in the unlocked instance                   |
 | `edw profile rename`        | display names are unique within an instance         |
-| `edw profile reveal-seed`   | re-runnable seed backup; TTY and confirmation gated |
+| `edw profile reveal-seed`   | seed backup; TTY, password and confirmation gated   |
 | `edw network list` / `add`  | networkConfigs within the instance                  |
 | `edw network set-rpc`       | endpoint for a networkConfig                        |
 | `edw network endpoint list` | endpoints on a networkConfig                        |

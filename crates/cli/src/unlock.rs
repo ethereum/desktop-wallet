@@ -38,14 +38,12 @@ pub struct UnlockArgs {
     network: SupportedNetwork,
 }
 
-/// What `unlock` did. It never carries the recovery phrase, which `--non-interactive` withholds.
 #[derive(Serialize)]
 struct UnlockReport {
     network: String,
     created: bool,
     already_unlocked: bool,
     locked: Option<String>,
-    /// `None` when the session was held, so the next command needs no unlock.
     session_error: Option<String>,
 }
 
@@ -127,11 +125,11 @@ impl UnlockArgs {
 
         let (sess, new_phrase) = network_store(&data_dir, network, global.non_interactive).await?;
 
-        if let Some(phrase) = new_phrase
-            && !global.non_interactive
-        {
+        if new_phrase.is_some() && global.non_interactive {
+            eprintln!("{}", crate::profile::PHRASE_WITHHELD);
+        } else if let Some(phrase) = new_phrase {
             println!("Encrypted store created at {}.", dir.display());
-            println!("Write this recovery phrase down now. It is shown only this once.");
+            println!("Write this recovery phrase down now.");
             println!();
             println!("{}", phrase.as_str());
             println!();
@@ -332,7 +330,7 @@ fn setup(dir: &Path, network: SupportedNetwork) -> Result<Zeroizing<String>, any
 /// With stdin redirected there is no terminal to suppress echo on, so the password is read as
 /// a plain line. That is what makes the command scriptable and testable; it is not a weaker
 /// path, because a redirected stdin was never being echoed to begin with.
-fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
+pub fn prompt(label: &str) -> Result<Zeroizing<String>, anyhow::Error> {
     if std::io::stdin().is_terminal() {
         return Ok(Zeroizing::new(
             rpassword::prompt_password(label).context("error reading the decryption password")?,

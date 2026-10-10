@@ -21,9 +21,7 @@ struct ConfigPathReport {
 #[derive(Serialize)]
 struct ConfigViewReport {
     data_dir: String,
-    /// `None` while the wallet is locked.
     session: Option<String>,
-    /// `None` when the unlocked network's endpoint applies.
     rpc_url: Option<String>,
 }
 
