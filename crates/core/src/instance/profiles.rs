@@ -18,14 +18,23 @@ impl Instance {
         Ok(self.profile_index().find(selector).await?)
     }
 
+    /// The recovery phrase `profile` derives from.
+    pub async fn recovery_phrase(
+        &self,
+        profile: &ProfileRecord,
+    ) -> Result<Zeroizing<String>, InstanceError> {
+        let record = self.keyring().mnemonic(profile.mnemonic_index).await?;
+        Ok(Zeroizing::new(record.phrase.clone()))
+    }
+
     /// Generates a recovery phrase and creates exactly one profile on it, at `profile_index`.
     pub async fn generate_profile(
         &self,
-        long_seed: bool,
+        long_phrase: bool,
         profile_index: u32,
         name: Option<String>,
     ) -> Result<(MnemonicRecord, ProfileRecord), InstanceError> {
-        let mnemonic = Mnemonic::generate(long_seed)?;
+        let mnemonic = Mnemonic::generate(long_phrase)?;
         self.import_profile(mnemonic.phrase(), profile_index, name)
             .await
     }
@@ -198,6 +207,27 @@ mod tests {
             instance.add_profile(1, None, Some("probe".into())).await,
             Err(InstanceError::Mnemonic(MnemonicError::Unresolved(1)))
         ));
+    }
+
+    #[tokio::test]
+    async fn recovery_phrase_is_the_profiles_own() {
+        let instance = instance();
+        instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap();
+        let (_, second) = instance
+            .import_profile(
+                Zeroizing::new(SECOND_FIXTURE.to_string()),
+                0,
+                Some("work".into()),
+            )
+            .await
+            .unwrap();
+
+        let phrase = instance.recovery_phrase(&second).await.unwrap();
+
+        assert_eq!(phrase.as_str(), SECOND_FIXTURE);
     }
 
     #[tokio::test]

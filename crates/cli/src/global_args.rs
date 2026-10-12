@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Args;
 use edw_core::instance::{DataDir, Instance};
 
-use crate::{input::Input, session::SessionFile, unlock};
+use crate::{input::Input, report::Mode, session::SessionFile, unlock};
 
 #[derive(Args)]
 pub struct GlobalArgs {
@@ -12,15 +12,23 @@ pub struct GlobalArgs {
     /// Overrides the unlocked network's endpoint for this invocation.
     #[arg(long, global = true, env = "RPC_URL")]
     pub rpc_url: Option<String>,
-    /// Never prompt. Anything a command needs must come from flags, the environment, the
-    /// session, or piped stdin.
+    /// Never prompt, and print one JSON document on stdout. Anything a command needs must come
+    /// from flags, the environment, the session, or piped stdin.
     #[arg(long, global = true, visible_alias = "porcelain")]
-    non_interactive: bool,
+    pub non_interactive: bool,
 }
 
 impl GlobalArgs {
     pub fn data_dir(&self) -> DataDir {
         DataDir::new(&self.data_dir)
+    }
+
+    pub const fn mode(&self) -> Mode {
+        if self.non_interactive {
+            Mode::Json
+        } else {
+            Mode::Human
+        }
     }
 
     pub fn input(&self) -> Input {

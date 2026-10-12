@@ -21,10 +21,7 @@ impl Command {
         match &self {
             Command::View(args) => args.run(global).await,
             Command::Endpoint(command) => command.run(global).await,
-            Command::Status => {
-                println!("Unimplemented");
-                Ok(())
-            }
+            Command::Status => anyhow::bail!("network status is not implemented"),
         }
     }
 }

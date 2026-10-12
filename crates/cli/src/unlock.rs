@@ -1,14 +1,18 @@
+use std::fmt;
+
 use anyhow::Context;
 use clap::Args;
 use edw_core::{
     instance::{DataDir, Instance},
     network::NetworkId,
 };
+use serde::Serialize;
 use zeroize::Zeroizing;
 
 use crate::{
     GlobalArgs,
     input::Input,
+    report::Report,
     session::{Session, SessionFile},
 };
 
@@ -27,6 +31,81 @@ pub struct UnlockArgs {
     network: NetworkId,
 }
 
+#[derive(Serialize)]
+struct UnlockReport {
+    network: String,
+    created: Option<String>,
+    already_unlocked: bool,
+    locked: Option<String>,
+    #[serde(skip)]
+    session_error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LockReport {
+    was_unlocked: bool,
+}
+
+impl Report for UnlockReport {
+    const KIND: &'static str = "edw/unlock";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for UnlockReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(dir) = &self.created {
+            writeln!(f, "Encrypted store created at {dir}.")?;
+            writeln!(
+                f,
+                "Add your RPC endpoint with `edw network endpoint add <name> --url <url>`."
+            )?;
+            writeln!(
+                f,
+                "Create a profile with `edw profile new` or `edw profile import`."
+            )?;
+        }
+
+        if let Some(error) = &self.session_error {
+            writeln!(
+                f,
+                "Password accepted, but a session could not be saved: {error}"
+            )?;
+            return write!(f, "The next command will require `edw unlock` again.");
+        }
+
+        if self.already_unlocked {
+            write!(f, "Already unlocked for {}.", self.network)
+        } else if let Some(locked) = &self.locked {
+            write!(
+                f,
+                "Unlocked {}; {locked} is now locked. Run `edw lock` to lock the wallet.",
+                self.network
+            )
+        } else {
+            write!(
+                f,
+                "Unlocked {}. Run `edw lock` to lock the wallet.",
+                self.network
+            )
+        }
+    }
+}
+
+impl Report for LockReport {
+    const KIND: &'static str = "edw/lock";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for LockReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.was_unlocked {
+            write!(f, "Locked.")
+        } else {
+            write!(f, "Not unlocked; nothing to do.")
+        }
+    }
+}
+
 impl UnlockArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let data_dir = global.data_dir();
@@ -42,40 +121,37 @@ impl UnlockArgs {
         let password = password(&data_dir, network, global.input()).await?;
         Instance::open_or_create(&data_dir, network, password.as_bytes()).await?;
 
-        if !existed {
-            println!(
-                "Encrypted store created at {}.",
-                data_dir.instance_dir(network).display()
-            );
-            println!("Add your RPC endpoint with `edw network endpoint add <name> --url <url>`.");
-            println!("Create a profile with `edw profile new` or `edw profile import`.");
-        }
-
         let session = Session {
             data_dir: data_dir.path().to_path_buf(),
             network,
             password,
         };
-        match sessions.store(&session).await {
-            Ok(()) => {
-                if was_same {
-                    println!("Already unlocked for {network}.");
-                } else if let Some(previous) = previous_network.filter(|n| *n != network) {
-                    println!(
-                        "Unlocked {network}; {previous} is now locked. Run `edw lock` to lock the wallet."
-                    );
-                } else {
-                    println!("Unlocked {network}. Run `edw lock` to lock the wallet.");
-                }
+        let session_error = match sessions.store(&session).await {
+            Ok(()) => None,
+            Err(error) if global.non_interactive => {
+                return Err(error.context("password accepted, but no session could be held"));
             }
-            Err(error) => {
-                println!("Password accepted, but a session could not be saved: {error:#}");
-                println!("The next command will require `edw unlock` again.");
-            }
+            Err(error) => Some(format!("{error:#}")),
+        };
+        let held = session_error.is_none();
+        UnlockReport {
+            network: network.to_string(),
+            created: (!existed).then(|| data_dir.instance_dir(network).display().to_string()),
+            already_unlocked: held && was_same,
+            locked: previous_network
+                .filter(|previous| held && *previous != network)
+                .map(|previous| previous.to_string()),
+            session_error,
         }
-
-        Ok(())
+        .emit(global.mode())
     }
+}
+
+pub async fn run_lock(global: &GlobalArgs) -> Result<(), anyhow::Error> {
+    LockReport {
+        was_unlocked: SessionFile::runtime().clear().await?,
+    }
+    .emit(global.mode())
 }
 
 /// Unlocks an existing instance at a terminal, for a command that found no session.
@@ -83,23 +159,7 @@ impl UnlockArgs {
 /// Picks the only instance under `data_dir`, or asks which one when there are several, and
 /// keeps the session as `edw unlock` would. Creates nothing.
 pub async fn prompt_unlock(data_dir: &DataDir, input: Input) -> Result<Instance, anyhow::Error> {
-    let network = match data_dir.instances().as_slice() {
-        [] => anyhow::bail!(
-            "no wallet instance at {}; run `edw unlock`",
-            data_dir.path().display()
-        ),
-        [only] => *only,
-        several => {
-            let labels: Vec<String> = several.iter().map(ToString::to_string).collect();
-            let choice = input
-                .choose("Select a network to unlock:", &labels)?
-                .context(
-                    "several wallet instances exist; run `edw unlock --network <name or id>`",
-                )?;
-            several[choice]
-        }
-    };
-
+    let network = choose_network(data_dir, input)?;
     eprintln!("Wallet is locked; unlocking {network}.");
     let password = input
         .secret("Decryption password: ")?
@@ -114,6 +174,26 @@ pub async fn prompt_unlock(data_dir: &DataDir, input: Input) -> Result<Instance,
         eprintln!("Password accepted, but a session could not be saved: {error:#}");
     }
     Ok(instance)
+}
+
+/// The only instance under `data_dir`, or the one picked when there are several.
+pub fn choose_network(data_dir: &DataDir, input: Input) -> Result<NetworkId, anyhow::Error> {
+    match data_dir.instances().as_slice() {
+        [] => anyhow::bail!(
+            "no wallet instance at {}; run `edw unlock`",
+            data_dir.path().display()
+        ),
+        [only] => Ok(*only),
+        several => {
+            let labels: Vec<String> = several.iter().map(ToString::to_string).collect();
+            let choice = input
+                .choose("Select a network to unlock:", &labels)?
+                .context(
+                    "several wallet instances exist; run `edw unlock --network <name or id>`",
+                )?;
+            Ok(several[choice])
+        }
+    }
 }
 
 /// The decryption password, from the environment, the session, or `input`.
@@ -154,12 +234,12 @@ fn setup(
     if input == Input::Disabled {
         anyhow::bail!("{MISSING_PASSWORD}; nothing was created");
     }
-    println!(
+    eprintln!(
         "No wallet instance exists for {network} at {}.",
         data_dir.instance_dir(network).display()
     );
-    println!("A decryption password must be set up before anything can be stored.");
-    println!("There is no recovery path if it is lost: the data is encrypted under it alone.");
+    eprintln!("A decryption password must be set up before anything can be stored.");
+    eprintln!("There is no recovery path if it is lost: the data is encrypted under it alone.");
 
     let password = input
         .secret("New decryption password: ")?

@@ -17,6 +17,7 @@ edw network endpoint use <name|id> # switches to the specified network endpoint
 edw profile list # lists all configured profiles
 edw profile new # creates a new profile
 edw profile import # imports a profile from a mnemonic
+edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only
 ```
 
 ### Global Args
