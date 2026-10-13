@@ -1,6 +1,9 @@
-use clap::Subcommand;
+use std::fmt;
 
-use crate::GlobalArgs;
+use clap::Subcommand;
+use serde::Serialize;
+
+use crate::{GlobalArgs, report::Report};
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -12,19 +15,35 @@ pub enum Command {
     Purge,
 }
 
+#[derive(Serialize)]
+struct DatabasePathReport {
+    path: String,
+}
+
+impl Report for DatabasePathReport {
+    const KIND: &'static str = "edw/database-path";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for DatabasePathReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.path)
+    }
+}
+
 impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match self {
             Command::Path => {
                 let instance = global.open().await?;
-                println!(
-                    "{}",
-                    global
+                DatabasePathReport {
+                    path: global
                         .data_dir()
                         .instance_dir(instance.network().id)
                         .display()
-                );
-                Ok(())
+                        .to_string(),
+                }
+                .emit(global.mode())
             }
             Command::Migrate => anyhow::bail!("database migrations are not implemented"),
             Command::Purge => anyhow::bail!("database purge is not implemented"),

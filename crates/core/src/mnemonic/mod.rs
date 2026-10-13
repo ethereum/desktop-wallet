@@ -53,9 +53,9 @@ pub enum MnemonicError {
 }
 
 impl Mnemonic {
-    /// Generates a new English mnemonic. 12 words, or 24 when `long_seed` is set.
-    pub fn generate(long_seed: bool) -> Result<Self, MnemonicError> {
-        let words = if long_seed { ENGLISH_24 } else { ENGLISH_12 };
+    /// Generates a new English mnemonic. 12 words, or 24 when `long_phrase` is set.
+    pub fn generate(long_phrase: bool) -> Result<Self, MnemonicError> {
+        let words = if long_phrase { ENGLISH_24 } else { ENGLISH_12 };
         let inner = bip39::Mnemonic::generate_in(bip39::Language::English, words)?;
         Ok(Self { inner })
     }

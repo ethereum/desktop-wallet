@@ -1,9 +1,10 @@
-use std::num::NonZeroU64;
+use std::{fmt, num::NonZeroU64};
 
 use clap::{Args, Subcommand};
-use edw_core::network::{DEFAULT_EVENT_BLOCK_RANGE, NetworkEndpointConfig};
+use edw_core::network::{DEFAULT_EVENT_BLOCK_RANGE, NetworkEndpointConfig, NetworkEndpointKind};
+use serde::Serialize;
 
-use crate::GlobalArgs;
+use crate::{GlobalArgs, report::Report};
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -34,6 +35,96 @@ pub struct EndpointUseArgs {
     name: String,
 }
 
+#[derive(Serialize)]
+struct EndpointSummary {
+    name: String,
+    kind: &'static str,
+    url: String,
+    active: bool,
+}
+
+#[derive(Serialize)]
+struct EndpointListReport {
+    endpoints: Vec<EndpointSummary>,
+}
+
+#[derive(Serialize)]
+struct EndpointAddReport {
+    endpoint: EndpointSummary,
+}
+
+#[derive(Serialize)]
+struct EndpointUseReport {
+    name: String,
+}
+
+impl EndpointSummary {
+    fn new(config: NetworkEndpointConfig, active: bool) -> Self {
+        let (kind, url) = match config.kind {
+            NetworkEndpointKind::Http { url } => ("http", url),
+        };
+        Self {
+            name: config.name,
+            kind,
+            url,
+            active,
+        }
+    }
+}
+
+impl fmt::Display for EndpointSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {} {}", self.name, self.kind, self.url)
+    }
+}
+
+impl Report for EndpointListReport {
+    const KIND: &'static str = "edw/network-endpoint-list";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for EndpointListReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.endpoints.is_empty() {
+            return write!(
+                f,
+                "No endpoints. Add one with `edw network endpoint add <name> --url <url>`."
+            );
+        }
+        let lines: Vec<String> = self
+            .endpoints
+            .iter()
+            .map(|endpoint| {
+                let mark = if endpoint.active { "*" } else { " " };
+                format!("{mark} {endpoint}")
+            })
+            .collect();
+        write!(f, "{}", lines.join("\n"))
+    }
+}
+
+impl Report for EndpointAddReport {
+    const KIND: &'static str = "edw/network-endpoint-add";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for EndpointAddReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "added endpoint {}", self.endpoint)
+    }
+}
+
+impl Report for EndpointUseReport {
+    const KIND: &'static str = "edw/network-endpoint-use";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for EndpointUseReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "active endpoint {}", self.name)
+    }
+}
+
 impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         match self {
@@ -47,22 +138,17 @@ impl Command {
 impl EndpointListArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
-        let configs = instance.endpoint_configs().await?;
-        if configs.is_empty() {
-            println!("No endpoints. Add one with `edw network endpoint add <name> --url <url>`.");
-            return Ok(());
-        }
-
         let active = instance.active_endpoint_name().await?;
-        for config in &configs {
-            let mark = if active.as_deref() == Some(config.name.as_str()) {
-                "*"
-            } else {
-                " "
-            };
-            println!("{mark} {} {}", config.name, config.kind);
-        }
-        Ok(())
+        let endpoints = instance
+            .endpoint_configs()
+            .await?
+            .into_iter()
+            .map(|config| {
+                let active = active.as_deref() == Some(config.name.as_str());
+                EndpointSummary::new(config, active)
+            })
+            .collect();
+        EndpointListReport { endpoints }.emit(global.mode())
     }
 }
 
@@ -71,17 +157,21 @@ impl EndpointAddArgs {
         let instance = global.open().await?;
         let config =
             NetworkEndpointConfig::http(self.name.clone(), &self.url, self.event_block_range)?;
-        let kind = config.kind.to_string();
-        instance.add_endpoint_config(config).await?;
-        println!("added endpoint {} {kind}", self.name);
-        Ok(())
+        instance.add_endpoint_config(config.clone()).await?;
+        let active = instance.active_endpoint_name().await?.as_deref() == Some(self.name.as_str());
+        EndpointAddReport {
+            endpoint: EndpointSummary::new(config, active),
+        }
+        .emit(global.mode())
     }
 }
 
 impl EndpointUseArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         global.open().await?.use_endpoint_config(&self.name).await?;
-        println!("active endpoint {}", self.name);
-        Ok(())
+        EndpointUseReport {
+            name: self.name.clone(),
+        }
+        .emit(global.mode())
     }
 }
