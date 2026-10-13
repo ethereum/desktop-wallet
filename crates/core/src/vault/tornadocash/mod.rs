@@ -36,8 +36,8 @@ sol!(
 
 /// `TornadoVault` stores assets as Tornado Cash notes derived from its signer.
 ///
-/// Deposits and withdrawals take an amount and split it into one note per pool denomination,
-/// so amounts must be expressible in the pools' denominations.
+/// Each deposit creates one note in a single pool, and each withdrawal spends one note. Choosing
+/// which pools to deposit to and which notes to withdraw is left to the caller.
 pub struct TornadoVault<S: Signer + Send + Sync> {
     trees_cache: Mutex<HashMap<Pool, MerkleTree>>,
     address: Address,
@@ -47,11 +47,14 @@ pub struct TornadoVault<S: Signer + Send + Sync> {
     db: Arc<dyn Database>,
 }
 
-/// A mined, unspent note.
-struct UnspentNote {
-    pool: Pool,
-    nonce: u64,
-    leaf_index: u32,
+/// A note held by the vault.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TornadoNote {
+    pub pool: Pool,
+    pub nonce: u64,
+    /// The note's leaf in the pool's merkle tree, or `None` until its deposit is mined.
+    pub leaf_index: Option<u32>,
+    pub spent: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -68,8 +71,10 @@ pub enum TornadoVaultError {
     Withdrawal(#[from] WithdrawalError),
     #[error("merkle tree error: {0}")]
     MerkleTree(String),
-    #[error("amount cannot be made from the pools' denominations")]
-    UnrepresentableAmount,
+    #[error("note {0} has not been mined")]
+    NoteNotMined(u64),
+    #[error("note {0} has already been spent")]
+    NoteSpent(u64),
     #[error("no pools for asset {0:?}")]
     UnsupportedAsset(AssetId),
     #[error("unsupported vault id: {0:?}")]
@@ -139,56 +144,67 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         Ok(())
     }
 
-    /// Returns the calls that deposit `amount` of `asset`, one note per pool denomination.
+    /// Returns the calls that deposit one new note into `pool`.
     ///
-    /// ERC-20 deposits are preceded by one approval per pool, covering all of that pool's notes.
-    /// The pools used are tracked from then on.
-    pub async fn deposit(
-        &self,
-        asset: &AssetId,
-        amount: U256,
-    ) -> Result<Vec<Call>, TornadoVaultError> {
-        let pools = self.pools(asset).await?;
-        let notes = split(amount, &pools)?;
-        let per_pool: Vec<&[Pool]> = notes.chunk_by(PartialEq::eq).collect();
+    /// ERC-20 deposits are preceded by an approval for the pool's denomination. The pool is
+    /// tracked from then on.
+    pub async fn deposit(&self, pool: &Pool) -> Result<Vec<Call>, TornadoVaultError> {
+        self.track(std::slice::from_ref(pool)).await?;
 
-        let used: Vec<Pool> = per_pool.iter().map(|same| same[0].clone()).collect();
-        self.track(&used).await?;
-
-        let mut calls: Vec<Call> = per_pool
-            .iter()
-            .filter_map(|same| approval(&same[0], same.len()))
-            .collect();
-        for pool in &notes {
-            calls.push(self.deposit_note(pool).await?);
-        }
+        let mut calls: Vec<Call> = approval(pool).into_iter().collect();
+        calls.push(self.deposit_note(pool).await?);
         Ok(calls)
     }
 
-    /// Returns the calls that withdraw `amount` of `asset` to `to`, one call per spent note.
+    /// Returns a list of every note derived from the vault's signer.
+    ///
+    /// Syncs the tracked pools on the current network. Returns pending, mined,
+    /// and spent notes.
+    pub async fn notes(&self) -> Result<Vec<TornadoNote>, TornadoVaultError> {
+        let chain_id = self.provider.network_id().await?;
+        let pools: Vec<Pool> = self
+            .db
+            .tracked_pools()
+            .await?
+            .into_iter()
+            .filter(|pool| pool.chain_id == chain_id)
+            .collect();
+
+        self.sync(&pools).await?;
+        self.pool_notes(&pools).await
+    }
+
+    /// Returns the call that withdraws `note` to `to`.
     ///
     /// Withdrawing several notes to the same recipient links them on-chain.
     pub async fn withdraw(
         &self,
+        note: &TornadoNote,
         to: &VaultId,
-        asset: &AssetId,
-        amount: U256,
-    ) -> Result<Vec<Call>, TornadoVaultError> {
+    ) -> Result<Call, TornadoVaultError> {
         #[expect(irrefutable_let_patterns)]
         let VaultId::Address(recipient) = to else {
             return Err(TornadoVaultError::UnsupportedVaultId(to.clone()));
         };
-
-        let pools = self.tracked_pools(asset).await?;
-        //? Proofs must be against a root still in the pool's on-chain root history.
-        self.sync(&pools).await?;
-        let unspent = self.unspent_notes(&pools).await?;
-
-        let mut calls = Vec::new();
-        for note in select(amount, unspent)? {
-            calls.push(self.withdraw_note(&note, *recipient).await?);
+        if note.spent {
+            return Err(TornadoVaultError::NoteSpent(note.nonce));
         }
-        Ok(calls)
+        let Some(leaf_index) = note.leaf_index else {
+            return Err(TornadoVaultError::NoteNotMined(note.nonce));
+        };
+
+        //? Proofs must be against a root still in the pool's on-chain root history.
+        self.sync(std::slice::from_ref(&note.pool)).await?;
+
+        let derived = self.derive_note(note.nonce, &note.pool).await?;
+        let proof = self.merkle_proof(&note.pool, leaf_index).await?;
+        let proven =
+            Withdrawal::new(&note.pool, derived, *recipient).prove(&proof, &mut rand::rng())?;
+        Ok(Call::new(
+            proven.target(),
+            proven.input().into(),
+            U256::ZERO,
+        ))
     }
 }
 
@@ -206,9 +222,10 @@ impl<S: Signer + Send + Sync> Vault for TornadoVault<S> {
         let pools = self.tracked_pools(asset).await?;
         self.sync(&pools).await?;
 
-        let unspent = self.unspent_notes(&pools).await?;
-        Ok(unspent
+        let notes = self.pool_notes(&pools).await?;
+        Ok(notes
             .iter()
+            .filter(|note| note.leaf_index.is_some() && !note.spent)
             .map(|note| U256::from(note.pool.amount_wei))
             .sum())
     }
@@ -280,24 +297,18 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         Ok(())
     }
 
-    async fn unspent_notes(&self, pools: &[Pool]) -> Result<Vec<UnspentNote>, TornadoVaultError> {
-        let mut unspent = Vec::new();
+    async fn pool_notes(&self, pools: &[Pool]) -> Result<Vec<TornadoNote>, TornadoVaultError> {
+        let mut notes = Vec::new();
         for pool in pools {
-            let notes = self.pool_db(pool).notes().await?;
-            unspent.extend(
-                notes
-                    .into_iter()
-                    .filter(|note| !note.spent)
-                    .filter_map(|note| {
-                        Some(UnspentNote {
-                            pool: pool.clone(),
-                            nonce: note.nonce,
-                            leaf_index: note.leaf_index?,
-                        })
-                    }),
-            );
+            let records = self.pool_db(pool).notes().await?;
+            notes.extend(records.into_iter().map(|record| TornadoNote {
+                pool: pool.clone(),
+                nonce: record.nonce,
+                leaf_index: record.leaf_index,
+                spent: record.spent,
+            }));
         }
-        Ok(unspent)
+        Ok(notes)
     }
 
     /// Reserves the next nonce for a new note in `pool` and returns the call that deposits it.
@@ -323,23 +334,6 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
             deposit.target(),
             deposit.input().into(),
             deposit.value(),
-        ))
-    }
-
-    async fn withdraw_note(
-        &self,
-        unspent: &UnspentNote,
-        recipient: Address,
-    ) -> Result<Call, TornadoVaultError> {
-        let note = self.derive_note(unspent.nonce, &unspent.pool).await?;
-        let proof = self.merkle_proof(&unspent.pool, unspent.leaf_index).await?;
-
-        let proven =
-            Withdrawal::new(&unspent.pool, note, recipient).prove(&proof, &mut rand::rng())?;
-        Ok(Call::new(
-            proven.target(),
-            proven.input().into(),
-            U256::ZERO,
         ))
     }
 
@@ -383,49 +377,6 @@ impl From<TornadoVaultError> for VaultError {
     }
 }
 
-/// Splits `amount` into pool denominations using the largest denominations first.
-///
-/// `pools` must be sorted by largest denomination first. Returns an error if
-/// `amount` cannot be made from the pools' denominations.
-fn split(amount: U256, pools: &[Pool]) -> Result<Vec<Pool>, TornadoVaultError> {
-    let mut remaining = amount;
-    let mut notes = Vec::new();
-    for pool in pools {
-        let denomination = U256::from(pool.amount_wei);
-        let count = usize::try_from(remaining / denomination)
-            .map_err(|_| TornadoVaultError::UnrepresentableAmount)?;
-        remaining %= denomination;
-        notes.extend(std::iter::repeat_n(pool.clone(), count));
-    }
-
-    if !remaining.is_zero() {
-        return Err(TornadoVaultError::UnrepresentableAmount);
-    }
-    Ok(notes)
-}
-
-/// Selects notes summing to exactly `amount` using the largest denominations first.
-///
-/// `unspent` must be sorted by largest denomination first. Returns an error if
-/// `amount` cannot be made from the notes.
-fn select(amount: U256, unspent: Vec<UnspentNote>) -> Result<Vec<UnspentNote>, TornadoVaultError> {
-    let mut remaining = amount;
-    let mut selected = Vec::new();
-    for note in unspent {
-        let denomination = U256::from(note.pool.amount_wei);
-        if denomination > remaining {
-            continue;
-        }
-        remaining -= denomination;
-        selected.push(note);
-    }
-
-    if !remaining.is_zero() {
-        return Err(TornadoVaultError::UnrepresentableAmount);
-    }
-    Ok(selected)
-}
-
 /// Marks notes deposited or spent by `events`.
 fn apply_events(notes: &mut [NoteRecord], events: &[SyncEvent]) {
     for event in events {
@@ -442,13 +393,13 @@ fn apply_events(notes: &mut [NoteRecord], events: &[SyncEvent]) {
     }
 }
 
-/// The approval that lets `pool` pull `notes` deposits, or `None` for a native pool.
-fn approval(pool: &Pool, notes: usize) -> Option<Call> {
+/// The approval that lets `pool` pull one deposit, or `None` for a native pool.
+fn approval(pool: &Pool) -> Option<Call> {
     let Asset::Erc20 { address, .. } = &pool.asset else {
         return None;
     };
 
-    let amount = U256::from(pool.amount_wei) * U256::from(notes);
+    let amount = U256::from(pool.amount_wei);
     let data = Erc20::approveCall::new((pool.address, amount))
         .abi_encode()
         .into();
