@@ -173,7 +173,7 @@ impl Vault for SimpleVault {
 }
 
 impl SimpleVault {
-    pub async fn deposit(
+    pub fn deposit(
         &self,
         _from: Address,
         asset: &AssetId,
