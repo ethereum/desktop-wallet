@@ -2734,6 +2734,7 @@ dependencies = [
  "futures",
  "hkdf",
  "inventory",
+ "kohaku-fork-kit",
  "kohaku-tornadocash",
  "kohaku-tornadocash-keychain",
  "postcard",
@@ -3897,6 +3898,19 @@ dependencies = [
  "cfg-if",
  "digest 0.10.7",
  "sha3-asm",
+]
+
+[[package]]
+name = "kohaku-fork-kit"
+version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "kohaku-tornadocash",
+ "kohaku-userop-kit",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

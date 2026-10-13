@@ -49,6 +49,7 @@ zeroize = { version = "1", features = ["derive"] }
 rand = "0.10"
 kohaku-tornadocash = { git = "https://github.com/ethereum/kohaku-rs.git" }
 kohaku-tornadocash-keychain = { git = "https://github.com/ethereum/kohaku-rs.git" }
+kohaku-fork-kit = { git = "https://github.com/ethereum/kohaku-rs.git" }
 
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
