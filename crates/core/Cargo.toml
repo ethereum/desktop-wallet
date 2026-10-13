@@ -26,6 +26,9 @@ chacha20poly1305 = { workspace = true }
 hkdf = { workspace = true }
 sha2 = { workspace = true }
 zeroize = { workspace = true }
+rand = { workspace = true }
+kohaku-tornadocash = { workspace = true }
+kohaku-tornadocash-keychain = { workspace = true }
 
 alloy-primitives = { workspace = true, features = ["serde", "k256"] }
 alloy-provider = { workspace = true }
