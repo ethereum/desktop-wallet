@@ -13,7 +13,7 @@ pub trait AssetDb: Database {
         Ok(postcard::from_bytes(&bytes)?)
     }
 
-    /// ERC-20 addresses an account opted into. Kept in the account's scope.
+    /// ERC-20 addresses a vault opted into. Kept in the vault's scope.
     async fn get_opted_in(&self) -> Result<Vec<Address>, AssetDatabaseError> {
         let Some(bytes) = self.get(b"optedIn").await? else {
             return Ok(vec![]);

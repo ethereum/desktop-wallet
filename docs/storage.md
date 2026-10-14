@@ -1,7 +1,7 @@
 # Storage
 
 EDW keeps one encrypted store per network.
-It holds that network's endpoints, the keyring, the profiles and their accounts, and the protocol caches the profiles share.
+It holds that network's endpoints, the keyring, the profiles, and the protocol caches the profiles share.
 
 ## Layout
 
@@ -14,8 +14,7 @@ network          / network            # Network { id, native_asset }
 keyring          / mnemonics          # indices of the stored recovery phrases
                  / mnemonic:{m}       # one recovery phrase
 profiles         / index              # Vec<ProfileRecord { m, x, name }>
-profile:{m}:{x}  / accounts           # Vec<AccountRecord>
-                 / account:{id}:...   # sync state of one account
+profile:{m}:{x}  / pointer            # (m, x)
 cache:{protocol} / cursor             # last indexed block
                  / chunk:{n}          # indexed events for one block span
 ```
@@ -30,9 +29,7 @@ Keys are derived from a phrase on use and never stored.
 A profile is a recovery phrase `m` and a profile index `x`, the BIP-44 `account'` leaf.
 Profiles may share a phrase under different `x`.
 
-## Accounts
-
-An account is one branch of a profile, derived from its phrase at `x`:
+A profile derives its keys at `x`:
 
 ```sh
 Address { index }                       # m/44'/60'/x'/0/i, where i = 0 is the identity anchor
@@ -42,14 +39,9 @@ Railgun                                 # m/44'/1984'/0'/0'/x' and m/420'/1984'/
 SmartAccount { implementation, index }  # m/44'/60'/x'/i'/j'
 ```
 
-Accounts that sync keep their state under `account:{id}`:
-
-- Stealth: the payments found in announcements.
-- TornadoCash: its notes (pool, deposit index, commitment, leaf index, spent). A new note takes the next unused `deposit'`.
-
 ## Caches
 
-A cache holds the indexed events of one protocol (`tornado-cash`, `railgun`, ...), shared by every account on the network.
+A cache holds the indexed events of one protocol (`tornado-cash`, `railgun`, ...), shared by every vault on the network.
 Events are written in numbered chunks behind a cursor, since stored keys cannot be listed.
 
 ## Encryption

@@ -4,7 +4,7 @@
 //! once, when it is first opted into, and is then registered wallet-wide; no other function here
 //! reads the network.
 //!
-//! Functions take `wallet`, the network scope, and `account`, the account's own scope.
+//! Functions take `wallet`, the network scope, and `vault`, the vault's own scope.
 
 use alloy_primitives::{
     Address, U256, address,
@@ -81,7 +81,7 @@ impl Erc20Asset {
     }
 }
 
-/// The ERC-20s every account on `network` reads, in display order.
+/// The ERC-20s every vault on `network` reads, in display order.
 #[must_use]
 pub fn default_erc20s(network: NetworkId) -> Vec<Erc20Asset> {
     match network.0 {
@@ -128,16 +128,16 @@ pub fn default_erc20s(network: NetworkId) -> Vec<Erc20Asset> {
     }
 }
 
-/// The ERC-20s an account reads: the network's defaults, then its opted-in assets, each once.
-pub async fn account_erc20s(
+/// The ERC-20s a vault reads: the network's defaults, then its opted-in assets, each once.
+pub async fn vault_erc20s(
     wallet: &dyn Database,
-    account: &dyn Database,
+    vault: &dyn Database,
     network: NetworkId,
 ) -> Result<Vec<Erc20Asset>, AssetError> {
     let mut assets = default_erc20s(network);
     let registered = wallet.get_erc20s().await?;
 
-    for address in account.get_opted_in().await? {
+    for address in vault.get_opted_in().await? {
         if assets.iter().any(|asset| asset.address == address) {
             continue;
         }
@@ -150,12 +150,12 @@ pub async fn account_erc20s(
     Ok(assets)
 }
 
-/// Opts the account into the ERC-20 at `address`.
+/// Opts the vault into the ERC-20 at `address`.
 ///
 /// A default needs no opt-in, so for one this records nothing.
 pub async fn opt_in(
     wallet: &dyn Database,
-    account: &dyn Database,
+    vault: &dyn Database,
     endpoint: &dyn NetworkEndpoint,
     network: NetworkId,
     address: Address,
@@ -177,10 +177,10 @@ pub async fn opt_in(
         asset
     };
 
-    let mut opted_in = account.get_opted_in().await?;
+    let mut opted_in = vault.get_opted_in().await?;
     if !opted_in.contains(&address) {
         opted_in.push(address);
-        account.put_opted_in(&opted_in).await?;
+        vault.put_opted_in(&opted_in).await?;
     }
     Ok(asset)
 }
@@ -268,15 +268,15 @@ mod tests {
 
     #[tokio::test]
     async fn opting_into_a_default_touches_neither_the_network_nor_the_store() {
-        let (wallet, account) = (MemoryDatabase::new(), MemoryDatabase::new());
+        let (wallet, vault) = (MemoryDatabase::new(), MemoryDatabase::new());
         let endpoint = mocked_provider(&Asserter::new());
 
-        opt_in(&wallet, &account, endpoint.as_ref(), MAINNET, usdc())
+        opt_in(&wallet, &vault, endpoint.as_ref(), MAINNET, usdc())
             .await
             .unwrap();
 
         assert!(wallet.get_erc20s().await.unwrap().is_empty());
-        assert!(account.get_opted_in().await.unwrap().is_empty());
+        assert!(vault.get_opted_in().await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -290,8 +290,8 @@ mod tests {
         );
         let endpoint = mocked_provider(&asserter);
 
-        for account in [MemoryDatabase::new(), MemoryDatabase::new()] {
-            let asset = opt_in(&wallet, &account, endpoint.as_ref(), MAINNET, TOKEN)
+        for vault in [MemoryDatabase::new(), MemoryDatabase::new()] {
+            let asset = opt_in(&wallet, &vault, endpoint.as_ref(), MAINNET, TOKEN)
                 .await
                 .unwrap();
             assert_eq!((asset.symbol.as_str(), asset.decimals), ("WBTC", 8));
@@ -300,13 +300,13 @@ mod tests {
 
     #[tokio::test]
     async fn an_undecodable_symbol_registers_as_unknown() {
-        let (wallet, account) = (MemoryDatabase::new(), MemoryDatabase::new());
+        let (wallet, vault) = (MemoryDatabase::new(), MemoryDatabase::new());
         let asserter = Asserter::new();
         respond(&asserter, &Erc20::decimalsCall::abi_encode_returns(&18));
         respond(&asserter, B256::left_padding_from(b"MKR").as_slice());
         let endpoint = mocked_provider(&asserter);
 
-        let asset = opt_in(&wallet, &account, endpoint.as_ref(), MAINNET, TOKEN)
+        let asset = opt_in(&wallet, &vault, endpoint.as_ref(), MAINNET, TOKEN)
             .await
             .unwrap();
 
@@ -315,13 +315,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_symbol_read_registers_nothing() {
-        let (wallet, account) = (MemoryDatabase::new(), MemoryDatabase::new());
+        let (wallet, vault) = (MemoryDatabase::new(), MemoryDatabase::new());
         let asserter = Asserter::new();
         respond(&asserter, &Erc20::decimalsCall::abi_encode_returns(&18));
         asserter.push_failure_msg("unavailable");
         let endpoint = mocked_provider(&asserter);
 
-        let result = opt_in(&wallet, &account, endpoint.as_ref(), MAINNET, TOKEN).await;
+        let result = opt_in(&wallet, &vault, endpoint.as_ref(), MAINNET, TOKEN).await;
 
         assert!(matches!(result, Err(AssetError::Network(_))));
         assert!(wallet.get_erc20s().await.unwrap().is_empty());
@@ -330,29 +330,29 @@ mod tests {
     #[tokio::test]
     async fn an_address_without_displayable_decimals_is_refused_and_not_opted_into() {
         for reply in [vec![], Erc20::decimalsCall::abi_encode_returns(&78)] {
-            let (wallet, account) = (MemoryDatabase::new(), MemoryDatabase::new());
+            let (wallet, vault) = (MemoryDatabase::new(), MemoryDatabase::new());
             let asserter = Asserter::new();
             respond(&asserter, &reply);
             let endpoint = mocked_provider(&asserter);
 
-            let result = opt_in(&wallet, &account, endpoint.as_ref(), MAINNET, TOKEN).await;
+            let result = opt_in(&wallet, &vault, endpoint.as_ref(), MAINNET, TOKEN).await;
 
             assert!(matches!(result, Err(AssetError::NoDecimals(TOKEN))));
-            assert!(account.get_opted_in().await.unwrap().is_empty());
+            assert!(vault.get_opted_in().await.unwrap().is_empty());
         }
     }
 
     #[tokio::test]
-    async fn an_account_reads_the_defaults_then_its_opt_ins_each_once() {
-        let (wallet, account) = (MemoryDatabase::new(), MemoryDatabase::new());
+    async fn a_vault_reads_the_defaults_then_its_opt_ins_each_once() {
+        let (wallet, vault) = (MemoryDatabase::new(), MemoryDatabase::new());
         let wbtc = Erc20Asset::known(TOKEN, "WBTC", 8);
         wallet
             .put_erc20s(std::slice::from_ref(&wbtc))
             .await
             .unwrap();
-        account.put_opted_in(&[usdc(), TOKEN]).await.unwrap();
+        vault.put_opted_in(&[usdc(), TOKEN]).await.unwrap();
 
-        let symbols: Vec<String> = account_erc20s(&wallet, &account, MAINNET)
+        let symbols: Vec<String> = vault_erc20s(&wallet, &vault, MAINNET)
             .await
             .unwrap()
             .into_iter()
