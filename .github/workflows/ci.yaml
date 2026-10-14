@@ -75,5 +75,5 @@ jobs:
 
     - run: nix develop .#ci --command bash -c "cd contracts && forge soldeer install"
     - run: nix develop .#ci --command bash -c "cd contracts && forge test"
-    - run: nix develop .#ci --command bash -c "cd crates && cargo test"
-    - run: nix develop .#ci --command bash -c "cd crates && cargo test -- --ignored"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo test --release"
+    - run: nix develop .#ci --command bash -c "cd crates && cargo test --release -- --ignored"
