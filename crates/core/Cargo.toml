@@ -26,6 +26,9 @@ chacha20poly1305 = { workspace = true }
 hkdf = { workspace = true }
 sha2 = { workspace = true }
 zeroize = { workspace = true }
+rand = { workspace = true }
+kohaku-tornadocash = { workspace = true }
+kohaku-tornadocash-keychain = { workspace = true }
 
 alloy-primitives = { workspace = true, features = ["serde", "k256"] }
 alloy-provider = { workspace = true }
@@ -46,6 +49,7 @@ alloy-sol-types = { workspace = true, features = ["json"] }
 tokio = { workspace = true, features = ["full"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 alloy-contract = { workspace = true }
+kohaku-fork-kit = { workspace = true }
 
 [lints]
 workspace = true

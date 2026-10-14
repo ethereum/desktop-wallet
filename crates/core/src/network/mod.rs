@@ -1,7 +1,7 @@
 use std::{fmt, num::NonZeroU64, str::FromStr};
 
 pub use alloy::SimpleNetworkEndpoint;
-pub use endpoint::NetworkEndpoint;
+pub use endpoint::{NetworkEndpoint, NetworkEndpointError};
 pub use endpoint_config::{NetworkEndpointConfig, NetworkEndpointKind};
 pub use presets::NetworkPreset;
 use serde::{Deserialize, Serialize};
