@@ -46,6 +46,10 @@ chacha20poly1305 = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
+rand = "0.10"
+kohaku-tornadocash = { git = "https://github.com/ethereum/kohaku-rs.git" }
+kohaku-tornadocash-keychain = { git = "https://github.com/ethereum/kohaku-rs.git" }
+kohaku-fork-kit = { git = "https://github.com/ethereum/kohaku-rs.git" }
 
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
