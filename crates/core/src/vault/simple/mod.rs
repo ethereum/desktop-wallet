@@ -32,6 +32,7 @@ const SIMPLE_VAULT_TAG: &str = "simple-vault";
 pub struct SimpleVault {
     delegate: SimpleDelegate,
     provider: Arc<dyn NetworkEndpoint>,
+    #[allow(unused)]
     db: Arc<dyn Database>,
 }
 
