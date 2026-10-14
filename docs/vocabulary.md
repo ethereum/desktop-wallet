@@ -49,7 +49,7 @@ Example:
 
 ## Asset
 
-Assets are configured wallet-wide and opted-in to on a per **vault** basis.
+Assets are configured wallet-wide and opted-in to on a per **profile** basis.
 Prefer 'asset' over 'token' or 'currency'.
 
 ### Metadata

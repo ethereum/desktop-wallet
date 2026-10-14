@@ -15,6 +15,7 @@ keyring          / mnemonics          # indices of the stored recovery phrases
                  / mnemonic:{m}       # one recovery phrase
 profiles         / index              # Vec<ProfileRecord { m, x, name }>
 profile:{m}:{x}  / pointer            # (m, x)
+                 / optedIn            # Vec<Address>, the ERC-20s the profile opted into
 cache:{protocol} / cursor             # last indexed block
                  / chunk:{n}          # indexed events for one block span
 ```
