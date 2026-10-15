@@ -8,18 +8,16 @@ A BIP39 seed phrase.
 
 ## Profile
 
-A user-facing collection of accounts.
+A user-facing collection of **signers**, **executors**, and **vaults**.
 Used to manage and group balances, transactions, history, and other related data.
-
-## Account
-
-An abstract object that has some balance of assets, can be deposited into (increasing the balance), and withdrawn from (decreasing the balance).
+A profile points at a **mnemonic** and a profile index, the hardened BIP-44 account in `m/44'/60'/<profileIndex>'/…`, and never stores the phrase.
 
 Example:
 
-- A user has an **account** for their EOA address.
-- A user has a **account** for their multisig smart account.
-- A user has a **account** for their tornadocash shielded balance.
+- An EOA: a **signer** for its key, an **executor** to send from it, and a **vault** for its balance.
+- A hardware wallet: the same three, with the **signer** on the device.
+- A stealth address the user received funds at: the same three, with the **signer** holding the key derived for that address.
+- A Tornado Cash balance: a **vault** that derives its notes with a **signer**, and whose withdrawals one of the profile's **executors** sends.
 
 ## Signer
 
@@ -39,18 +37,28 @@ Example:
 - A user has an **executor** for their EOA address.
 - A user has an **executor** for a 4337 smart account.
 
+## Vault
+
+An abstract object that has some balance of assets, can be deposited into (increasing the balance), and withdrawn from (decreasing the balance).
+
+Example:
+
+- A user has a **vault** for their EOA address.
+- A user has a **vault** for their multisig smart account.
+- A user has a **vault** for their tornadocash shielded balance.
+
 ## Asset
 
-Assets are configured wallet-wide and opted-in to on a per "account" basis.
+Assets are configured wallet-wide and opted-in to on a per **profile** basis.
 Prefer 'asset' over 'token' or 'currency'.
 
 ### Metadata
 
-Asset information such as **decimals**, **symbol**, and **name** are fetched when the asset is first introduced.
+Asset information such as **decimals** and **symbol** is fetched when the asset is first introduced.
 
 ### Balance
 
-The amount of an **asset** held by some object (e.g. a **account** or **profile**).
+The amount of an **asset** held by some object (e.g. a **vault** or **profile**).
 
 ### Value
 
