@@ -20,7 +20,7 @@ use crate::{
         endpoint::NetworkEndpointError,
     },
     profile::{ProfileError, ProfileRecord},
-    vault::db::VaultDatabaseError,
+    vault::{address::db::AddressVaultDatabaseError, db::VaultDatabaseError},
 };
 
 mod data_dir;
@@ -39,6 +39,8 @@ pub struct Instance {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstanceError {
+    #[error(transparent)]
+    AddressVaultDatabase(#[from] AddressVaultDatabaseError),
     #[error(transparent)]
     Asset(#[from] AssetError),
     #[error("no wallet instance for {network_id} at {}", dir.display())]

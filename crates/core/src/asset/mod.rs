@@ -1,8 +1,7 @@
 //! The assets a wallet reads balances for.
 //!
 //! A default's metadata is fixed here. Any other ERC-20 has its metadata read from the network
-//! once, when it is first opted into, and is then registered wallet-wide; no other function here
-//! reads the network.
+//! once, when it is first opted into, and is then registered wallet-wide.
 //!
 //! Functions take `wallet`, the network scope, and `profile`, the profile's own scope.
 
@@ -55,6 +54,8 @@ pub enum AssetError {
     Database(#[from] AssetDatabaseError),
     #[error("network error: {0}")]
     Network(#[from] NetworkEndpointError),
+    #[error("{0} returned no valid balanceOf(); it may not be an ERC-20")]
+    NoBalance(Address),
     #[error("{0} returned no valid decimals(); it may not be an ERC-20")]
     NoDecimals(Address),
     #[error("{0} is opted into but not registered")]
@@ -199,6 +200,16 @@ pub fn format_amount(amount: U256, decimals: u8) -> Result<String, UnitsError> {
         .to_string())
 }
 
+/// `owner`'s balance of the ERC-20 at `token`, in base units.
+pub async fn erc20_balance(
+    endpoint: &dyn NetworkEndpoint,
+    token: Address,
+    owner: Address,
+) -> Result<U256, AssetError> {
+    let data = call(endpoint, token, &Erc20::balanceOfCall::new((owner,))).await?;
+    Erc20::balanceOfCall::abi_decode_returns(&data).map_err(|_| AssetError::NoBalance(token))
+}
+
 async fn read_erc20(
     endpoint: &dyn NetworkEndpoint,
     address: Address,
@@ -266,6 +277,17 @@ mod tests {
         for (amount, decimals, expected) in cases {
             assert_eq!(format_amount(amount, decimals).unwrap(), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn a_balance_that_does_not_decode_is_no_balance() {
+        let asserter = Asserter::new();
+        respond(&asserter, &[]);
+        let endpoint = mocked_provider(&asserter);
+
+        let result = erc20_balance(endpoint.as_ref(), TOKEN, Address::ZERO).await;
+
+        assert!(matches!(result, Err(AssetError::NoBalance(TOKEN))));
     }
 
     #[tokio::test]

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_rpc_types_eth::{SignedAuthorization, TransactionRequest};
+use alloy_rpc_types_eth::SignedAuthorization;
 use alloy_sol_types::SolCall;
 
 use crate::{
-    asset::Erc20,
+    asset::{self, AssetError, Erc20},
     delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate, SimpleDelegateError},
     network::endpoint::NetworkEndpointError,
     prelude::*,
@@ -47,8 +47,8 @@ pub enum SimpleVaultError {
     NotAuthorized,
     #[error("network error: {0}")]
     Network(#[from] NetworkEndpointError),
-    #[error("sol error: {0}")]
-    Sol(#[from] alloy_sol_types::Error),
+    #[error(transparent)]
+    Asset(#[from] AssetError),
 }
 
 inventory::submit! {
@@ -216,18 +216,7 @@ impl SimpleVault {
     }
 
     async fn balance_erc20(&self, token: Address) -> Result<U256, SimpleVaultError> {
-        let call = Erc20::balanceOfCall::new((self.address(),));
-        let data = self
-            .provider
-            .call(
-                TransactionRequest::default()
-                    .to(token)
-                    .input(call.abi_encode().into()),
-            )
-            .await?;
-
-        let balance = Erc20::balanceOfCall::abi_decode_returns(&data)?;
-        Ok(balance)
+        Ok(asset::erc20_balance(self.provider.as_ref(), token, self.address()).await?)
     }
 
     fn deposit_native(&self, amount: U256) -> Vec<Call> {

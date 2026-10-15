@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy_primitives::Address;
 use futures::future::join_all;
 
 use super::{Instance, InstanceError};
@@ -10,6 +11,10 @@ use crate::{
     profile::ProfileRecord,
     vault::{
         Vault,
+        address::{
+            ADDRESS_VAULT_TAG,
+            db::{AddressVaultDb, DerivedAddress},
+        },
         db::{VaultDb, VaultRecord},
     },
 };
@@ -48,6 +53,23 @@ impl Instance {
         let mut records = db.vault_records().await?;
         records.push(record);
         db.put_vault_records(&records).await?;
+        Ok(())
+    }
+
+    /// Adds an address vault to `profile` for each of `addresses`, given as `(index, address)`.
+    ///
+    /// Does not check for vaults `profile` already has for the same addresses.
+    pub async fn add_address_vaults(
+        &self,
+        profile: &ProfileRecord,
+        addresses: &[(u32, Address)],
+    ) -> Result<(), InstanceError> {
+        for &(index, address) in addresses {
+            let (record, db) = self.new_vault(profile, ADDRESS_VAULT_TAG);
+            db.put_derived_address(&DerivedAddress { address, index })
+                .await?;
+            self.add_vault(profile, record).await?;
+        }
         Ok(())
     }
 
@@ -228,5 +250,39 @@ mod tests {
             .await;
         assert!(built[0].is_err());
         assert!(built[1].is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_address_vault_builds_for_its_address() {
+        let instance = instance();
+        let address = Address::repeat_byte(0xaa);
+        instance
+            .add_address_vaults(&profile(0), &[(3, address)])
+            .await
+            .unwrap();
+
+        let records = instance.vault_records(&profile(0)).await.unwrap();
+        let endpoint = mocked_provider(&Asserter::new());
+        let built = instance
+            .build_vaults(&profile(0), &records, &endpoint)
+            .await;
+        assert_eq!(built[0].as_ref().unwrap().id(), VaultId::Address(address));
+    }
+
+    #[tokio::test]
+    async fn an_address_vault_stores_its_derivation_index() {
+        let instance = instance();
+        instance
+            .add_address_vaults(&profile(0), &[(3, Address::repeat_byte(0xaa))])
+            .await
+            .unwrap();
+
+        let records = instance.vault_records(&profile(0)).await.unwrap();
+        let derived = instance
+            .vault_db(&profile(0), &records[0])
+            .get_derived_address()
+            .await
+            .unwrap();
+        assert_eq!(derived.index, 3);
     }
 }

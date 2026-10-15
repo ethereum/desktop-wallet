@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::asset::AssetId;
 
+pub mod address;
 pub mod db;
 pub mod simple;
 pub mod tornadocash;

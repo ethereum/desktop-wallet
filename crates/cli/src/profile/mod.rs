@@ -167,7 +167,7 @@ impl fmt::Display for NewReport {
 
 impl Report for ImportReport {
     const KIND: &'static str = "edw/profile-import";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for ImportReport {
@@ -278,6 +278,11 @@ impl ImportArgs {
             Ok(endpoint) => instance.scan_profile(&profile, endpoint.as_ref()).await,
             Err(error) => Err(error),
         };
+        if let Ok(scan) = &scan {
+            instance
+                .add_address_vaults(&profile, &scan.addresses)
+                .await?;
+        }
         let (addresses, next_unused) = match scan {
             Ok(scan) => (
                 scan.addresses

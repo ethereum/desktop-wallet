@@ -11,8 +11,7 @@ const MAX_INDEX: u32 = 1000;
 /// Result of scanning a profile's standard EOAs for on-chain use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EoaScan {
-    /// Addresses from index 0 through the last used index, inclusive.
-    /// Empty when nothing was used.
+    /// The used addresses, by index, in index order.
     pub addresses: Vec<(u32, Address)>,
     pub last_used: Option<u32>,
     pub next_unused: u32,
@@ -41,7 +40,7 @@ impl Mnemonic {
         F: FnMut(Address) -> Fut,
         Fut: Future<Output = Result<bool, MnemonicError>>,
     {
-        let mut scanned = Vec::new();
+        let mut addresses = Vec::new();
         let mut last_used = None;
         let mut start = 0;
 
@@ -53,8 +52,8 @@ impl Mnemonic {
             let mut batch_used = false;
             for address_index in start..start.saturating_add(BATCH_SIZE) {
                 let address = self.standard_address(address_index, profile_index)?;
-                scanned.push((address_index, address));
                 if is_used(address).await? {
+                    addresses.push((address_index, address));
                     last_used = Some(address_index);
                     batch_used = true;
                 }
@@ -66,13 +65,6 @@ impl Mnemonic {
             start = start.saturating_add(BATCH_SIZE);
         }
 
-        let addresses = match last_used {
-            Some(last) => scanned
-                .into_iter()
-                .take((last as usize).saturating_add(1))
-                .collect(),
-            None => Vec::new(),
-        };
         let next_unused = last_used.map_or(0, |index| index.saturating_add(1));
 
         Ok(EoaScan {
@@ -143,8 +135,7 @@ mod tests {
         assert_eq!(inspected, 30);
         assert_eq!(scan.last_used, Some(15));
         assert_eq!(scan.next_unused, 16);
-        assert_eq!(scan.addresses.len(), 16);
-        assert_eq!(scan.addresses[0].0, 0);
-        assert_eq!(scan.addresses[15].0, 15);
+        let indices: Vec<u32> = scan.addresses.iter().map(|(index, _)| *index).collect();
+        assert_eq!(indices, [0, 15]);
     }
 }
