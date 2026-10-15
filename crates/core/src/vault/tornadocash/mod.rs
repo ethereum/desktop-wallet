@@ -17,7 +17,7 @@ use crate::{
     database::{Database, scoped::ScopedDatabase},
     network::NetworkEndpoint,
     vault::{
-        Vault, VaultError, VaultId,
+        Balance, Vault, VaultError, VaultId, Visibility,
         tornadocash::{
             db::{NoteRecord, PoolDb, TornadoVaultDb},
             syncer::NetworkEndpointSyncer,
@@ -218,16 +218,22 @@ impl<S: Signer + Send + Sync> Vault for TornadoVault<S> {
         VaultId::Address(self.address)
     }
 
-    async fn balance(&self, asset: &AssetId) -> Result<U256, VaultError> {
+    fn visibility(&self) -> Visibility {
+        Visibility::Private
+    }
+
+    async fn balance(&self, asset: &AssetId) -> Result<Balance, VaultError> {
         let pools = self.tracked_pools(asset).await?;
         self.sync(&pools).await?;
 
         let notes = self.pool_notes(&pools).await?;
-        Ok(notes
-            .iter()
-            .filter(|note| note.leaf_index.is_some() && !note.spent)
-            .map(|note| U256::from(note.pool.amount_wei))
-            .sum())
+        Ok(Balance::spendable(
+            notes
+                .iter()
+                .filter(|note| note.leaf_index.is_some() && !note.spent)
+                .map(|note| U256::from(note.pool.amount_wei))
+                .sum(),
+        ))
     }
 }
 

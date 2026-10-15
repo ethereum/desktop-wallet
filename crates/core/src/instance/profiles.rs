@@ -1,7 +1,9 @@
 use zeroize::Zeroizing;
 
-use super::{Instance, InstanceError};
+use super::{Instance, InstanceError, NETWORK_SCOPE};
 use crate::{
+    asset::{self, Erc20Asset},
+    database::scoped::ScopedDatabase,
     keyring::Keyring,
     mnemonic::{Mnemonic, MnemonicRecord, scan::EoaScan},
     network::NetworkEndpoint,
@@ -16,6 +18,16 @@ impl Instance {
     /// The profile `selector` names, as `mnemonic/profile` or a unique name.
     pub async fn profile(&self, selector: &str) -> Result<ProfileRecord, InstanceError> {
         Ok(self.profile_index().find(selector).await?)
+    }
+
+    /// The ERC-20s `profile` reads: the network's defaults, then its opt-ins.
+    pub async fn profile_erc20s(
+        &self,
+        profile: &ProfileRecord,
+    ) -> Result<Vec<Erc20Asset>, InstanceError> {
+        let wallet = ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE);
+        let scope = ScopedDatabase::new(self.store.clone(), profile.scope().as_bytes());
+        Ok(asset::profile_erc20s(&wallet, &scope, self.network.id).await?)
     }
 
     /// The recovery phrase `profile` derives from.

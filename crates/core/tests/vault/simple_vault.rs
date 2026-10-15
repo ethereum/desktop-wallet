@@ -100,7 +100,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     info!("Verifying balance after deposit...");
     let balance = vault.balance(&deposit_asset).await?;
     assert_eq!(
-        balance, deposit_amount,
+        balance.spendable, deposit_amount,
         "Expected vault balance to match deposited amount"
     );
     info!("Withdrawing from the vault...");
@@ -122,7 +122,7 @@ async fn test_simple_vault() -> Result<(), Box<dyn std::error::Error>> {
     info!("Verifying balance after withdrawal...");
     let balance_after_withdrawal = vault.balance(&deposit_asset).await?;
     assert_eq!(
-        balance_after_withdrawal,
+        balance_after_withdrawal.spendable,
         deposit_amount - withdraw_amount,
         "Expected vault balance to match after withdrawal"
     );

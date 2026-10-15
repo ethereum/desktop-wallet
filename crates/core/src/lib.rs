@@ -1,4 +1,5 @@
 pub mod asset;
+pub mod balance;
 pub mod call;
 pub mod database;
 pub mod delegate;

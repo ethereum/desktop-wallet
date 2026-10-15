@@ -31,6 +31,8 @@ sol!(
     }
 );
 
+/// Decimals of the native asset, whose balances are read in wei.
+pub const NATIVE_DECIMALS: u8 = 18;
 const UNKNOWN_SYMBOL: &str = "UNKNOWN";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

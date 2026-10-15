@@ -78,7 +78,7 @@ pub struct RevealPhraseArgs {
 }
 
 #[derive(Serialize)]
-struct ProfileSummary {
+pub struct ProfileSummary {
     mnemonic_index: u32,
     profile_index: u32,
     name: Option<String>,
@@ -444,7 +444,7 @@ fn choose_phrase(profiles: &[ProfileRecord], input: Input) -> Result<Option<u32>
     Ok(choice.checked_sub(1).map(|index| phrases[index].0))
 }
 
-fn choose_profile(
+pub fn choose_profile(
     profiles: &[ProfileRecord],
     input: Input,
 ) -> Result<ProfileRecord, anyhow::Error> {
@@ -457,7 +457,7 @@ fn choose_profile(
             let labels: Vec<String> = several.iter().map(ProfileRecord::display_name).collect();
             let choice = input
                 .choose("Select a profile:", &labels)?
-                .context("name the profile to reveal")?;
+                .context("name the profile as `mnemonic/profile` or by name")?;
             Ok(several[choice].clone())
         }
     }

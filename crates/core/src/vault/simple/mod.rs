@@ -13,7 +13,10 @@ use crate::{
         Signer,
         simple::db::{SimpleSignerDatabaseError, SimpleSignerDb},
     },
-    vault::simple::db::{SimpleVaultDatabaseError, SimpleVaultDb},
+    vault::{
+        Balance, Visibility,
+        simple::db::{SimpleVaultDatabaseError, SimpleVaultDb},
+    },
 };
 
 pub mod db;
@@ -158,11 +161,16 @@ impl Vault for SimpleVault {
         VaultId::Address(self.address())
     }
 
-    async fn balance(&self, asset: &AssetId) -> Result<U256, VaultError> {
-        match asset {
-            AssetId::Native => Ok(self.balance_native().await?),
-            AssetId::Erc20(token) => Ok(self.balance_erc20(*token).await?),
-        }
+    fn visibility(&self) -> Visibility {
+        Visibility::Public
+    }
+
+    async fn balance(&self, asset: &AssetId) -> Result<Balance, VaultError> {
+        let amount = match asset {
+            AssetId::Native => self.balance_native().await?,
+            AssetId::Erc20(token) => self.balance_erc20(*token).await?,
+        };
+        Ok(Balance::spendable(amount))
     }
 }
 

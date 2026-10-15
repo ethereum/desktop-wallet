@@ -2695,6 +2695,7 @@ dependencies = [
 name = "edw-cli"
 version = "0.0.1"
 dependencies = [
+ "alloy-primitives",
  "anyhow",
  "async-trait",
  "clap",

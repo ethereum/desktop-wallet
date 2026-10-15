@@ -18,6 +18,8 @@ edw profile list # lists all configured profiles
 edw profile new # creates a new profile
 edw profile import # imports a profile from a mnemonic
 edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only
+
+edw balance [profile] [--verbose] # each asset's public, private and total holdings across a profile's vaults; --verbose adds each vault
 ```
 
 ### Global Args

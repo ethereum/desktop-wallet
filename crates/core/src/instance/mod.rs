@@ -6,6 +6,7 @@ use std::{
 pub use data_dir::DataDir;
 
 use crate::{
+    asset::AssetError,
     database::{
         Database,
         encrypted::{EncryptedDatabase, EncryptedDatabaseError},
@@ -36,6 +37,8 @@ pub struct Instance {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstanceError {
+    #[error(transparent)]
+    Asset(#[from] AssetError),
     #[error("no wallet instance for {network_id} at {}", dir.display())]
     NotFound { network_id: NetworkId, dir: PathBuf },
     #[error("error opening the store at {}", dir.display())]
