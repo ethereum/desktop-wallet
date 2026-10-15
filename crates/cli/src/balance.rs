@@ -5,8 +5,10 @@ use clap::Args;
 use edw_core::{
     asset::{AssetId, NATIVE_DECIMALS, format_amount},
     balance::{self, AssetTotals, VaultBalances},
+    factory::FactoryError,
+    instance::Instance,
     profile::ProfileRecord,
-    vault::{Balance, Vault, Visibility},
+    vault::{Balance, Vault, Visibility, db::VaultRecord},
 };
 use serde::Serialize;
 
@@ -73,11 +75,19 @@ enum VaultStatus {
     Unavailable,
 }
 
+/// A vault whose factory failed, so its id and visibility are unknown.
+struct UnbuiltVault {
+    record: VaultRecord,
+    error: FactoryError,
+}
+
 #[derive(Serialize)]
 struct VaultRow {
-    tag: &'static str,
-    vault: String,
-    visibility: Visibility,
+    tag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visibility: Option<Visibility>,
     status: VaultStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -152,8 +162,13 @@ impl BalanceArgs {
                 .collect();
         let ids: Vec<AssetId> = assets.iter().map(|asset| asset.id.clone()).collect();
 
-        // Nothing stores a profile's vaults yet.
-        let vaults: Vec<Box<dyn Vault>> = Vec::new();
+        let (vaults, unbuilt) = build_vaults(&instance, &profile, global).await?;
+        for vault in &unbuilt {
+            eprintln!(
+                "Could not build {} vault: {}",
+                vault.record.tag, vault.error
+            );
+        }
         let read = balance::read(&vaults, &ids).await;
         for vault in &read {
             if let Err(error) = &vault.balances {
@@ -163,7 +178,7 @@ impl BalanceArgs {
 
         BalanceReport {
             profile: ProfileSummary::from(&profile),
-            complete: read.iter().all(|vault| vault.balances.is_ok()),
+            complete: unbuilt.is_empty() && read.iter().all(|vault| vault.balances.is_ok()),
             assets: assets
                 .iter()
                 .zip(balance::totals(&read, assets.len()))
@@ -171,7 +186,7 @@ impl BalanceArgs {
                 .collect::<anyhow::Result<_>>()?,
             vaults: self
                 .verbose
-                .then(|| vault_rows(&assets, &read))
+                .then(|| vault_rows(&assets, &read, &unbuilt))
                 .transpose()?,
         }
         .emit(global.mode())
@@ -220,13 +235,12 @@ impl fmt::Display for BalanceReport {
             return write!(f, "\n\nNo vaults.");
         }
         for vault in vaults {
-            write!(
-                f,
-                "\n\n{} {} ({})",
-                vault.tag, vault.vault, vault.visibility
-            )?;
+            write!(f, "\n\n{}", vault.tag)?;
+            if let (Some(id), Some(visibility)) = (&vault.vault, &vault.visibility) {
+                write!(f, " {id} ({visibility})")?;
+            }
             if let Some(error) = &vault.error {
-                write!(f, "\n  could not be read: {error}")?;
+                write!(f, "\n  unavailable: {error}")?;
                 continue;
             }
             let rows: Vec<Vec<String>> = vault
@@ -240,8 +254,37 @@ impl fmt::Display for BalanceReport {
     }
 }
 
-fn vault_rows(assets: &[Asset], read: &[VaultBalances]) -> anyhow::Result<Vec<VaultRow>> {
-    read.iter()
+/// Builds `profile`'s vaults, connecting to the endpoint only when there are any.
+async fn build_vaults(
+    instance: &Instance,
+    profile: &ProfileRecord,
+    global: &GlobalArgs,
+) -> anyhow::Result<(Vec<Box<dyn Vault>>, Vec<UnbuiltVault>)> {
+    let records = instance.vault_records(profile).await?;
+    if records.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+    let built = instance.build_vaults(profile, &records, &endpoint).await;
+
+    let mut vaults = Vec::new();
+    let mut unbuilt = Vec::new();
+    for (record, vault) in records.into_iter().zip(built) {
+        match vault {
+            Ok(vault) => vaults.push(vault),
+            Err(error) => unbuilt.push(UnbuiltVault { record, error }),
+        }
+    }
+    Ok((vaults, unbuilt))
+}
+
+fn vault_rows(
+    assets: &[Asset],
+    read: &[VaultBalances],
+    unbuilt: &[UnbuiltVault],
+) -> anyhow::Result<Vec<VaultRow>> {
+    let mut rows = read
+        .iter()
         .map(|vault| {
             let (status, error, rows) = match &vault.balances {
                 Ok(balances) => (VaultStatus::Ok, None, vault_asset_rows(assets, balances)?),
@@ -252,15 +295,24 @@ fn vault_rows(assets: &[Asset], read: &[VaultBalances]) -> anyhow::Result<Vec<Va
                 ),
             };
             Ok(VaultRow {
-                tag: vault.tag,
-                vault: vault.vault.to_string(),
-                visibility: vault.visibility,
+                tag: vault.tag.to_string(),
+                vault: Some(vault.vault.to_string()),
+                visibility: Some(vault.visibility),
                 status,
                 error,
                 assets: rows,
             })
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    rows.extend(unbuilt.iter().map(|vault| VaultRow {
+        tag: vault.record.tag.clone(),
+        vault: None,
+        visibility: None,
+        status: VaultStatus::Unavailable,
+        error: Some(vault.error.to_string()),
+        assets: Vec::new(),
+    }));
+    Ok(rows)
 }
 
 fn vault_asset_rows(assets: &[Asset], balances: &[Balance]) -> anyhow::Result<Vec<VaultAssetRow>> {
@@ -319,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn a_vault_that_failed_is_unavailable_with_its_error() {
+    fn a_vault_that_failed_to_read_is_unavailable_with_its_error() {
         let read = [VaultBalances {
             tag: "simple-vault",
             vault: VaultId::Address(Address::ZERO),
@@ -328,8 +380,22 @@ mod tests {
                 Address::ZERO,
             ))),
         }];
-        let rows = vault_rows(&[Asset::native("eth".to_string())], &read).unwrap();
+        let rows = vault_rows(&[Asset::native("eth".to_string())], &read, &[]).unwrap();
         assert!(matches!(rows[0].status, VaultStatus::Unavailable));
         assert!(rows[0].error.is_some());
+    }
+
+    #[test]
+    fn a_vault_that_failed_to_build_is_unavailable_without_an_id() {
+        let unbuilt = [UnbuiltVault {
+            record: VaultRecord::new("no-such-vault"),
+            error: FactoryError::NotFound("no-such-vault".to_string()),
+        }];
+        let rows = vault_rows(&[Asset::native("eth".to_string())], &[], &unbuilt).unwrap();
+        assert!(matches!(rows[0].status, VaultStatus::Unavailable));
+        assert_eq!(
+            (rows[0].tag.as_str(), &rows[0].vault),
+            ("no-such-vault", &None)
+        );
     }
 }

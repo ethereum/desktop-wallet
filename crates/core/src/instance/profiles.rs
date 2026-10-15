@@ -26,8 +26,7 @@ impl Instance {
         profile: &ProfileRecord,
     ) -> Result<Vec<Erc20Asset>, InstanceError> {
         let wallet = ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE);
-        let scope = ScopedDatabase::new(self.store.clone(), profile.scope().as_bytes());
-        Ok(asset::profile_erc20s(&wallet, &scope, self.network.id).await?)
+        Ok(asset::profile_erc20s(&wallet, &self.profile_db(profile), self.network.id).await?)
     }
 
     /// The recovery phrase `profile` derives from.
