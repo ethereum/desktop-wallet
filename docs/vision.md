@@ -8,7 +8,10 @@ EDW is meant to be Ethereum's _wallet of last resort_. It has two key priorities
 
 **Those two properties are the product.** Speed, convenience, a simple/legible UX, and minimzation of tx fees are also important aspects to optimize around, but not when they conflict with Property 1 or Property 2.
 
-Finally **Security** is an overarching priority which supercedes all other goals. Wallet software that is insecure is actively harmful and any benefits or properties are not relevant if the software doesn't secure your funds and keys properly.
+Note that **Security** is an overarching priority which supercedes all other goals. Wallet software that is insecure is actively harmful and any benefits or properties are not relevant if the software doesn't secure your funds and keys properly.
+
+> [!IMPORTANT] 
+> **EDW IS ONLY AND EXPLICITLY DESIGNED TO SERVE AS A WALLET FOR THE ETHEREUM LAYER 1 BLOCKCHAIN. OTHER CHAINS OR LAYER 2 NETWORKS ARE ENTIRELY OUT OF SCOPE AND ARE OF NO CONCERN TO THE DESIGNS OR GOALS OF EDW**
 
 ## Dependency minimization
 
@@ -27,6 +30,4 @@ In practice, this means:
 - **Deep integration with shielded pool solutions** so that unshielding freshly anonymized funds, before doing transfers or taking any new onchain action, is the standard workflow. Shielded pools are core wallet primitives baked directly into operating onchain.
 - **Careful analysis of traffic and fingerprint** whenever user does wallet interaction or transaction flows. The goal is that network observers learn/link nothing more than what is visible onchain. 
 
-**Profiles** are the compartmentalization technique that makes this practical and legibile for users. The goal of the **Profile** is to make it so that a user who doesn't understand intricacies of onchain privacy can simply follow the default wallet UX (which gives them privacy) without losing their ability to understand their balances and activity history. Thanks to the **Profile**, using a fresh unlinked address for each onchain action is the default, and reusing addresses / linking activity is a custom anti-pattern that a user must explicitly seek out. 
-
-**EDW IS ONLY AND EXPLICITLY DESIGNED TO SERVE AS A WALLET FOR THE ETHEREUM LAYER 1 BLOCKCHAIN. OTHER CHAINS OR LAYER 2 NETWORKS ARE ENTIRELY OUT OF SCOPE AND ARE OF NO COCNERN TO THE DESIGNS OR GOALS OF EDW**
+**Profiles** are the compartmentalization technique that makes this practical and legibile for users. The goal of the **Profile** is to make it so that a user who doesn't understand intricacies of onchain privacy can simply follow the default wallet UX (which gives them privacy) without losing their ability to understand their balances and activity history. By enshrining **Profile** compartmentalization, we make sure that using a fresh unlinked address for each onchain action is the default, and reusing addresses / linking activity is a custom anti-pattern that a user must explicitly seek out. 
