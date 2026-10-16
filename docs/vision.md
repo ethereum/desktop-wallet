@@ -1,34 +1,30 @@
 # Vision
 
-EDW is the last ethereum wallet you will ever need.
+EDW is meant to be Ethereum's _wallet of last resort_. It has two key priorities as an Ethereum wallet:
 
-Notable features include:
-- private by design
-- simple, legible UX
-- encrypted at rest
-- easy compartmentalization
-  via profiles, or different data dirs
-- blazingly fast
+1. **Dependency minimization**: This local software and a connection to ethereum nodes is all that's needed to reliably operate. Any other dependencies are optional conveniences that don't block critical wallet functionality.
 
-## Private by Design
+2. **Privacy by Default**: Users onchain actions and balances are maximally private, meaning unlinked and anonymous to any outside observer.
 
-Your data should be yours.
-Even when using the CLI only minimal information is shown at a time.
-No credentials flashing by on accident, or keys being exposed.
+**Those two properties are the product.** Speed, convenience, a simple/legible UX, and minimzation of tx fees are also important aspects to optimize around, but not when they conflict with Property 1 or Property 2.
 
-## Encrypted at rest, thats how we do best
+Finally **Security** is an overarching priority which supercedes all other goals. Wallet software that is insecure is actively harmful and any benefits or properties are not relevant if the software doesn't secure your funds and keys properly.
 
-All data is encrypted at rest;
-And encryption bounds allow for shared access to network caches (such as previously indexed data),
-while profile-specific storage is kept seperate.
+## Dependency minimization
 
-## Privacy as a first class citizen
+**This local software and a connection to ethereum nodes is all that's needed to reliably operate.**
 
-Using privacy tooling should be easy;
-EDW comes with first class primitives to facilitate managing your funds, shielding, unshielding, and the like.
+One asterisk: until Hegota and EIP-8141, one dependency besides a node connection has to be swallowed -- access to at least one 4337 bundler endpoint for UserOp submission. That endpoint should be a replaceable dumb pipe for UserOp submission and nothing else. Several open public endpoints exist, so the wallet can keep redundancy across them and still submit when any given one is down.
 
-## Profiles, Accounts, and Spaces
+Besides the asterisk, every single other endpoint or service we rely on should be optional and non-critical. If that endpoint is unexpectedly down or malicious the wallet still operates (maybe slower or with less auxiliary data and conveniences, but critical functionality still works)
 
-A space is a collection of profiles;
-A profile is a collection of accounts;
-And an account is a particular method of holding funds, could be an EOA, a smart contract, or an in-protocol balance (like TC)
+## Privacy by Default
+
+**Users onchain actions and balances are maximally private, meaning unlinked and anonymous to any outside observer.** 
+
+In practice, this means:
+
+- **Deep integration with shielded pool solutions** so that unshielding freshly anonymized funds, before doing transfers or taking any new onchain action, is the standard workflow.
+- **Careful analysis of traffic and fingerprint** whenever user does wallet interaction or transaction flows. The goal is that network observers learn/link nothing more than what is visible onchain. 
+
+**Profiles** are the compartmentalization technique that makes this practical and legibile for users. The goal of the **Profile** is to make it so that a user who doesn't understand intricacies of onchain privacy can simply follow the default wallet UX (which gives them privacy) without losing their ability to understand their balances and activity history. Thanks to the **Profile** using a fresh unlinked address for each onchain action is the default, and reusing addresses / linking activity is a custom anti-pattern that a user must explicitly seek out.
