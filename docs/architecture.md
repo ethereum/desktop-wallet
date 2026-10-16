@@ -9,7 +9,7 @@ crates/core # edw-core: secrets, storage, chain access, profiles; no UI dependen
 crates/cli  # edw-cli: inputs and outputs only
 crates/bin  # edw: the binary
 contracts/  # Solidity (SimpleDelegate) and its Foundry tests
-spec/       # this specification
+docs/       # this specification
 ```
 
 ## Core
@@ -19,7 +19,7 @@ Instance              # one unlocked network: its encrypted store, opened with t
 Network               # a chain by network id; owns its native asset. One instance per network
 NetworkEndpointConfig # a stored, named way to reach the network (http today; ipc, light clients later). One is active
 NetworkEndpoint       # what a config resolves into at runtime; must serve the network id before use
-Profile               # a user-named group of accounts on one recovery phrase
+Profile               # a user-named group of signers, executors and vaults at one index of a recovery phrase
 Signer                # signs for one address: seed-derived, hardware, remote
 Executor              # sends transactions for one address: EOA, EIP-7702 delegate
 Vault                 # holds assets behind deposit/withdraw: EOA, stealth address, shielded pool

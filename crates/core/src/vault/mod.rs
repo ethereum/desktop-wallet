@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::asset::AssetId;
 
 pub mod simple;
+pub mod tornadocash;
 
 /// A trait representing a store of assets. Vaults should implement methods for depositing and withdrawing assets.
 #[async_trait::async_trait]
@@ -16,6 +17,7 @@ pub trait Vault: Send + Sync {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum VaultId {
     Address(Address),
 }
