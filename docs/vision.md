@@ -12,7 +12,7 @@ Finally **Security** is an overarching priority which supercedes all other goals
 
 ## Dependency minimization
 
-**This local software and a connection to ethereum nodes is all that's needed to reliably operate.**
+_This local software and a connection to ethereum nodes is all that's needed to reliably operate_
 
 One asterisk: until Hegota and EIP-8141, one dependency besides a node connection has to be swallowed -- access to at least one 4337 bundler endpoint for UserOp submission. That endpoint should be a replaceable dumb pipe for UserOp submission and nothing else. Several open public endpoints exist, so the wallet can keep redundancy across them and still submit when any given one is down.
 
@@ -20,11 +20,13 @@ Besides the asterisk, every single other endpoint or service we rely on should b
 
 ## Privacy by Default
 
-**Users onchain actions and balances are maximally private, meaning unlinked and anonymous to any outside observer.** 
+_Users onchain actions and balances are maximally private, meaning unlinked and anonymous to any outside observer_
 
 In practice, this means:
 
-- **Deep integration with shielded pool solutions** so that unshielding freshly anonymized funds, before doing transfers or taking any new onchain action, is the standard workflow.
+- **Deep integration with shielded pool solutions** so that unshielding freshly anonymized funds, before doing transfers or taking any new onchain action, is the standard workflow. Shielded pools are core wallet primitives baked directly into operating onchain.
 - **Careful analysis of traffic and fingerprint** whenever user does wallet interaction or transaction flows. The goal is that network observers learn/link nothing more than what is visible onchain. 
 
-**Profiles** are the compartmentalization technique that makes this practical and legibile for users. The goal of the **Profile** is to make it so that a user who doesn't understand intricacies of onchain privacy can simply follow the default wallet UX (which gives them privacy) without losing their ability to understand their balances and activity history. Thanks to the **Profile** using a fresh unlinked address for each onchain action is the default, and reusing addresses / linking activity is a custom anti-pattern that a user must explicitly seek out.
+**Profiles** are the compartmentalization technique that makes this practical and legibile for users. The goal of the **Profile** is to make it so that a user who doesn't understand intricacies of onchain privacy can simply follow the default wallet UX (which gives them privacy) without losing their ability to understand their balances and activity history. Thanks to the **Profile**, using a fresh unlinked address for each onchain action is the default, and reusing addresses / linking activity is a custom anti-pattern that a user must explicitly seek out. 
+
+**EDW IS ONLY AND EXPLICITLY DESIGNED TO SERVE AS A WALLET FOR THE ETHEREUM LAYER 1 BLOCKCHAIN. OTHER CHAINS OR LAYER 2 NETWORKS ARE ENTIRELY OUT OF SCOPE AND ARE OF NO COCNERN TO THE DESIGNS OR GOALS OF EDW**
