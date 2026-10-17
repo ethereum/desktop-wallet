@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use clap::{ArgGroup, Args, Subcommand};
-use edw_core::{instance::Instance, profile::ProfileRecord};
+use edw_core::{instance::Instance, mnemonic::scan::EoaScan, profile::ProfileRecord};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
@@ -258,6 +258,15 @@ impl NewArgs {
             }
             profile
         };
+        // A new phrase has never been used, but another wallet may have used a stored one.
+        let scan = if shared.is_some() {
+            scan(&instance, &profile, global).await
+        } else {
+            None
+        };
+        instance
+            .add_scanned_address_vaults(&profile, scan.as_ref())
+            .await?;
         NewReport {
             profile: ProfileSummary::from(&profile),
             new_phrase: shared.is_none(),
@@ -274,17 +283,12 @@ impl ImportArgs {
         let name = prompt_profile_name(self.name.clone(), input)?;
         let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
 
-        let scan = match instance.endpoint(global.rpc_url.as_deref()).await {
-            Ok(endpoint) => instance.scan_profile(&profile, endpoint.as_ref()).await,
-            Err(error) => Err(error),
-        };
-        if let Ok(scan) = &scan {
-            instance
-                .add_address_vaults(&profile, &scan.addresses)
-                .await?;
-        }
+        let scan = scan(&instance, &profile, global).await;
+        instance
+            .add_scanned_address_vaults(&profile, scan.as_ref())
+            .await?;
         let (addresses, next_unused) = match scan {
-            Ok(scan) => (
+            Some(scan) => (
                 scan.addresses
                     .iter()
                     .map(|(index, address)| ScannedAddress {
@@ -294,10 +298,7 @@ impl ImportArgs {
                     .collect(),
                 Some(scan.next_unused),
             ),
-            Err(error) => {
-                eprintln!("The address scan failed: {:#}", anyhow::Error::from(error));
-                (Vec::new(), None)
-            }
+            None => (Vec::new(), None),
         };
         ImportReport {
             profile: ProfileSummary::from(&profile),
@@ -401,6 +402,20 @@ impl RevealPhraseArgs {
         println!("Store it offline, then clear your terminal scrollback.");
         Ok(())
     }
+}
+
+/// Scans `profile`'s addresses, or warns on stderr and returns `None` when the scan fails.
+async fn scan(
+    instance: &Instance,
+    profile: &ProfileRecord,
+    global: &GlobalArgs,
+) -> Option<EoaScan> {
+    let scan = match instance.endpoint(global.rpc_url.as_deref()).await {
+        Ok(endpoint) => instance.scan_profile(profile, endpoint.as_ref()).await,
+        Err(error) => Err(error),
+    };
+    scan.map_err(|error| eprintln!("The address scan failed: {:#}", anyhow::Error::from(error)))
+        .ok()
 }
 
 /// `explicit` when given, else a name typed at an interactive terminal. Validation is the

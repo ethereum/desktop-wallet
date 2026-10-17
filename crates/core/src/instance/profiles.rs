@@ -1,3 +1,4 @@
+use alloy_primitives::Address;
 use zeroize::Zeroizing;
 
 use super::{Instance, InstanceError, NETWORK_SCOPE};
@@ -113,14 +114,31 @@ impl Instance {
         profile: &ProfileRecord,
         endpoint: &dyn NetworkEndpoint,
     ) -> Result<EoaScan, InstanceError> {
-        let mnemonic = self
+        Ok(self
+            .mnemonic(profile)
+            .await?
+            .scan_standard_eoas(profile.profile_index, endpoint)
+            .await?)
+    }
+
+    /// `profile`'s standard address at `m/44'/60'/x'/0/index`.
+    pub(super) async fn standard_address(
+        &self,
+        profile: &ProfileRecord,
+        index: u32,
+    ) -> Result<Address, InstanceError> {
+        Ok(self
+            .mnemonic(profile)
+            .await?
+            .standard_address(index, profile.profile_index)?)
+    }
+
+    async fn mnemonic(&self, profile: &ProfileRecord) -> Result<Mnemonic, InstanceError> {
+        Ok(self
             .keyring()
             .mnemonic(profile.mnemonic_index)
             .await?
-            .mnemonic()?;
-        Ok(mnemonic
-            .scan_standard_eoas(profile.profile_index, endpoint)
-            .await?)
+            .mnemonic()?)
     }
 
     fn keyring(&self) -> Keyring {
@@ -239,6 +257,31 @@ mod tests {
         let phrase = instance.recovery_phrase(&second).await.unwrap();
 
         assert_eq!(phrase.as_str(), SECOND_FIXTURE);
+    }
+
+    #[tokio::test]
+    async fn standard_address_derives_from_the_profiles_phrase_and_index() {
+        let instance = instance();
+        instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap();
+        let (_, second) = instance
+            .import_profile(
+                Zeroizing::new(SECOND_FIXTURE.to_string()),
+                1,
+                Some("work".into()),
+            )
+            .await
+            .unwrap();
+
+        let address = instance.standard_address(&second, 2).await.unwrap();
+
+        // `m/44'/60'/1'/0/2` of `SECOND_FIXTURE`.
+        assert_eq!(
+            address,
+            alloy_primitives::address!("0x8D518dd6ebD188c590345C9409F00e47069F3E13")
+        );
     }
 
     #[tokio::test]

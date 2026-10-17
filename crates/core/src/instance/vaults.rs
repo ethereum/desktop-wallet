@@ -7,6 +7,7 @@ use super::{Instance, InstanceError};
 use crate::{
     database::{Database, scoped::ScopedDatabase},
     factory::{BuildContext, Factory, FactoryError},
+    mnemonic::scan::EoaScan,
     network::NetworkEndpoint,
     profile::ProfileRecord,
     vault::{
@@ -56,21 +57,20 @@ impl Instance {
         Ok(())
     }
 
-    /// Adds an address vault to `profile` for each of `addresses`, given as `(index, address)`.
+    /// Adds an address vault to `profile` for each used address in `scan`, or for its address 0
+    /// when `scan` found none or is `None`.
     ///
     /// Does not check for vaults `profile` already has for the same addresses.
-    pub async fn add_address_vaults(
+    pub async fn add_scanned_address_vaults(
         &self,
         profile: &ProfileRecord,
-        addresses: &[(u32, Address)],
+        scan: Option<&EoaScan>,
     ) -> Result<(), InstanceError> {
-        for &(index, address) in addresses {
-            let (record, db) = self.new_vault(profile, ADDRESS_VAULT_TAG);
-            db.put_derived_address(&DerivedAddress { address, index })
-                .await?;
-            self.add_vault(profile, record).await?;
-        }
-        Ok(())
+        let addresses = match scan {
+            Some(scan) if !scan.addresses.is_empty() => scan.addresses.clone(),
+            _ => vec![(0, self.standard_address(profile, 0).await?)],
+        };
+        self.add_address_vaults(profile, &addresses).await
     }
 
     /// Builds each of `records` against `endpoint`, concurrently and in order. A vault that fails
@@ -92,6 +92,20 @@ impl Instance {
         .await
     }
 
+    async fn add_address_vaults(
+        &self,
+        profile: &ProfileRecord,
+        addresses: &[(u32, Address)],
+    ) -> Result<(), InstanceError> {
+        for &(index, address) in addresses {
+            let (record, db) = self.new_vault(profile, ADDRESS_VAULT_TAG);
+            db.put_derived_address(&DerivedAddress { address, index })
+                .await?;
+            self.add_vault(profile, record).await?;
+        }
+        Ok(())
+    }
+
     fn vault_db(&self, profile: &ProfileRecord, record: &VaultRecord) -> Arc<dyn Database> {
         Arc::new(ScopedDatabase::new(
             Arc::new(self.profile_db(profile)),
@@ -102,8 +116,9 @@ impl Instance {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{Address, U256};
+    use alloy_primitives::{Address, U256, address};
     use alloy_transport::mock::Asserter;
+    use zeroize::Zeroizing;
 
     use super::*;
     use crate::{
@@ -114,6 +129,9 @@ mod tests {
     };
 
     const STORED_TAG: &str = "test-stored";
+    const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    /// `m/44'/60'/0'/0/0` of `FIXTURE`.
+    const FIXTURE_ADDRESS_0: Address = address!("0x9858EfFD232B4033E47d90003D41EC34EcaEda94");
 
     /// Holds the amount its factory read from the vault's database.
     struct StoredVault(U256);
@@ -157,6 +175,30 @@ mod tests {
 
     fn profile(profile_index: u32) -> ProfileRecord {
         ProfileRecord::new(0, profile_index, None)
+    }
+
+    async fn imported(instance: &Instance) -> ProfileRecord {
+        let (_, profile) = instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap();
+        profile
+    }
+
+    async fn derived_addresses(
+        instance: &Instance,
+        profile: &ProfileRecord,
+    ) -> Vec<(u32, Address)> {
+        let mut derived = Vec::new();
+        for record in instance.vault_records(profile).await.unwrap() {
+            let address = instance
+                .vault_db(profile, &record)
+                .get_derived_address()
+                .await
+                .unwrap();
+            derived.push((address.index, address.address));
+        }
+        derived
     }
 
     async fn new_stored(instance: &Instance, profile: &ProfileRecord, amount: u8) -> VaultRecord {
@@ -270,19 +312,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_address_vault_stores_its_derivation_index() {
+    async fn each_used_address_in_a_scan_becomes_a_vault() {
         let instance = instance();
+        let profile = imported(&instance).await;
+        let used = vec![
+            (3, Address::repeat_byte(0xaa)),
+            (15, Address::repeat_byte(0xbb)),
+        ];
+        let scan = EoaScan {
+            addresses: used.clone(),
+            last_used: Some(15),
+            next_unused: 16,
+        };
+
         instance
-            .add_address_vaults(&profile(0), &[(3, Address::repeat_byte(0xaa))])
+            .add_scanned_address_vaults(&profile, Some(&scan))
             .await
             .unwrap();
 
-        let records = instance.vault_records(&profile(0)).await.unwrap();
-        let derived = instance
-            .vault_db(&profile(0), &records[0])
-            .get_derived_address()
-            .await
-            .unwrap();
-        assert_eq!(derived.index, 3);
+        assert_eq!(derived_addresses(&instance, &profile).await, used);
+    }
+
+    #[tokio::test]
+    async fn without_a_used_address_address_0_becomes_a_vault() {
+        let no_used = EoaScan {
+            addresses: Vec::new(),
+            last_used: None,
+            next_unused: 0,
+        };
+        for scan in [Some(&no_used), None] {
+            let instance = instance();
+            let profile = imported(&instance).await;
+
+            instance
+                .add_scanned_address_vaults(&profile, scan)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                derived_addresses(&instance, &profile).await,
+                [(0, FIXTURE_ADDRESS_0)]
+            );
+        }
     }
 }
