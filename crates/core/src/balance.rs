@@ -125,6 +125,11 @@ mod tests {
         Balance::spendable(U256::from(amount))
     }
 
+    /// Both visibilities together, without [`AssetTotals::total`].
+    fn held(totals: &AssetTotals) -> Balance {
+        totals.public.saturating_add(totals.private)
+    }
+
     fn read_vault(
         visibility: Visibility,
         balances: Result<Vec<Balance>, VaultError>,
@@ -170,8 +175,21 @@ mod tests {
             read_vault(Visibility::Public, Ok(vec![spendable(1), spendable(10)])),
             read_vault(Visibility::Public, Ok(vec![spendable(2), spendable(20)])),
         ];
-        let public: Vec<Balance> = totals(&vaults, 2).iter().map(|t| t.public).collect();
-        assert_eq!(public, [spendable(3), spendable(30)]);
+        let held: Vec<Balance> = totals(&vaults, 2).iter().map(held).collect();
+        assert_eq!(held, [spendable(3), spendable(30)]);
+    }
+
+    #[test]
+    fn totals_sum_pending_across_vaults() {
+        let pending = |amount: u64| Balance {
+            spendable: U256::ZERO,
+            pending: U256::from(amount),
+        };
+        let vaults = [
+            read_vault(Visibility::Public, Ok(vec![pending(1)])),
+            read_vault(Visibility::Public, Ok(vec![pending(2)])),
+        ];
+        assert_eq!(held(&totals(&vaults, 1)[0]).pending, U256::from(3));
     }
 
     #[test]
@@ -200,7 +218,16 @@ mod tests {
             ),
             read_vault(Visibility::Public, Ok(vec![spendable(1)])),
         ];
-        assert_eq!(totals(&vaults, 1)[0].public, spendable(1));
+        assert_eq!(held(&totals(&vaults, 1)[0]), spendable(1));
+    }
+
+    #[test]
+    fn the_total_includes_private_holdings() {
+        let totals = AssetTotals {
+            public: spendable(1),
+            private: spendable(2),
+        };
+        assert_eq!(totals.total(), spendable(3));
     }
 
     #[test]

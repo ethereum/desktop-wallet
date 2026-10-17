@@ -359,14 +359,20 @@ mod tests {
 
     use super::*;
 
+    fn amount(value: u64, formatted: &str) -> Amount {
+        Amount {
+            value: U256::from(value),
+            base_units: value.to_string(),
+            formatted: formatted.to_string(),
+        }
+    }
+
     #[test]
     fn pending_shows_beside_spendable() {
-        let balance = Asset::native("eth".to_string())
-            .balance(Balance {
-                spendable: U256::from(1_500_000_000_000_000_000_u128),
-                pending: U256::from(100_000_000_000_000_000_u128),
-            })
-            .unwrap();
+        let balance = BalanceAmounts {
+            spendable: amount(15, "1.5"),
+            pending: amount(1, "0.1"),
+        };
         assert_eq!(balance.to_string(), "1.5 (+0.1 pending)");
     }
 

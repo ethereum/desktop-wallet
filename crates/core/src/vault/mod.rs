@@ -8,7 +8,7 @@ pub mod db;
 pub mod simple;
 pub mod tornadocash;
 
-/// A trait representing a store of assets. Vaults should implement methods for depositing and withdrawing assets.
+/// A store of assets.
 #[async_trait::async_trait]
 pub trait Vault: Send + Sync {
     fn tag(&self) -> &'static str;
