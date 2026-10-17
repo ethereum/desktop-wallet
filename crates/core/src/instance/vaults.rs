@@ -57,8 +57,8 @@ impl Instance {
         Ok(())
     }
 
-    /// Adds an address vault to `profile` for each used address in `scan`, or for its address 0
-    /// when `scan` found none or is `None`.
+    /// Adds an address vault to `profile` for each address in `scan`, or for its address 0 when
+    /// `scan` found none or is `None`.
     ///
     /// Does not check for vaults `profile` already has for the same addresses.
     pub async fn add_scanned_address_vaults(
@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn each_used_address_in_a_scan_becomes_a_vault() {
+    async fn each_address_in_a_scan_becomes_a_vault() {
         let instance = instance();
         let profile = imported(&instance).await;
         let used = vec![

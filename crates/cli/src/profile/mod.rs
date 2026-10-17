@@ -167,7 +167,7 @@ impl fmt::Display for NewReport {
 
 impl Report for ImportReport {
     const KIND: &'static str = "edw/profile-import";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 1;
 }
 
 impl fmt::Display for ImportReport {
