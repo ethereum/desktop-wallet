@@ -53,7 +53,8 @@ impl Instance {
 
     /// Stores `phrase` and creates exactly one profile on it, at `profile_index`.
     ///
-    /// Checks the profile name first, so a taken name stores no phrase.
+    /// Checks the profile name and index first, so a profile that cannot be created stores no
+    /// phrase.
     pub async fn import_profile(
         &self,
         phrase: Zeroizing<String>,
@@ -63,7 +64,7 @@ impl Instance {
         let keyring = self.keyring();
         let profiles = self.profile_index();
         let candidate = ProfileRecord::new(keyring.next_index().await?, profile_index, name);
-        profiles.check_name_free(&candidate).await?;
+        profiles.check_can_create(&candidate).await?;
 
         let mnemonic = keyring.add_mnemonic(phrase).await?;
         let profile = profiles
@@ -235,6 +236,25 @@ mod tests {
         assert!(matches!(
             instance.add_profile(1, None, Some("probe".into())).await,
             Err(InstanceError::Mnemonic(MnemonicError::Unresolved(1)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn import_with_an_index_out_of_range_stores_no_phrase() {
+        let instance = instance();
+
+        let error = instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 1 << 31, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InstanceError::Profile(ProfileError::IndexOutOfRange(_))
+        ));
+        assert!(matches!(
+            instance.add_profile(0, None, None).await,
+            Err(InstanceError::Mnemonic(MnemonicError::Unresolved(0)))
         ));
     }
 
