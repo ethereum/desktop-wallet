@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_native_balance_is_the_address_balance() {
+    async fn a_native_balance_is_spendable() {
         let asserter = Asserter::new();
         asserter.push_success(&U256::from(7));
 

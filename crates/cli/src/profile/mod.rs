@@ -404,7 +404,7 @@ impl RevealPhraseArgs {
     }
 }
 
-/// Scans `profile`'s addresses, or warns on stderr that only address 0 will get a vault and
+/// Scans `profile`'s addresses, or warns on stderr that only address 0 gets an address vault and
 /// returns `None` when the scan fails.
 async fn scan(
     instance: &Instance,
@@ -417,7 +417,7 @@ async fn scan(
     };
     scan.map_err(|error| {
         eprintln!(
-            "The address scan failed, so only address 0 was added: {:#}",
+            "The address scan failed, so only address 0 gets an address vault: {:#}",
             anyhow::Error::from(error)
         );
     })

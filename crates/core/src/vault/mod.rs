@@ -33,7 +33,7 @@ pub enum Visibility {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Balance {
     pub spendable: U256,
-    /// Held but not yet spendable, such as a deposit awaiting inclusion or approval.
+    /// Held but not yet spendable.
     pub pending: U256,
 }
 

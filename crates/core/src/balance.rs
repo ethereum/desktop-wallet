@@ -7,7 +7,7 @@ use crate::{
     vault::{Balance, Vault, VaultError, VaultId, Visibility},
 };
 
-/// One vault's balance of each asset, in the order the assets were read.
+/// One vault's balance of each asset, in the order of the assets passed to [`read`].
 #[derive(Debug)]
 pub struct VaultBalances {
     pub tag: &'static str,
@@ -32,7 +32,8 @@ impl AssetTotals {
 
 /// Reads every vault's balance of every asset, all concurrently.
 ///
-/// A vault that fails keeps its error, and does not stop the others being read.
+/// A vault fails as a whole if any one of its assets fails to read. It keeps that error, and
+/// does not stop the others being read.
 pub async fn read(vaults: &[Box<dyn Vault>], assets: &[AssetId]) -> Vec<VaultBalances> {
     join_all(vaults.iter().map(|vault| async move {
         VaultBalances {
