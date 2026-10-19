@@ -16,11 +16,14 @@ edw network endpoint use <name|id> # switches to the specified network endpoint
 
 edw profile list # lists all configured profiles
 edw profile new # creates a new profile; on a new phrase, with an address vault for its first address, else like import
-edw profile import # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails)
-edw profile rescan [profile] # scans a profile's addresses again and adds an address vault for each one it is missing
+edw profile import # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails), and scans the chain's Tornado pools (stops after 20 consecutive unused nonces)
+edw profile rescan [profile] # scans a profile's addresses again and adds an address vault for each one it is missing, and scans the chain's Tornado pools the same way
 edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only
 
-edw balance [profile] [--verbose] # each asset's public, private and total holdings across a profile's vaults; --verbose adds each vault
+edw asset list [--profile SELECTOR] # the ERC-20s a profile tracks: the network's defaults, minus opt-outs, then its opt-ins
+edw asset opt-in <address> [--profile SELECTOR] # tracks an ERC-20, or restores a default the profile opted out of
+edw asset opt-out <address> [--profile SELECTOR] # stops tracking an ERC-20. A default is recorded as opted out; any other token is removed from its opt-ins. That hides its public balance and its Tornado notes
+edw balance [profile] [--verbose] # each asset's public, private and total holdings; the private total includes Tornado notes. --verbose lists each vault and each unspent Tornado note
 edw next-fresh-address [--peek] [--profile SELECTOR]
 edw shield [--amount-formatted <eth> | --amount-raw <wei>] [--from INDEX] [--profile SELECTOR]
 edw unshield [--amount-formatted <eth> | --amount-raw <wei>] [--to <address>] [--profile SELECTOR]
@@ -35,7 +38,7 @@ edw transfer --from <index|address|tornado> --to <address> --amount <eth> [--pro
 
 `next-fresh-address` prints the next standard address that this profile has not handed out and that has no nonce, code, or ETH, then stores it. `--peek` prints the same address and writes nothing. A declined command does not store a fresh address. `unshield` and `transfer --from tornado` store it once a bundler accepts the user operation, then wait for the receipt.
 
-Pool sync tries the Saga CDN (`https://saga.gordosoluciones.xyz`, or `EDW_SAGA_URL`) and finishes any remaining blocks with `eth_getLogs`. Mainnet uses the base URL. Sepolia uses `{base}/sepolia`. Other chains use the RPC only.
+Pool sync tries the Saga CDN (`https://saga.gordosoluciones.xyz`, or `EDW_SAGA_URL`) and finishes any remaining blocks with `eth_getLogs`. Mainnet uses the base URL. Sepolia uses `{base}/sepolia`. Other chains use the RPC only. Import, rescan, and balance read every Tornado pool on the chain. Besides the ETH pools, mainnet includes DAI (100, 1,000, 10,000, 100,000), USDC (100, 1,000), USDT (100, 1,000), and WBTC (0.1, 1, 10); Sepolia includes DAI 100. USDC, USDT, DAI, and WBTC are defaults on mainnet, and DAI is a default on Sepolia. Every address vault is read for them unless the profile opts out.
 
 ### Global Args
 

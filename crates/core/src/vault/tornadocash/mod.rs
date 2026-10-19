@@ -67,6 +67,18 @@ pub struct TornadoNote {
     pub spent: bool,
 }
 
+/// One unspent note, in the shape a balance readout can sum and print.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnspentNote {
+    pub asset: AssetId,
+    pub symbol: String,
+    pub decimals: u8,
+    pub token: Option<Address>,
+    pub amount_wei: U256,
+    pub pending: bool,
+    pub pool_id: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TornadoVaultError {
     #[error("database error: {0}")]
@@ -185,6 +197,22 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         Ok(())
     }
 
+    /// Recovers notes in every known pool on the vault's current chain.
+    ///
+    /// Nonces are shared across pools. Scanning stops after 20 consecutive nonces with no
+    /// deposit in any pool. Returns how many unspent notes were stored.
+    pub async fn recover_chain(&self) -> Result<usize, TornadoVaultError> {
+        let chain_id = self.provider.network_id().await?;
+        let pools: Vec<Pool> = Pool::POOLS
+            .iter()
+            .filter(|pool| pool.chain_id == chain_id)
+            .cloned()
+            .collect();
+        self.recover(&pools).await?;
+        let notes = self.pool_notes(&pools).await?;
+        Ok(notes.iter().filter(|note| !note.spent).count())
+    }
+
     /// Returns the calls that deposit one new note into `pool`.
     ///
     /// ERC-20 deposits are preceded by an approval for the pool's denomination. The pool is
@@ -278,13 +306,7 @@ impl<S: Signer + Send + Sync> Vault for TornadoVault<S> {
         self.sync(&pools).await?;
 
         let notes = self.pool_notes(&pools).await?;
-        Ok(Balance::spendable(
-            notes
-                .iter()
-                .filter(|note| note.leaf_index.is_some() && !note.spent)
-                .map(|note| U256::from(note.pool.amount_wei))
-                .sum(),
-        ))
+        Ok(note_balance(&notes))
     }
 }
 
@@ -474,5 +496,91 @@ fn is_eq(pool: &Pool, asset: &AssetId) -> bool {
             AssetId::Erc20(asset_address),
         ) => pool_address == asset_address,
         _ => false,
+    }
+}
+
+/// Mined unspent notes are spendable. Unmined unspent notes are pending. Spent notes add nothing.
+fn note_balance(notes: &[TornadoNote]) -> Balance {
+    let mut balance = Balance::default();
+    for note in notes.iter().filter(|note| !note.spent) {
+        let amount = U256::from(note.pool.amount_wei);
+        if note.leaf_index.is_some() {
+            balance.spendable = balance.spendable.saturating_add(amount);
+        } else {
+            balance.pending = balance.pending.saturating_add(amount);
+        }
+    }
+    balance
+}
+
+/// The unspent notes, mined and still waiting to be mined.
+#[must_use]
+pub fn unspent_holdings(notes: &[TornadoNote]) -> Vec<UnspentNote> {
+    notes
+        .iter()
+        .filter(|note| !note.spent)
+        .map(|note| {
+            let (asset, token) = match &note.pool.asset {
+                Asset::Native { .. } => (AssetId::Native, None),
+                Asset::Erc20 { address, .. } => (AssetId::Erc20(*address), Some(*address)),
+            };
+            UnspentNote {
+                asset,
+                symbol: note.pool.symbol().to_string(),
+                decimals: note.pool.asset.decimals(),
+                token,
+                amount_wei: U256::from(note.pool.amount_wei),
+                pending: note.leaf_index.is_none(),
+                pool_id: note.pool.id(),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use alloy_primitives::address;
+
+    use super::*;
+
+    fn note(pool: Pool, leaf_index: Option<u32>, spent: bool) -> TornadoNote {
+        TornadoNote {
+            pool,
+            nonce: 0,
+            leaf_index,
+            spent,
+        }
+    }
+
+    #[test]
+    fn unmined_unspent_notes_are_pending_and_spent_notes_are_ignored() {
+        let notes = [
+            note(Pool::ETHEREUM_ETHER_01, Some(1), false),
+            note(Pool::ETHEREUM_ETHER_1, None, false),
+            note(Pool::ETHEREUM_ETHER_10, Some(2), true),
+        ];
+        let balance = note_balance(&notes);
+        assert_eq!(
+            balance.spendable,
+            U256::from(Pool::ETHEREUM_ETHER_01.amount_wei)
+        );
+        assert_eq!(
+            balance.pending,
+            U256::from(Pool::ETHEREUM_ETHER_1.amount_wei)
+        );
+
+        let holdings = unspent_holdings(&notes);
+        assert_eq!(holdings.len(), 2);
+        assert_eq!(holdings[0].asset, AssetId::Native);
+        assert!(!holdings[0].pending);
+        assert_eq!(holdings[0].pool_id, Pool::ETHEREUM_ETHER_01.id());
+        assert!(holdings[1].pending);
+
+        let dai_address = address!("0x6B175474E89094C44Da98b954EedeAC495271d0F");
+        let dai = unspent_holdings(&[note(Pool::ETHEREUM_DAI_100, Some(0), false)]);
+        assert_eq!(dai[0].asset, AssetId::Erc20(dai_address));
+        assert_eq!(dai[0].symbol, "dai");
+        assert_eq!(dai[0].token, Some(dai_address));
     }
 }

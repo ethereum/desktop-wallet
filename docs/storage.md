@@ -15,7 +15,8 @@ keyring          / mnemonics          # indices of the stored recovery phrases
                  / mnemonic:{m}       # one recovery phrase
 profiles         / index              # Vec<ProfileRecord { m, x, name }>
 profile:{m}:{x}  / pointer            # (m, x)
-                 / optedIn            # Vec<Address>, the ERC-20s the profile opted into
+                 / optedIn            # Vec<Address>, extra ERC-20s the profile tracks
+                 / optedOut           # Vec<Address>, default ERC-20s the profile does not track
                  / vaults             # Vec<VaultRecord { tag, id }>, in the order added
   vault:{id}     / ...                # one vault's own records, inside its profile's scope
                  / address            # DerivedAddress { address, i }, for an `address` vault

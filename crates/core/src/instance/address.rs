@@ -76,8 +76,4 @@ impl Instance {
         let profile_db: Arc<dyn Database> = Arc::new(self.profile_db(profile));
         Arc::new(ScopedDatabase::new(profile_db, b"tornado"))
     }
-
-    fn profile_db(&self, profile: &ProfileRecord) -> ScopedDatabase {
-        ScopedDatabase::new(self.store.clone(), profile.scope().as_bytes())
-    }
 }

@@ -31,6 +31,20 @@ pub trait AssetDb: Database {
             .await?;
         Ok(())
     }
+
+    /// Default ERC-20s a profile has chosen not to track. Kept in the profile's scope.
+    async fn get_opted_out(&self) -> Result<Vec<Address>, AssetDatabaseError> {
+        let Some(bytes) = self.get(b"optedOut").await? else {
+            return Ok(vec![]);
+        };
+        Ok(postcard::from_bytes(&bytes)?)
+    }
+
+    async fn put_opted_out(&self, addresses: &[Address]) -> Result<(), AssetDatabaseError> {
+        self.put(b"optedOut", &postcard::to_stdvec(addresses)?)
+            .await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

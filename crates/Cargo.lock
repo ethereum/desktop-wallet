@@ -3917,7 +3917,7 @@ dependencies = [
 [[package]]
 name = "kohaku-fork-kit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+source = "git+https://github.com/ethereum/kohaku-rs.git#5afbe7560c195c1ac3e54a4f7dcc56660f4c6198"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3989,7 +3989,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-keychain"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+source = "git+https://github.com/ethereum/kohaku-rs.git#5afbe7560c195c1ac3e54a4f7dcc56660f4c6198"
 dependencies = [
  "alloy",
  "cfg_aliases",

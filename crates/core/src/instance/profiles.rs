@@ -21,13 +21,43 @@ impl Instance {
         Ok(self.profile_index().find(selector).await?)
     }
 
-    /// The ERC-20s `profile` reads: the network's defaults, then its opt-ins.
+    /// The ERC-20s `profile` reads: the network's defaults, minus opt-outs, then its opt-ins.
     pub async fn profile_erc20s(
         &self,
         profile: &ProfileRecord,
     ) -> Result<Vec<Erc20Asset>, InstanceError> {
         let wallet = ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE);
         Ok(asset::profile_erc20s(&wallet, &self.profile_db(profile), self.network.id).await?)
+    }
+
+    /// Opts `profile` into the ERC-20 at `address`, clearing an opt-out when `address` is a default.
+    pub async fn opt_in_erc20(
+        &self,
+        profile: &ProfileRecord,
+        endpoint: &dyn NetworkEndpoint,
+        address: Address,
+    ) -> Result<Erc20Asset, InstanceError> {
+        let wallet = ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE);
+        Ok(asset::opt_in(
+            &wallet,
+            &self.profile_db(profile),
+            endpoint,
+            self.network.id,
+            address,
+        )
+        .await?)
+    }
+
+    /// Stops `profile` tracking the ERC-20 at `address`.
+    ///
+    /// A default is recorded in `optedOut`. Any other tracked token is removed from `optedIn`.
+    pub async fn opt_out_erc20(
+        &self,
+        profile: &ProfileRecord,
+        address: Address,
+    ) -> Result<Erc20Asset, InstanceError> {
+        let wallet = ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE);
+        Ok(asset::opt_out(&wallet, &self.profile_db(profile), self.network.id, address).await?)
     }
 
     /// The recovery phrase `profile` derives from.

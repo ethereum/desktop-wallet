@@ -49,7 +49,7 @@ Example:
 
 ## Asset
 
-Assets are configured wallet-wide and opted-in to on a per **profile** basis.
+Assets are configured wallet-wide. A profile tracks the network's defaults, can opt out of them, and can opt into more.
 Prefer 'asset' over 'token' or 'currency'.
 
 ### Metadata

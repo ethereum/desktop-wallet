@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 use crate::global_args::GlobalArgs;
 
+mod asset;
 mod balance;
 mod config;
 mod database;
@@ -43,6 +44,9 @@ enum Command {
     /// Configures the unlocked network instance.
     #[command(subcommand)]
     Network(network::Command),
+    /// Lists and opts a profile into or out of ERC-20s.
+    #[command(subcommand)]
+    Asset(asset::Command),
     /// Shows a profile's balance of each asset across its vaults.
     Balance(balance::BalanceArgs),
     /// Unlocks one network (default mainnet); any other network is locked.
@@ -66,6 +70,7 @@ impl Cli {
             Command::Profile(args) => args.run(&self.global).await,
             Command::Database(args) => args.run(&self.global).await,
             Command::Network(args) => args.run(&self.global).await,
+            Command::Asset(args) => args.run(&self.global).await,
             Command::Balance(args) => args.run(&self.global).await,
             Command::Unlock(args) => args.run(&self.global).await,
             Command::Lock => unlock::run_lock(&self.global).await,

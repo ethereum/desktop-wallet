@@ -132,6 +132,21 @@ impl Bundler for BundlerList {
         Err(failed(&failures))
     }
 
+    async fn receipt(
+        &self,
+        hash: UserOperationHash,
+    ) -> Result<Option<UserOperationReceipt>, BundlerError> {
+        let Some(index) = self.accepted_index()? else {
+            return Ok(None);
+        };
+        let Some(endpoint) = self.endpoints.get(index) else {
+            return Err(BundlerError::Other(
+                "accepted bundler is no longer in the list".into(),
+            ));
+        };
+        endpoint.bundler.receipt(hash).await
+    }
+
     async fn wait_for_receipt(
         &self,
         hash: UserOperationHash,
@@ -256,6 +271,14 @@ mod tests {
                 Some(message) => Err(BundlerError::Other(message.into())),
                 None => Ok(UserOperationHash(B256::ZERO)),
             }
+        }
+
+        async fn receipt(
+            &self,
+            _hash: UserOperationHash,
+        ) -> Result<Option<UserOperationReceipt>, BundlerError> {
+            self.push("receipt");
+            Ok(None)
         }
 
         async fn wait_for_receipt(
