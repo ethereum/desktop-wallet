@@ -22,6 +22,8 @@ pub enum Command {
     New(NewArgs),
     /// Create a profile from an existing recovery phrase.
     Import(ImportArgs),
+    /// Scan a profile's addresses again and add an address vault for each one it is missing.
+    Rescan(RescanArgs),
     /// Set or clear a profile's optional name.
     Rename(RenameArgs),
     /// Show the recovery phrase behind a profile. Runs only at a terminal.
@@ -72,6 +74,12 @@ pub struct RenameArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct RescanArgs {
+    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
+    selector: Option<String>,
+}
+
+#[derive(Args, Debug)]
 pub struct RevealPhraseArgs {
     /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
     selector: Option<String>,
@@ -108,6 +116,12 @@ struct ImportReport {
     profile: ProfileSummary,
     addresses: Vec<ScannedAddress>,
     next_unused: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct RescanReport {
+    profile: ProfileSummary,
+    added: Vec<ScannedAddress>,
 }
 
 #[derive(Serialize)]
@@ -188,6 +202,26 @@ impl fmt::Display for ImportReport {
     }
 }
 
+impl Report for RescanReport {
+    const KIND: &'static str = "edw/profile-rescan";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for RescanReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Rescanned profile {}.", self.profile)?;
+        if self.added.is_empty() {
+            return write!(f, "\nno new addresses");
+        }
+        let addresses: Vec<String> = self
+            .added
+            .iter()
+            .map(|added| format!("{}: {}", added.index, added.address))
+            .collect();
+        write!(f, "\nadded addresses {}", addresses.join(" "))
+    }
+}
+
 impl Report for RenameReport {
     const KIND: &'static str = "edw/profile-rename";
     const VERSION: u32 = 1;
@@ -205,6 +239,7 @@ impl Command {
             Self::List(args) => args.run(global).await,
             Self::New(args) => args.run(global).await,
             Self::Import(args) => args.run(global).await,
+            Self::Rescan(args) => args.run(global).await,
             Self::Rename(args) => args.run(global).await,
             Self::RevealPhrase(args) => args.run(global).await,
         }
@@ -330,6 +365,34 @@ impl ImportArgs {
             );
         }
         Ok(phrase)
+    }
+}
+
+impl RescanArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let instance = global.open().await?;
+        let profile = if let Some(selector) = &self.selector {
+            instance.profile(selector).await?
+        } else {
+            let mut profiles = instance.profiles().await?;
+            profiles.sort_by_key(ProfileRecord::key);
+            choose_profile(&profiles, global.input())?
+        };
+
+        let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+        let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
+        let added = instance.add_missing_address_vaults(&profile, &scan).await?;
+        RescanReport {
+            profile: ProfileSummary::from(&profile),
+            added: added
+                .iter()
+                .map(|(index, address)| ScannedAddress {
+                    index: *index,
+                    address: address.to_string(),
+                })
+                .collect(),
+        }
+        .emit(global.mode())
     }
 }
 

@@ -70,6 +70,19 @@ impl Instance {
         self.add_address_vaults(profile, &addresses).await
     }
 
+    /// Like [`Self::add_scanned_address_vaults`], but skips each index `profile` already has an
+    /// address vault for. Returns the addresses it added.
+    pub async fn add_missing_address_vaults(
+        &self,
+        profile: &ProfileRecord,
+        scan: &EoaScan,
+    ) -> Result<Vec<(u32, Address)>, InstanceError> {
+        let addresses = self.addresses_to_add(profile, Some(scan)).await?;
+        let missing = self.not_yet_stored(profile, addresses).await?;
+        self.add_address_vaults(profile, &missing).await?;
+        Ok(missing)
+    }
+
     /// Builds each of `records` against `endpoint`, concurrently and in order. A vault that fails
     /// to build keeps its error, and does not stop the others.
     ///
@@ -101,6 +114,27 @@ impl Instance {
             self.add_vault(profile, record).await?;
         }
         Ok(())
+    }
+
+    async fn not_yet_stored(
+        &self,
+        profile: &ProfileRecord,
+        addresses: Vec<(u32, Address)>,
+    ) -> Result<Vec<(u32, Address)>, InstanceError> {
+        let mut stored = Vec::new();
+        for record in self.vault_records(profile).await? {
+            if record.tag == ADDRESS_VAULT_TAG {
+                let derived = self
+                    .vault_db(profile, &record)
+                    .get_derived_address()
+                    .await?;
+                stored.push(derived.index);
+            }
+        }
+        Ok(addresses
+            .into_iter()
+            .filter(|(index, _)| !stored.contains(index))
+            .collect())
     }
 
     async fn addresses_to_add(
@@ -338,6 +372,42 @@ mod tests {
             .unwrap();
 
         assert_eq!(derived_addresses(&instance, &profile).await, used);
+    }
+
+    #[tokio::test]
+    async fn an_index_already_stored_is_not_added_again() {
+        let instance = instance();
+        let address = Address::repeat_byte;
+        let (record, db) = instance.new_vault(&profile(0), ADDRESS_VAULT_TAG);
+        db.put_derived_address(&DerivedAddress {
+            address: address(0xa0),
+            index: 0,
+        })
+        .await
+        .unwrap();
+        instance.add_vault(&profile(0), record).await.unwrap();
+
+        let missing = instance
+            .not_yet_stored(&profile(0), vec![(0, address(0xa0)), (1, address(0xa1))])
+            .await
+            .unwrap();
+
+        assert_eq!(missing, [(1, address(0xa1))]);
+    }
+
+    #[tokio::test]
+    async fn vaults_of_other_kinds_are_not_read_as_addresses() {
+        let instance = instance();
+        let other = new_stored(&instance, &profile(0), 1).await;
+        instance.add_vault(&profile(0), other).await.unwrap();
+        let addresses = vec![(0, Address::repeat_byte(0xa0))];
+
+        let missing = instance
+            .not_yet_stored(&profile(0), addresses.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(missing, addresses);
     }
 
     #[tokio::test]
