@@ -15,9 +15,12 @@ edw network endpoint list # lists all configured network endpoints
 edw network endpoint use <name|id> # switches to the specified network endpoint
 
 edw profile list # lists all configured profiles
-edw profile new # creates a new profile
-edw profile import # imports a profile from a mnemonic
+edw profile new # creates a new profile; on a new phrase, with an address vault for its first address, else like import
+edw profile import # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails)
+edw profile rescan [profile] # scans a profile's addresses again and adds an address vault for each one it is missing
 edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only
+
+edw balance [profile] [--verbose] # each asset's public, private and total holdings across a profile's vaults; --verbose adds each vault
 ```
 
 ### Global Args

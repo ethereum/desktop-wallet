@@ -6,6 +6,7 @@ use std::{
 pub use data_dir::DataDir;
 
 use crate::{
+    asset::AssetError,
     database::{
         Database,
         encrypted::{EncryptedDatabase, EncryptedDatabaseError},
@@ -18,12 +19,14 @@ use crate::{
         db::{NetworkDatabaseError, NetworkDb},
         endpoint::NetworkEndpointError,
     },
-    profile::ProfileError,
+    profile::{ProfileError, ProfileRecord},
+    vault::{address::db::AddressVaultDatabaseError, db::VaultDatabaseError},
 };
 
 mod data_dir;
 mod networks;
 mod profiles;
+mod vaults;
 
 /// Scope holding the [`Network`] record and its endpoint configs.
 const NETWORK_SCOPE: &[u8] = b"network";
@@ -36,6 +39,10 @@ pub struct Instance {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstanceError {
+    #[error(transparent)]
+    AddressVaultDatabase(#[from] AddressVaultDatabaseError),
+    #[error(transparent)]
+    Asset(#[from] AssetError),
     #[error("no wallet instance for {network_id} at {}", dir.display())]
     NotFound { network_id: NetworkId, dir: PathBuf },
     #[error("error opening the store at {}", dir.display())]
@@ -75,6 +82,8 @@ pub enum InstanceError {
     NetworkDatabase(#[from] NetworkDatabaseError),
     #[error(transparent)]
     Profile(#[from] ProfileError),
+    #[error(transparent)]
+    VaultDatabase(#[from] VaultDatabaseError),
 }
 
 impl Instance {
@@ -129,6 +138,10 @@ impl Instance {
             network: Network::new(network_id),
             store: Arc::new(crate::database::memory::MemoryDatabase::new()),
         }
+    }
+
+    fn profile_db(&self, profile: &ProfileRecord) -> ScopedDatabase {
+        ScopedDatabase::new(self.store.clone(), profile.scope().as_bytes())
     }
 
     async fn store(

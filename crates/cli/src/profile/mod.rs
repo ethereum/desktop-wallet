@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use clap::{ArgGroup, Args, Subcommand};
-use edw_core::{instance::Instance, profile::ProfileRecord};
+use edw_core::{instance::Instance, mnemonic::scan::EoaScan, profile::ProfileRecord};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
@@ -22,6 +22,8 @@ pub enum Command {
     New(NewArgs),
     /// Create a profile from an existing recovery phrase.
     Import(ImportArgs),
+    /// Scan a profile's addresses again and add an address vault for each one it is missing.
+    Rescan(RescanArgs),
     /// Set or clear a profile's optional name.
     Rename(RenameArgs),
     /// Show the recovery phrase behind a profile. Runs only at a terminal.
@@ -72,13 +74,19 @@ pub struct RenameArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct RescanArgs {
+    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
+    selector: Option<String>,
+}
+
+#[derive(Args, Debug)]
 pub struct RevealPhraseArgs {
     /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
     selector: Option<String>,
 }
 
 #[derive(Serialize)]
-struct ProfileSummary {
+pub struct ProfileSummary {
     mnemonic_index: u32,
     profile_index: u32,
     name: Option<String>,
@@ -108,6 +116,12 @@ struct ImportReport {
     profile: ProfileSummary,
     addresses: Vec<ScannedAddress>,
     next_unused: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct RescanReport {
+    profile: ProfileSummary,
+    added: Vec<ScannedAddress>,
 }
 
 #[derive(Serialize)]
@@ -188,6 +202,26 @@ impl fmt::Display for ImportReport {
     }
 }
 
+impl Report for RescanReport {
+    const KIND: &'static str = "edw/profile-rescan";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for RescanReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Rescanned profile {}.", self.profile)?;
+        if self.added.is_empty() {
+            return write!(f, "\nno new addresses");
+        }
+        let addresses: Vec<String> = self
+            .added
+            .iter()
+            .map(|added| format!("{}: {}", added.index, added.address))
+            .collect();
+        write!(f, "\nadded addresses {}", addresses.join(" "))
+    }
+}
+
 impl Report for RenameReport {
     const KIND: &'static str = "edw/profile-rename";
     const VERSION: u32 = 1;
@@ -205,6 +239,7 @@ impl Command {
             Self::List(args) => args.run(global).await,
             Self::New(args) => args.run(global).await,
             Self::Import(args) => args.run(global).await,
+            Self::Rescan(args) => args.run(global).await,
             Self::Rename(args) => args.run(global).await,
             Self::RevealPhrase(args) => args.run(global).await,
         }
@@ -258,6 +293,15 @@ impl NewArgs {
             }
             profile
         };
+        // A new phrase has never been used, but another wallet may have used a stored one.
+        let scan = if shared.is_some() {
+            scan(&instance, &profile, global).await
+        } else {
+            None
+        };
+        instance
+            .add_scanned_address_vaults(&profile, scan.as_ref())
+            .await?;
         NewReport {
             profile: ProfileSummary::from(&profile),
             new_phrase: shared.is_none(),
@@ -274,12 +318,12 @@ impl ImportArgs {
         let name = prompt_profile_name(self.name.clone(), input)?;
         let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
 
-        let scan = match instance.endpoint(global.rpc_url.as_deref()).await {
-            Ok(endpoint) => instance.scan_profile(&profile, endpoint.as_ref()).await,
-            Err(error) => Err(error),
-        };
+        let scan = scan(&instance, &profile, global).await;
+        instance
+            .add_scanned_address_vaults(&profile, scan.as_ref())
+            .await?;
         let (addresses, next_unused) = match scan {
-            Ok(scan) => (
+            Some(scan) => (
                 scan.addresses
                     .iter()
                     .map(|(index, address)| ScannedAddress {
@@ -289,10 +333,7 @@ impl ImportArgs {
                     .collect(),
                 Some(scan.next_unused),
             ),
-            Err(error) => {
-                eprintln!("The address scan failed: {:#}", anyhow::Error::from(error));
-                (Vec::new(), None)
-            }
+            None => (Vec::new(), None),
         };
         ImportReport {
             profile: ProfileSummary::from(&profile),
@@ -324,6 +365,34 @@ impl ImportArgs {
             );
         }
         Ok(phrase)
+    }
+}
+
+impl RescanArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let instance = global.open().await?;
+        let profile = if let Some(selector) = &self.selector {
+            instance.profile(selector).await?
+        } else {
+            let mut profiles = instance.profiles().await?;
+            profiles.sort_by_key(ProfileRecord::key);
+            choose_profile(&profiles, global.input())?
+        };
+
+        let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+        let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
+        let added = instance.add_missing_address_vaults(&profile, &scan).await?;
+        RescanReport {
+            profile: ProfileSummary::from(&profile),
+            added: added
+                .iter()
+                .map(|(index, address)| ScannedAddress {
+                    index: *index,
+                    address: address.to_string(),
+                })
+                .collect(),
+        }
+        .emit(global.mode())
     }
 }
 
@@ -398,6 +467,26 @@ impl RevealPhraseArgs {
     }
 }
 
+/// Scans `profile`'s addresses, or warns on stderr that only address 0 gets an address vault and
+/// returns `None` when the scan fails.
+async fn scan(
+    instance: &Instance,
+    profile: &ProfileRecord,
+    global: &GlobalArgs,
+) -> Option<EoaScan> {
+    let scan = match instance.endpoint(global.rpc_url.as_deref()).await {
+        Ok(endpoint) => instance.scan_profile(profile, endpoint.as_ref()).await,
+        Err(error) => Err(error),
+    };
+    scan.map_err(|error| {
+        eprintln!(
+            "The address scan failed, so only address 0 gets an address vault: {:#}",
+            anyhow::Error::from(error)
+        );
+    })
+    .ok()
+}
+
 /// `explicit` when given, else a name typed at an interactive terminal. Validation is the
 /// instance's.
 fn prompt_profile_name(
@@ -444,7 +533,7 @@ fn choose_phrase(profiles: &[ProfileRecord], input: Input) -> Result<Option<u32>
     Ok(choice.checked_sub(1).map(|index| phrases[index].0))
 }
 
-fn choose_profile(
+pub fn choose_profile(
     profiles: &[ProfileRecord],
     input: Input,
 ) -> Result<ProfileRecord, anyhow::Error> {
@@ -457,7 +546,7 @@ fn choose_profile(
             let labels: Vec<String> = several.iter().map(ProfileRecord::display_name).collect();
             let choice = input
                 .choose("Select a profile:", &labels)?
-                .context("name the profile to reveal")?;
+                .context("name the profile as `mnemonic/profile` or by name")?;
             Ok(several[choice].clone())
         }
     }

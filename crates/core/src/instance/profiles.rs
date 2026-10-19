@@ -1,7 +1,10 @@
+use alloy_primitives::Address;
 use zeroize::Zeroizing;
 
-use super::{Instance, InstanceError};
+use super::{Instance, InstanceError, NETWORK_SCOPE};
 use crate::{
+    asset::{self, Erc20Asset},
+    database::scoped::ScopedDatabase,
     keyring::Keyring,
     mnemonic::{Mnemonic, MnemonicRecord, scan::EoaScan},
     network::NetworkEndpoint,
@@ -16,6 +19,15 @@ impl Instance {
     /// The profile `selector` names, as `mnemonic/profile` or a unique name.
     pub async fn profile(&self, selector: &str) -> Result<ProfileRecord, InstanceError> {
         Ok(self.profile_index().find(selector).await?)
+    }
+
+    /// The ERC-20s `profile` reads: the network's defaults, then its opt-ins.
+    pub async fn profile_erc20s(
+        &self,
+        profile: &ProfileRecord,
+    ) -> Result<Vec<Erc20Asset>, InstanceError> {
+        let wallet = ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE);
+        Ok(asset::profile_erc20s(&wallet, &self.profile_db(profile), self.network.id).await?)
     }
 
     /// The recovery phrase `profile` derives from.
@@ -41,7 +53,8 @@ impl Instance {
 
     /// Stores `phrase` and creates exactly one profile on it, at `profile_index`.
     ///
-    /// Checks the profile name first, so a taken name stores no phrase.
+    /// Checks the profile name and index first, so a profile that cannot be created stores no
+    /// phrase.
     pub async fn import_profile(
         &self,
         phrase: Zeroizing<String>,
@@ -51,7 +64,7 @@ impl Instance {
         let keyring = self.keyring();
         let profiles = self.profile_index();
         let candidate = ProfileRecord::new(keyring.next_index().await?, profile_index, name);
-        profiles.check_name_free(&candidate).await?;
+        profiles.check_can_create(&candidate).await?;
 
         let mnemonic = keyring.add_mnemonic(phrase).await?;
         let profile = profiles
@@ -102,14 +115,31 @@ impl Instance {
         profile: &ProfileRecord,
         endpoint: &dyn NetworkEndpoint,
     ) -> Result<EoaScan, InstanceError> {
-        let mnemonic = self
+        Ok(self
+            .mnemonic(profile)
+            .await?
+            .scan_standard_eoas(profile.profile_index, endpoint)
+            .await?)
+    }
+
+    /// `profile`'s standard address at `m/44'/60'/x'/0/index`.
+    pub(super) async fn standard_address(
+        &self,
+        profile: &ProfileRecord,
+        index: u32,
+    ) -> Result<Address, InstanceError> {
+        Ok(self
+            .mnemonic(profile)
+            .await?
+            .standard_address(index, profile.profile_index)?)
+    }
+
+    async fn mnemonic(&self, profile: &ProfileRecord) -> Result<Mnemonic, InstanceError> {
+        Ok(self
             .keyring()
             .mnemonic(profile.mnemonic_index)
             .await?
-            .mnemonic()?;
-        Ok(mnemonic
-            .scan_standard_eoas(profile.profile_index, endpoint)
-            .await?)
+            .mnemonic()?)
     }
 
     fn keyring(&self) -> Keyring {
@@ -210,6 +240,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn import_with_an_index_out_of_range_stores_no_phrase() {
+        let instance = instance();
+
+        let error = instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 1 << 31, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InstanceError::Profile(ProfileError::IndexOutOfRange(_))
+        ));
+        assert!(matches!(
+            instance.add_profile(0, None, None).await,
+            Err(InstanceError::Mnemonic(MnemonicError::Unresolved(0)))
+        ));
+    }
+
+    #[tokio::test]
     async fn recovery_phrase_is_the_profiles_own() {
         let instance = instance();
         instance
@@ -228,6 +277,31 @@ mod tests {
         let phrase = instance.recovery_phrase(&second).await.unwrap();
 
         assert_eq!(phrase.as_str(), SECOND_FIXTURE);
+    }
+
+    #[tokio::test]
+    async fn standard_address_derives_from_the_profiles_phrase_and_index() {
+        let instance = instance();
+        instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap();
+        let (_, second) = instance
+            .import_profile(
+                Zeroizing::new(SECOND_FIXTURE.to_string()),
+                1,
+                Some("work".into()),
+            )
+            .await
+            .unwrap();
+
+        let address = instance.standard_address(&second, 2).await.unwrap();
+
+        // `m/44'/60'/1'/0/2` of `SECOND_FIXTURE`.
+        assert_eq!(
+            address,
+            alloy_primitives::address!("0x8D518dd6ebD188c590345C9409F00e47069F3E13")
+        );
     }
 
     #[tokio::test]

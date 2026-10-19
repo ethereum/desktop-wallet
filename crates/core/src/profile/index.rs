@@ -3,6 +3,9 @@ use std::sync::Arc;
 use super::db::{ProfileDatabaseError, ProfileDb, ProfileRecord};
 use crate::database::{Database, scoped::ScopedDatabase};
 
+/// A profile index is a hardened BIP-32 child number, which must be below 2^31.
+const MAX_PROFILE_INDEX: u32 = (1 << 31) - 1;
+
 /// The instance's profiles: the index of records, plus a scope of its own per profile.
 pub struct ProfileIndex {
     store: Arc<dyn Database>,
@@ -21,6 +24,8 @@ pub enum ProfileError {
     },
     #[error("profile name `{0}` is already used")]
     DuplicateName(String),
+    #[error("profile index {0} is above the largest, {MAX_PROFILE_INDEX}")]
+    IndexOutOfRange(u32),
     #[error("no profile matches `{0}`")]
     Unresolved(String),
 }
@@ -105,6 +110,7 @@ impl ProfileIndex {
         }
 
         let record = ProfileRecord::new(mnemonic_index, profile_index, name);
+        check_index(&record)?;
         record.check_unique_name(&profiles)?;
         ScopedDatabase::new(self.store.clone(), record.scope().as_bytes())
             .put_pointer(mnemonic_index, profile_index)
@@ -115,7 +121,8 @@ impl ProfileIndex {
     }
 
     /// Fails like [`Self::create`] would for `candidate`, without writing anything.
-    pub async fn check_name_free(&self, candidate: &ProfileRecord) -> Result<(), ProfileError> {
+    pub async fn check_can_create(&self, candidate: &ProfileRecord) -> Result<(), ProfileError> {
+        check_index(candidate)?;
         candidate.check_unique_name(&self.list().await?)
     }
 
@@ -155,6 +162,13 @@ impl ProfileIndex {
     }
 }
 
+fn check_index(record: &ProfileRecord) -> Result<(), ProfileError> {
+    if record.profile_index > MAX_PROFILE_INDEX {
+        return Err(ProfileError::IndexOutOfRange(record.profile_index));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +176,23 @@ mod tests {
 
     fn index() -> ProfileIndex {
         ProfileIndex::new(Arc::new(MemoryDatabase::new()))
+    }
+
+    #[tokio::test]
+    async fn create_accepts_indices_only_below_2_pow_31() {
+        let profiles = index();
+        profiles
+            .create(0, Some(MAX_PROFILE_INDEX), None)
+            .await
+            .unwrap();
+
+        let error = profiles
+            .create(0, Some(MAX_PROFILE_INDEX + 1), Some("work".into()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, ProfileError::IndexOutOfRange(index) if index == MAX_PROFILE_INDEX + 1)
+        );
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 use crate::global_args::GlobalArgs;
 
+mod balance;
 mod config;
 mod database;
 mod global_args;
@@ -37,6 +38,8 @@ enum Command {
     /// Configures the unlocked network instance.
     #[command(subcommand)]
     Network(network::Command),
+    /// Shows a profile's balance of each asset across its vaults.
+    Balance(balance::BalanceArgs),
     /// Unlocks one network (default mainnet); any other network is locked.
     Unlock(unlock::UnlockArgs),
     /// Locks the wallet.
@@ -50,6 +53,7 @@ impl Cli {
             Command::Profile(args) => args.run(&self.global).await,
             Command::Database(args) => args.run(&self.global).await,
             Command::Network(args) => args.run(&self.global).await,
+            Command::Balance(args) => args.run(&self.global).await,
             Command::Unlock(args) => args.run(&self.global).await,
             Command::Lock => unlock::run_lock(&self.global).await,
         }
