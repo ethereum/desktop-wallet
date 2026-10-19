@@ -1,18 +1,20 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, U256};
+use alloy_signer_local::PrivateKeySigner;
 use anyhow::Context;
 use edw_core::{
-    broadcast::{submit_batch, submit_call},
+    broadcast::submit_call,
+    bundler::{BundlerList, bundler_urls},
     call::Call,
     instance::Instance,
     mnemonic::Mnemonic,
     network::NetworkEndpoint,
     profile::ProfileRecord,
     signer::{Signer, simple::SimpleSigner},
-    vault::{
-        VaultId,
-        tornadocash::{TornadoNote, TornadoVault, format_eth, parse_eth, parse_wei},
+    vault::tornadocash::{
+        PaymasterWithdrawal, PaymasterWithdrawalRequest, TornadoNote, TornadoVault, format_eth,
+        parse_eth, parse_wei, submit_paymaster_withdrawal,
     },
 };
 use zeroize::Zeroizing;
@@ -23,6 +25,17 @@ pub struct Account {
     pub index: u32,
     pub address: Address,
     pub signer: Arc<dyn Signer>,
+}
+
+pub struct ShieldedWithdrawal<'a> {
+    pub phrase: &'a Mnemonic,
+    pub profile_index: u32,
+    pub endpoint: &'a dyn NetworkEndpoint,
+    pub vault: &'a TornadoVault<PrivateKeySigner>,
+    pub fresh_index: u32,
+    pub notes: &'a [TornadoNote],
+    pub forward_to: Option<Address>,
+    pub minimum_forward: Option<U256>,
 }
 
 pub async fn choose_profile(
@@ -156,56 +169,53 @@ pub async fn send_one(
     Ok(submit_call(endpoint, signer, call).await?.to_string())
 }
 
-pub async fn send_batch(
-    endpoint: &dyn NetworkEndpoint,
-    context: Arc<dyn Signer>,
-    payer: Arc<dyn Signer>,
-    calls: &[Call],
-) -> Result<String, anyhow::Error> {
-    Ok(submit_batch(endpoint, context, payer, calls)
-        .await?
-        .to_string())
-}
-
 pub fn note_eth(note: &TornadoNote) -> String {
     format_eth(U256::from(note.pool.amount_wei))
 }
 
-pub async fn require_gas(
-    endpoint: &dyn NetworkEndpoint,
-    payer: Address,
-) -> Result<(), anyhow::Error> {
-    let balance = endpoint.balance(payer).await?;
-    if balance.is_zero() {
-        anyhow::bail!("{payer} has no ETH for gas. Fund it, then run the command again.");
+pub fn ensure_paymaster(notes: &[TornadoNote]) -> Result<(), anyhow::Error> {
+    let sponsor = notes.first().context("no notes to withdraw")?;
+    if sponsor.pool.paymaster.is_none() {
+        anyhow::bail!(
+            "the {} ETH pool has no paymaster, so this withdrawal cannot be bundled",
+            note_eth(sponsor)
+        );
     }
     Ok(())
 }
 
-/// Withdrawals to `fresh`, then an optional forward of `forward` wei to `to`.
-pub async fn withdrawal_calls(
-    vault: &TornadoVault<alloy_signer_local::PrivateKeySigner>,
-    notes: &[TornadoNote],
-    fresh: Address,
-    forward: Option<(Address, U256)>,
-) -> Result<Vec<Call>, anyhow::Error> {
-    eprintln!(
-        "Proving {} note{}. This can take a while.",
-        notes.len(),
-        if notes.len() == 1 { "" } else { "s" }
+pub fn first_bundler(chain_id: u64) -> Result<String, anyhow::Error> {
+    let urls = bundler_urls(chain_id)?;
+    urls.first()
+        .map(ToString::to_string)
+        .context("no bundler configured")
+}
+
+/// Proves `notes` into one paymaster user operation and submits it. The caller stores the fresh
+/// address after this returns, then waits for the receipt.
+pub async fn submit_shielded(
+    withdrawal: ShieldedWithdrawal<'_>,
+) -> Result<PaymasterWithdrawal, anyhow::Error> {
+    let chain_id = withdrawal.endpoint.network_id().await?;
+    let provider = withdrawal
+        .endpoint
+        .provider()
+        .context("this endpoint cannot submit a user operation")?;
+    let owner = PrivateKeySigner::from_signing_key(
+        withdrawal
+            .phrase
+            .standard_address_key(withdrawal.fresh_index, withdrawal.profile_index)?,
     );
-    let mut calls = Vec::with_capacity(notes.len() + usize::from(forward.is_some()));
-    for (index, note) in notes.iter().enumerate() {
-        eprintln!(
-            "Proving {} ETH ({}/{})...",
-            note_eth(note),
-            index + 1,
-            notes.len()
-        );
-        calls.push(vault.withdraw(note, &VaultId::Address(fresh)).await?);
-    }
-    if let Some((to, amount)) = forward {
-        calls.push(Call::new(to, alloy_primitives::Bytes::new(), amount));
-    }
-    Ok(calls)
+    let bundlers = BundlerList::from_urls(chain_id, &bundler_urls(chain_id)?)?;
+    Ok(submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
+        vault: withdrawal.vault,
+        provider,
+        owner,
+        notes: withdrawal.notes,
+        forward_to: withdrawal.forward_to,
+        minimum_forward: withdrawal.minimum_forward,
+        chain_id,
+        bundlers,
+    })
+    .await?)
 }

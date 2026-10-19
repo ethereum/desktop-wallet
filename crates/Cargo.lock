@@ -2741,6 +2741,7 @@ dependencies = [
  "kohaku-fork-kit",
  "kohaku-tornadocash",
  "kohaku-tornadocash-keychain",
+ "kohaku-userop-kit",
  "postcard",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3921,7 +3922,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "kohaku-tornadocash",
- "kohaku-userop-kit 0.1.0 (git+https://github.com/ethereum/kohaku-rs.git)",
+ "kohaku-userop-kit",
  "tokio",
  "tracing",
 ]
@@ -3958,7 +3959,7 @@ dependencies = [
  "kohaku-merkle-tree",
  "kohaku-rpc-provider",
  "kohaku-tornadocash-circuit",
- "kohaku-userop-kit 0.1.0",
+ "kohaku-userop-kit",
  "num-bigint 0.5.1",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3999,26 +4000,6 @@ dependencies = [
 [[package]]
 name = "kohaku-userop-kit"
 version = "0.1.0"
-dependencies = [
- "alloy",
- "alloy-sol-types",
- "anyhow",
- "async-trait",
- "cfg_aliases",
- "futures",
- "getrandom 0.2.17",
- "reqwest 0.13.5",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "kohaku-userop-kit"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
 dependencies = [
  "alloy",
  "alloy-sol-types",

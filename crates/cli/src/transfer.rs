@@ -12,8 +12,9 @@ use crate::{
     GlobalArgs,
     report::Report,
     spend::{
-        account_at, account_by_address, choose_profile, confirm, declined, eth_amount, mnemonic,
-        note_eth, open_vault, require_gas, send_batch, send_one, withdrawal_calls,
+        ShieldedWithdrawal, account_at, account_by_address, choose_profile, confirm, declined,
+        ensure_paymaster, eth_amount, first_bundler, mnemonic, note_eth, open_vault, send_one,
+        submit_shielded,
     },
     unshield::note_lines,
 };
@@ -39,12 +40,16 @@ struct TransferReport {
     fresh_index: Option<u32>,
     notes: Vec<crate::unshield::NoteLine>,
     change: Option<String>,
+    forwarded: Option<String>,
+    fee: Option<String>,
+    bundler: Option<String>,
+    user_operation: Option<String>,
     transaction: String,
 }
 
 impl Report for TransferReport {
     const KIND: &'static str = "edw/transfer";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for TransferReport {
@@ -60,6 +65,18 @@ impl fmt::Display for TransferReport {
         }
         if let Some(change) = &self.change {
             writeln!(f, "change {change} ETH")?;
+        }
+        if let Some(forwarded) = &self.forwarded {
+            writeln!(f, "forwarded {forwarded} ETH")?;
+        }
+        if let Some(fee) = &self.fee {
+            writeln!(f, "fee {fee} ETH")?;
+        }
+        if let Some(bundler) = &self.bundler {
+            writeln!(f, "bundler {bundler}")?;
+        }
+        if let Some(user_operation) = &self.user_operation {
+            writeln!(f, "user operation {user_operation}")?;
         }
         writeln!(f, "transaction {}", self.transaction)
     }
@@ -121,6 +138,10 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
         fresh_index: None,
         notes: Vec::new(),
         change: None,
+        forwarded: None,
+        fee: None,
+        bundler: None,
+        user_operation: None,
         transaction,
     }
     .emit(global.mode())
@@ -141,18 +162,15 @@ async fn tornado(
     eprintln!("Syncing Tornado pools...");
     let held = vault.notes().await?;
     let notes = cover_notes(amount, &held)?;
+    ensure_paymaster(&notes)?;
+    let chain_id = endpoint.network_id().await?;
     let fresh = instance
         .fresh_address(profile, phrase, endpoint.as_ref())
         .await?;
-    let context = account_at(phrase, profile.profile_index, fresh.index)?;
-    let payer = account_at(phrase, profile.profile_index, 0)?;
-    let withdrawn: U256 = notes
-        .iter()
-        .map(|note| U256::from(note.pool.amount_wei))
-        .sum();
-    let change = withdrawn.saturating_sub(amount);
+    let bundler = first_bundler(chain_id)?;
+    let sponsor = notes.first().map(note_eth).unwrap_or_default();
     let summary = format!(
-        "Transfer {} ETH from tornado to {to}.\nUnshields {} and runs as fresh address {} ({}).\nForwards {} ETH; {} ETH stays on the fresh address.\nGas is paid by address 0.",
+        "Transfer {} ETH from tornado to {to}.\nUnshields {}.\nSponsoring note {sponsor} ETH pays gas through the Tornado paymaster.\nRuns as fresh address {} ({}).\nBundler {bundler}.\nForwards the remainder after that fee to {to}. The remainder has to cover {} ETH.",
         format_eth(amount),
         notes
             .iter()
@@ -160,26 +178,38 @@ async fn tornado(
             .collect::<Vec<_>>()
             .join(" + "),
         fresh.index,
-        context.address,
-        format_eth(amount),
-        format_eth(change)
+        fresh.address,
+        format_eth(amount)
     );
     if !confirm(input, &summary)? {
         declined();
         return Ok(());
     }
-    require_gas(endpoint.as_ref(), payer.address).await?;
-    let calls = withdrawal_calls(&vault, &notes, context.address, Some((to, amount))).await?;
-    let transaction = send_batch(endpoint.as_ref(), context.signer, payer.signer, &calls).await?;
+    let submitted = submit_shielded(ShieldedWithdrawal {
+        phrase,
+        profile_index: profile.profile_index,
+        endpoint: endpoint.as_ref(),
+        vault: &vault,
+        fresh_index: fresh.index,
+        notes: &notes,
+        forward_to: Some(to),
+        minimum_forward: Some(amount),
+    })
+    .await?;
     instance.commit_fresh_address(profile, fresh.index).await?;
+    let transaction = submitted.wait().await?;
     TransferReport {
         from: "tornado".to_string(),
         to: to.to_string(),
         amount: format_eth(amount),
         fresh_index: Some(fresh.index),
         notes: note_lines(&notes),
-        change: Some(format_eth(change)),
-        transaction,
+        change: None,
+        forwarded: submitted.forwarded.map(format_eth),
+        fee: Some(format_eth(submitted.fee)),
+        bundler: submitted.bundler().or(Some(bundler)),
+        user_operation: Some(submitted.hash.0.to_string()),
+        transaction: transaction.to_string(),
     }
     .emit(global.mode())
 }

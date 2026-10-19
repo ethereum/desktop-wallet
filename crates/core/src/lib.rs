@@ -1,6 +1,7 @@
 pub mod asset;
 pub mod balance;
 pub mod broadcast;
+pub mod bundler;
 pub mod call;
 pub mod database;
 pub mod delegate;

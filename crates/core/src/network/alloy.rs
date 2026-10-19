@@ -69,6 +69,10 @@ impl NetworkEndpoint for SimpleNetworkEndpoint {
     ) -> Result<Option<TransactionReceipt>, NetworkEndpointError> {
         Ok(self.provider.get_transaction_receipt(tx).await?)
     }
+
+    fn provider(&self) -> Option<DynProvider> {
+        Some(self.provider.clone())
+    }
 }
 
 impl SimpleNetworkEndpoint {

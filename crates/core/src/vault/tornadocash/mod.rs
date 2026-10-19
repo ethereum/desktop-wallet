@@ -29,10 +29,14 @@ use crate::{
 pub use amount::{
     AmountError, cover_notes, deposit_pools, exact_notes, format_eth, parse_eth, parse_wei,
 };
+pub use userop::{
+    PaymasterWithdrawal, PaymasterWithdrawalRequest, UserOpError, submit_paymaster_withdrawal,
+};
 
 mod amount;
 mod db;
 mod syncer;
+mod userop;
 
 sol!(
     contract Erc20 {
@@ -223,6 +227,24 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         let VaultId::Address(recipient) = to else {
             return Err(TornadoVaultError::UnsupportedVaultId(to.clone()));
         };
+        let (withdrawal, proof) = self.withdrawal_inputs(note, *recipient).await?;
+        let proven = withdrawal.prove(&proof, &mut rand::rng())?;
+        Ok(Call::new(
+            proven.target(),
+            proven.input().into(),
+            U256::ZERO,
+        ))
+    }
+
+    /// The unproven withdrawal of `note` to `recipient`, and the merkle proof it commits to.
+    ///
+    /// Syncs the pool first, so the proof is against a root still in the pool's on-chain history.
+    /// The caller proves it, which is what a paymaster user operation does for its sponsoring note.
+    pub async fn withdrawal_inputs(
+        &self,
+        note: &TornadoNote,
+        recipient: Address,
+    ) -> Result<(Withdrawal, MerkleProof), TornadoVaultError> {
         if note.spent {
             return Err(TornadoVaultError::NoteSpent(note.nonce));
         }
@@ -230,18 +252,10 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
             return Err(TornadoVaultError::NoteNotMined(note.nonce));
         };
 
-        //? Proofs must be against a root still in the pool's on-chain root history.
         self.sync(std::slice::from_ref(&note.pool)).await?;
-
         let derived = self.derive_note(note.nonce, &note.pool).await?;
         let proof = self.merkle_proof(&note.pool, leaf_index).await?;
-        let proven =
-            Withdrawal::new(&note.pool, derived, *recipient).prove(&proof, &mut rand::rng())?;
-        Ok(Call::new(
-            proven.target(),
-            proven.input().into(),
-            U256::ZERO,
-        ))
+        Ok((Withdrawal::new(&note.pool, derived, recipient), proof))
     }
 }
 
