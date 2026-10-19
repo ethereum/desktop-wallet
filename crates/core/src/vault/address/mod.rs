@@ -86,10 +86,13 @@ impl From<AddressVaultError> for VaultError {
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::{Bytes, address};
     use alloy_transport::mock::Asserter;
 
     use super::*;
     use crate::test_support::mocked_provider;
+
+    const TOKEN: Address = address!("0x1111111111111111111111111111111111111111");
 
     fn vault(asserter: &Asserter) -> AddressVault {
         AddressVault {
@@ -106,5 +109,21 @@ mod tests {
         let balance = vault(&asserter).balance(&AssetId::Native).await.unwrap();
 
         assert_eq!(balance, Balance::spendable(U256::from(7)));
+    }
+
+    #[tokio::test]
+    async fn an_erc20_balance_is_read_by_a_contract_call() {
+        let asserter = Asserter::new();
+        // Too long for a quantity, so only a contract call's reply decodes it.
+        asserter.push_success(&Bytes::from(
+            [U256::from(9).to_be_bytes::<32>(), [0; 32]].concat(),
+        ));
+
+        let balance = vault(&asserter)
+            .balance(&AssetId::Erc20(TOKEN))
+            .await
+            .unwrap();
+
+        assert_eq!(balance, Balance::spendable(U256::from(9)));
     }
 }
