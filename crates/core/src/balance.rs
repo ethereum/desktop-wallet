@@ -48,6 +48,9 @@ pub async fn read(vaults: &[Box<dyn Vault>], assets: &[AssetId]) -> Vec<VaultBal
 
 /// The totals of each of `asset_count` assets across the vaults that were read; zero for each
 /// when there are none.
+///
+/// Balances are matched to assets by position, so every vault must have been read with the same
+/// assets in the same order.
 #[must_use]
 pub fn totals(vaults: &[VaultBalances], asset_count: usize) -> Vec<AssetTotals> {
     let mut totals = vec![AssetTotals::default(); asset_count];

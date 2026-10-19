@@ -13,6 +13,8 @@ pub mod tornadocash;
 pub trait Vault: Send + Sync {
     fn tag(&self) -> &'static str;
     fn id(&self) -> VaultId;
+
+    /// Whether the vault's holdings count toward the public or the private total.
     fn visibility(&self) -> Visibility;
 
     /// Returns the vault's holdings of the given asset.
