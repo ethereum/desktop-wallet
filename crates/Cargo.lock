@@ -2696,6 +2696,7 @@ name = "edw-cli"
 version = "0.0.1"
 dependencies = [
  "alloy-primitives",
+ "alloy-signer-local",
  "anyhow",
  "async-trait",
  "clap",
@@ -3920,7 +3921,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "kohaku-tornadocash",
- "kohaku-userop-kit",
+ "kohaku-userop-kit 0.1.0 (git+https://github.com/ethereum/kohaku-rs.git)",
  "tokio",
  "tracing",
 ]
@@ -3928,15 +3929,23 @@ dependencies = [
 [[package]]
 name = "kohaku-merkle-tree"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
+name = "kohaku-rpc-provider"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "futures",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kohaku-tornadocash"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
 dependencies = [
  "alloy",
  "ark-bn254",
@@ -3947,8 +3956,9 @@ dependencies = [
  "flate2",
  "hex",
  "kohaku-merkle-tree",
+ "kohaku-rpc-provider",
  "kohaku-tornadocash-circuit",
- "kohaku-userop-kit",
+ "kohaku-userop-kit 0.1.0",
  "num-bigint 0.5.1",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3965,7 +3975,6 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-circuit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
 dependencies = [
  "brotli",
  "postcard",
@@ -3985,6 +3994,25 @@ dependencies = [
  "cfg_aliases",
  "kohaku-tornadocash",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kohaku-userop-kit"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "alloy-sol-types",
+ "anyhow",
+ "async-trait",
+ "cfg_aliases",
+ "futures",
+ "getrandom 0.2.17",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5086,7 +5114,6 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "encoding_rs",
- "futures-channel",
  "futures-core",
  "futures-util",
  "h2",

@@ -36,6 +36,20 @@ pub trait ProfileDb: Database {
         self.put(b"index", &postcard::to_stdvec(profiles)?).await?;
         Ok(())
     }
+
+    /// The next standard-address index that has not been handed out. Starts at 0.
+    async fn next_address(&self) -> Result<u32, ProfileDatabaseError> {
+        let Some(bytes) = self.get(b"nextAddress").await? else {
+            return Ok(0);
+        };
+        Ok(postcard::from_bytes(&bytes)?)
+    }
+
+    async fn put_next_address(&self, index: u32) -> Result<(), ProfileDatabaseError> {
+        self.put(b"nextAddress", &postcard::to_stdvec(&index)?)
+            .await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

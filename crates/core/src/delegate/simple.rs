@@ -6,7 +6,7 @@ use alloy_eips::eip7702::{
 };
 use alloy_primitives::{Address, Bytes, U256, address};
 use alloy_rpc_types_eth::TransactionRequest;
-use alloy_sol_types::{Eip712Domain, SolCall, eip712_domain};
+use alloy_sol_types::{SolCall, eip712_domain};
 
 use crate::{
     network::endpoint::NetworkEndpointError,
@@ -122,6 +122,25 @@ impl SimpleDelegate {
     /// Signs a batch of calls to be executed by the `SimpleVault` contract. Returns
     /// a [`Call`] that can be submitted to this address to execute the batch.
     pub async fn batch_calls(&self, calls: &[Call]) -> Result<Call, SimpleDelegateError> {
+        Self::signed_batch(
+            self.signer.as_ref(),
+            self.network_id,
+            self.nonce().await?,
+            calls,
+        )
+        .await
+    }
+
+    /// Signs `calls` for `signer` at delegate `nonce`, without reading it from the chain.
+    ///
+    /// The account does not need to be delegated yet. A transaction that carries the
+    /// authorization can execute this call in the same inclusion.
+    pub async fn signed_batch(
+        signer: &dyn Signer,
+        network_id: u64,
+        nonce: U256,
+        calls: &[Call],
+    ) -> Result<Call, SimpleDelegateError> {
         let calls: Vec<_> = calls
             .iter()
             .map(|call| sol::Call {
@@ -133,11 +152,16 @@ impl SimpleDelegate {
 
         let batch = sol::ExecuteBatch {
             calls: calls.clone(),
-            nonce: self.nonce().await?,
+            nonce,
         };
-
-        let typed_data = TypedData::from_struct(&batch, Some(self.domain()));
-        let signature = self.signer.sign_typed_data(&typed_data).await?;
+        let domain = eip712_domain! {
+            name: "SimpleDelegate",
+            version: "1",
+            chain_id: network_id,
+            verifying_contract: signer.address(),
+        };
+        let typed_data = TypedData::from_struct(&batch, Some(domain));
+        let signature = signer.sign_typed_data(&typed_data).await?;
         let data = sol::SimpleDelegate::executeBatchCall {
             calls,
             v: u8::from(signature.v()) + 27,
@@ -147,31 +171,29 @@ impl SimpleDelegate {
         .abi_encode()
         .into();
 
-        Ok(Call::new(self.address(), data, U256::ZERO))
+        Ok(Call::new(signer.address(), data, U256::ZERO))
     }
 
     async fn nonce(&self) -> Result<U256, SimpleDelegateError> {
+        Self::on_chain_nonce(self.provider.as_ref(), self.address()).await
+    }
+
+    /// The delegate nonce stored at `address`, or an error if it has no `nonce()` function.
+    pub async fn on_chain_nonce(
+        provider: &dyn NetworkEndpoint,
+        address: Address,
+    ) -> Result<U256, SimpleDelegateError> {
         let call = sol::SimpleDelegate::nonceCall::new(());
-        let data = self
-            .provider
+        let data = provider
             .call(
                 TransactionRequest::default()
-                    .to(self.address())
+                    .to(address)
                     .input(call.abi_encode().into()),
             )
             .await?;
 
         let nonce = sol::SimpleDelegate::nonceCall::abi_decode_returns(&data)?;
         Ok(nonce)
-    }
-
-    fn domain(&self) -> Eip712Domain {
-        eip712_domain! {
-            name: "SimpleDelegate",
-            version: "1",
-            chain_id: self.network_id,
-            verifying_contract: self.address(),
-        }
     }
 }
 
@@ -189,7 +211,7 @@ pub fn delegation_designator_code(implementation: Address) -> Bytes {
 mod tests {
     use alloy_dyn_abi::TypedData;
     use alloy_primitives::{Address, Bytes, U256};
-    use alloy_sol_types::{SolStruct, eip712_domain};
+    use alloy_sol_types::{Eip712Domain, SolStruct, eip712_domain};
 
     use super::*;
 

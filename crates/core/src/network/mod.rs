@@ -10,6 +10,7 @@ pub mod alloy;
 pub mod db;
 pub mod endpoint;
 pub mod endpoint_config;
+pub mod http;
 mod logs;
 pub mod presets;
 

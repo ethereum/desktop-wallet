@@ -2,6 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::{Address, U256};
 use alloy_signer::Signer;
+use alloy_signer::k256::ecdsa::SigningKey;
+use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
 use kohaku_tornadocash::{
     Asset, Deposit, Note, Pool, Withdrawal, WithdrawalError,
@@ -20,11 +22,15 @@ use crate::{
         Balance, Vault, VaultError, VaultId, Visibility,
         tornadocash::{
             db::{NoteRecord, PoolDb, TornadoVaultDb},
-            syncer::NetworkEndpointSyncer,
+            syncer::{ChainedSyncer, NetworkEndpointSyncer},
         },
     },
 };
+pub use amount::{
+    AmountError, cover_notes, deposit_pools, exact_notes, format_eth, parse_eth, parse_wei,
+};
 
+mod amount;
 mod db;
 mod syncer;
 
@@ -81,10 +87,41 @@ pub enum TornadoVaultError {
     UnsupportedVaultId(VaultId),
 }
 
+impl TornadoVault<PrivateKeySigner> {
+    /// A vault whose notes come from `signing_key` and whose pools sync from Saga, then the endpoint.
+    ///
+    /// # Errors
+    /// Returns an error if the chain id or the Saga client cannot be obtained.
+    pub async fn open(
+        signing_key: SigningKey,
+        db: Arc<dyn Database>,
+        endpoint: Arc<dyn NetworkEndpoint>,
+    ) -> Result<Self, TornadoVaultError> {
+        let chain_id = endpoint.network_id().await?;
+        let syncer = ChainedSyncer::tornado(chain_id, endpoint.clone())?;
+        Ok(Self::with_syncer(
+            PrivateKeySigner::from_signing_key(signing_key),
+            db,
+            endpoint,
+            DynSyncer::new(syncer),
+        ))
+    }
+}
+
 impl<S: Signer + Send + Sync> TornadoVault<S> {
     pub fn new(signer: S, db: Arc<dyn Database>, provider: Arc<dyn NetworkEndpoint>) -> Self {
         let syncer = DynSyncer::new(NetworkEndpointSyncer::new(provider.clone()));
+        Self::with_syncer(signer, db, provider, syncer)
+    }
 
+    /// `syncer` replaces the endpoint log syncer, for a chain that can read a CDN first.
+    #[must_use]
+    pub fn with_syncer(
+        signer: S,
+        db: Arc<dyn Database>,
+        provider: Arc<dyn NetworkEndpoint>,
+        syncer: DynSyncer,
+    ) -> Self {
         Self {
             trees_cache: Mutex::new(HashMap::new()),
             address: signer.address(),

@@ -46,7 +46,7 @@ impl NetworkEndpointConfig {
         match &self.kind {
             NetworkEndpointKind::Http { url } => Ok(Arc::new(SimpleNetworkEndpoint::new_http(
                 Self::parse_http_url(url)?,
-            ))),
+            )?)),
         }
     }
 

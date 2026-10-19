@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+pub use address::FreshAddress;
 pub use data_dir::DataDir;
 
 use crate::{
@@ -23,6 +24,7 @@ use crate::{
     vault::{address::db::AddressVaultDatabaseError, db::VaultDatabaseError},
 };
 
+mod address;
 mod data_dir;
 mod networks;
 mod profiles;
