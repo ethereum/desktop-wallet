@@ -2,17 +2,17 @@ use std::{fmt, num::NonZeroU64, str::FromStr};
 
 pub use alloy::SimpleNetworkEndpoint;
 pub use endpoint::{NetworkEndpoint, NetworkEndpointError};
-pub use endpoint_config::{NetworkEndpointConfig, NetworkEndpointKind};
 pub use presets::NetworkPreset;
+pub use rpc_config::{RpcConfig, RpcConfigKind};
 use serde::{Deserialize, Serialize};
 
 pub mod alloy;
 pub mod db;
 pub mod endpoint;
-pub mod endpoint_config;
 pub mod http;
 mod logs;
 pub mod presets;
+pub mod rpc_config;
 
 pub const DEFAULT_EVENT_BLOCK_RANGE: NonZeroU64 = NonZeroU64::new(499).expect("non-zero");
 

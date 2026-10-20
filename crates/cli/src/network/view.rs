@@ -13,12 +13,12 @@ struct NetworkViewReport {
     network: String,
     network_id: u64,
     native_asset: String,
-    active_endpoint: Option<String>,
+    active_rpc_config: Option<String>,
 }
 
 impl Report for NetworkViewReport {
     const KIND: &'static str = "edw/network-view";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for NetworkViewReport {
@@ -29,11 +29,11 @@ impl fmt::Display for NetworkViewReport {
             self.network, self.network_id
         )?;
         writeln!(f, "native asset {}", self.native_asset)?;
-        match &self.active_endpoint {
-            Some(name) => write!(f, "active endpoint {name}"),
+        match &self.active_rpc_config {
+            Some(name) => write!(f, "active RPC config {name}"),
             None => write!(
                 f,
-                "no active endpoint; add one with `edw network endpoint add`"
+                "no active RPC config; add one with `edw network rpc-config add <name> --url <url>`"
             ),
         }
     }
@@ -47,7 +47,7 @@ impl NetworkViewArgs {
             network: network.id.to_string(),
             network_id: network.id.0,
             native_asset: network.native_asset.clone(),
-            active_endpoint: instance.active_endpoint_name().await?,
+            active_rpc_config: instance.active_rpc_config_name().await?,
         }
         .emit(global.mode())
     }

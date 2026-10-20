@@ -110,7 +110,7 @@ async fn opt_in(global: &GlobalArgs, args: &AddressArgs) -> anyhow::Result<()> {
     let address = parse_address(&args.address)?;
     let instance = global.open().await?;
     let profile = choose_profile(&instance, args.profile.as_deref(), global.input()).await?;
-    let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+    let endpoint = instance.rpc().await?;
     let asset = instance
         .opt_in_erc20(&profile, endpoint.as_ref(), address)
         .await?;

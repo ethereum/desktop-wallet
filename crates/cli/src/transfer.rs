@@ -94,7 +94,7 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     let amount = eth_amount(args.amount.as_deref(), input, "Amount (ETH): ")?;
     let to: Address = required(args.to.as_deref(), input, "To: ")?.parse()?;
     let phrase = mnemonic(&instance, &profile).await?;
-    let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+    let endpoint = instance.rpc().await?;
     if from.eq_ignore_ascii_case("tornado") {
         return tornado(
             global, &instance, input, &profile, &phrase, endpoint, amount, to,

@@ -178,7 +178,7 @@ impl BalanceArgs {
                 .collect();
         let ids: Vec<AssetId> = assets.iter().map(|asset| asset.id.clone()).collect();
 
-        let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+        let endpoint = instance.rpc().await?;
         let (vaults, unbuilt) = build_vaults(&instance, &profile, &endpoint).await?;
         for vault in &unbuilt {
             eprintln!(

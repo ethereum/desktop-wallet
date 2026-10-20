@@ -47,7 +47,7 @@ pub async fn run(global: &GlobalArgs, args: &NextFreshAddressArgs) -> Result<(),
     let input = global.input();
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
     let phrase = mnemonic(&instance, &profile).await?;
-    let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+    let endpoint = instance.rpc().await?;
     let fresh = instance
         .fresh_address(&profile, &phrase, endpoint.as_ref())
         .await?;

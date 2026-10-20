@@ -75,7 +75,7 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     };
     let phrase = mnemonic(&instance, &profile).await?;
     let payer = account_at(&phrase, profile.profile_index, from)?;
-    let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+    let endpoint = instance.rpc().await?;
     let chain_id = endpoint.network_id().await?;
     let pools = deposit_pools(amount, chain_id)?;
     let notes: Vec<String> = pools

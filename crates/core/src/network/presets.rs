@@ -2,7 +2,8 @@ use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 
 use crate::network::{Network, NetworkId};
 
-/// A network known by name. Endpoints are always the user's own.
+/// A network known by name. Mainnet and Sepolia start on a public RPC; any other network waits
+/// for one the user adds.
 ///
 /// An instance opens for any [`NetworkId`], with or without a preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, EnumString)]
@@ -25,6 +26,16 @@ impl NetworkPreset {
             Self::Mainnet => NetworkId(1),
             Self::Sepolia => NetworkId(11_155_111),
             Self::Local => NetworkId(31_337),
+        }
+    }
+
+    /// The public RPC URL a new wallet on this network starts with.
+    #[must_use]
+    pub const fn default_rpc_url(self) -> Option<&'static str> {
+        match self {
+            Self::Mainnet => Some("https://ethereum.publicnode.com"),
+            Self::Sepolia => Some("https://ethereum-sepolia.publicnode.com"),
+            Self::Local => None,
         }
     }
 

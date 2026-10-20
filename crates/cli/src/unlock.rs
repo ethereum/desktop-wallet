@@ -57,7 +57,7 @@ impl fmt::Display for UnlockReport {
             writeln!(f, "Encrypted store created at {dir}.")?;
             writeln!(
                 f,
-                "Add your RPC endpoint with `edw network endpoint add <name> --url <url>`."
+                "Mainnet and Sepolia start on an active RPC named publicnode. Add another with `edw network rpc-config add <name> --url <url>`."
             )?;
             writeln!(
                 f,

@@ -11,8 +11,9 @@ edw lock/unlock # locks or unlocks the datastore
 edw network status # view the current network status
 edw network list # lists all configured networks
 edw network use <name|id> # switches to the subdatastore for said network
-edw network endpoint list # lists all configured network endpoints
-edw network endpoint use <name|id> # switches to the specified network endpoint
+edw network rpc-config list # lists this network's RPC configs; the active one is marked
+edw network rpc-config add <name> --url <url> # adds an RPC config, active when none is
+edw network rpc-config use <name> # makes an RPC config the active one
 
 edw profile list # lists all configured profiles
 edw profile new # creates a new profile; on a new phrase, with an address vault for its first address, else like import
@@ -45,5 +46,4 @@ Pool sync tries the Saga CDN (`https://saga.gordosoluciones.xyz`, or `EDW_SAGA_U
 ```sh
 --non-interactive, --porcelain # runs in non-interactive mode
 --data-dir # runs with the specified data directory
---rpc-url <url> # overrides the active endpoint for one command (weird and should be replaced, we arent this stateless)
 ```

@@ -304,7 +304,7 @@ impl NewArgs {
         };
         // A new phrase has never been used, but another wallet may have used a stored one.
         let scan = if shared.is_some() {
-            scan(&instance, &profile, global).await
+            scan(&instance, &profile).await
         } else {
             None
         };
@@ -313,7 +313,7 @@ impl NewArgs {
             .await?;
         // A brand-new phrase has no deposits to find. A stored phrase might.
         let tornado_notes = if shared.is_some() {
-            recover_tornado(&instance, &profile, global).await
+            recover_tornado(&instance, &profile).await
         } else {
             None
         };
@@ -334,7 +334,7 @@ impl ImportArgs {
         let name = prompt_profile_name(self.name.clone(), input)?;
         let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
 
-        let scan = scan(&instance, &profile, global).await;
+        let scan = scan(&instance, &profile).await;
         instance
             .add_scanned_address_vaults(&profile, scan.as_ref())
             .await?;
@@ -351,7 +351,7 @@ impl ImportArgs {
             ),
             None => (Vec::new(), None),
         };
-        let tornado_notes = recover_tornado(&instance, &profile, global).await;
+        let tornado_notes = recover_tornado(&instance, &profile).await;
         ImportReport {
             profile: ProfileSummary::from(&profile),
             addresses,
@@ -397,10 +397,10 @@ impl RescanArgs {
             choose_profile(&profiles, global.input())?
         };
 
-        let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+        let endpoint = instance.rpc().await?;
         let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
         let added = instance.add_missing_address_vaults(&profile, &scan).await?;
-        let tornado_notes = recover_tornado(&instance, &profile, global).await;
+        let tornado_notes = recover_tornado(&instance, &profile).await;
         RescanReport {
             profile: ProfileSummary::from(&profile),
             added: added
@@ -489,13 +489,9 @@ impl RevealPhraseArgs {
 
 /// Recovers Tornado notes on the current chain, or warns on stderr and returns `None` when the
 /// scan fails.
-async fn recover_tornado(
-    instance: &Instance,
-    profile: &ProfileRecord,
-    global: &GlobalArgs,
-) -> Option<u32> {
+async fn recover_tornado(instance: &Instance, profile: &ProfileRecord) -> Option<u32> {
     let recovered: Result<u32, anyhow::Error> = async {
-        let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+        let endpoint = instance.rpc().await?;
         let phrase = crate::spend::mnemonic(instance, profile).await?;
         let vault = crate::spend::open_vault(instance, profile, &phrase, endpoint).await?;
         let count = vault.recover_chain().await?;
@@ -528,12 +524,8 @@ fn write_tornado_count(f: &mut fmt::Formatter<'_>, count: Option<u32>) -> fmt::R
 
 /// Scans `profile`'s addresses, or warns on stderr that only address 0 gets an address vault and
 /// returns `None` when the scan fails.
-async fn scan(
-    instance: &Instance,
-    profile: &ProfileRecord,
-    global: &GlobalArgs,
-) -> Option<EoaScan> {
-    let scan = match instance.endpoint(global.rpc_url.as_deref()).await {
+async fn scan(instance: &Instance, profile: &ProfileRecord) -> Option<EoaScan> {
+    let scan = match instance.rpc().await {
         Ok(endpoint) => instance.scan_profile(profile, endpoint.as_ref()).await,
         Err(error) => Err(error),
     };

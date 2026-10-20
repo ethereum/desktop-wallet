@@ -22,7 +22,6 @@ struct ConfigPathReport {
 struct ConfigViewReport {
     data_dir: String,
     session: Option<String>,
-    rpc_url: Option<String>,
 }
 
 impl Report for ConfigPathReport {
@@ -38,7 +37,7 @@ impl fmt::Display for ConfigPathReport {
 
 impl Report for ConfigViewReport {
     const KIND: &'static str = "edw/config-view";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for ConfigViewReport {
@@ -50,12 +49,8 @@ impl fmt::Display for ConfigViewReport {
             self.data_dir
         )?;
         match &self.session {
-            Some(network) => writeln!(f, "session={network}")?,
-            None => writeln!(f, "session=(locked)")?,
-        }
-        match &self.rpc_url {
-            Some(rpc_url) => write!(f, "rpc_url={rpc_url} (override)"),
-            None => write!(f, "rpc_url=(from the unlocked network)"),
+            Some(network) => write!(f, "session={network}"),
+            None => write!(f, "session=(locked)"),
         }
     }
 }
@@ -71,7 +66,6 @@ impl Command {
                     .load_if_present()
                     .await
                     .map(|session| session.network.to_string()),
-                rpc_url: global.rpc_url.clone(),
             }
             .emit(global.mode()),
         }

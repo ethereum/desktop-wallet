@@ -81,7 +81,7 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     )?;
     let to = destination(args.to.as_deref(), input)?;
     let phrase = mnemonic(&instance, &profile).await?;
-    let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+    let endpoint = instance.rpc().await?;
     let chain_id = endpoint.network_id().await?;
     deposit_pools(amount, chain_id)?;
     let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
