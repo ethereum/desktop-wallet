@@ -118,7 +118,7 @@ mod tests {
         assert_eq!(
             sepolia.kind,
             RpcConfigKind::Http {
-                url: "https://ethereum-sepolia.publicnode.com".to_string(),
+                url: "https://ethereum-sepolia-rpc.publicnode.com".to_string(),
             }
         );
     }

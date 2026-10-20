@@ -34,7 +34,7 @@ impl NetworkPreset {
     pub const fn default_rpc_url(self) -> Option<&'static str> {
         match self {
             Self::Mainnet => Some("https://ethereum.publicnode.com"),
-            Self::Sepolia => Some("https://ethereum-sepolia.publicnode.com"),
+            Self::Sepolia => Some("https://ethereum-sepolia-rpc.publicnode.com"),
             Self::Local => None,
         }
     }
