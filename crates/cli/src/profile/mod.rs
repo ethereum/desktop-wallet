@@ -441,7 +441,7 @@ impl RevealPhraseArgs {
 
         let input = Input::Terminal;
         let data_dir = global.data_dir();
-        let network = match SessionFile::runtime().load().await {
+        let network = match SessionFile::runtime().load_if_present().await {
             Some(session) if session.data_dir == data_dir.path() => session.network,
             _ => unlock::choose_network(&data_dir, input)?,
         };

@@ -3917,7 +3917,7 @@ dependencies = [
 [[package]]
 name = "kohaku-fork-kit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#5afbe7560c195c1ac3e54a4f7dcc56660f4c6198"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3930,6 +3930,7 @@ dependencies = [
 [[package]]
 name = "kohaku-merkle-tree"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -3937,6 +3938,7 @@ dependencies = [
 [[package]]
 name = "kohaku-rpc-provider"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "futures",
@@ -3947,6 +3949,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "ark-bn254",
@@ -3976,6 +3979,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-circuit"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "brotli",
  "postcard",
@@ -3989,7 +3993,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-keychain"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#5afbe7560c195c1ac3e54a4f7dcc56660f4c6198"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "cfg_aliases",
@@ -4000,6 +4004,7 @@ dependencies = [
 [[package]]
 name = "kohaku-userop-kit"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "alloy-sol-types",
@@ -5991,7 +5996,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

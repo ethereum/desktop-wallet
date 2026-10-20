@@ -52,10 +52,6 @@ kohaku-tornadocash-keychain = { git = "https://github.com/ethereum/kohaku-rs.git
 kohaku-fork-kit = { git = "https://github.com/ethereum/kohaku-rs.git" }
 kohaku-userop-kit = { git = "https://github.com/ethereum/kohaku-rs.git" }
 
-[patch."https://github.com/ethereum/kohaku-rs.git"]
-kohaku-tornadocash = { path = "../../kohaku-rs/crates/tornadocash" }
-kohaku-userop-kit = { path = "../../kohaku-rs/crates/userop-kit" }
-
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
 panic = "deny"

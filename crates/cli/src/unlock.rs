@@ -112,7 +112,7 @@ impl UnlockArgs {
         let network = self.network;
         let existed = data_dir.has_instance(network);
         let sessions = SessionFile::runtime();
-        let previous = sessions.load().await;
+        let previous = sessions.load_if_present().await;
         let was_same = previous
             .as_ref()
             .is_some_and(|s| s.network == network && s.data_dir == data_dir.path());
@@ -209,7 +209,7 @@ async fn password(
         return Ok(Zeroizing::new(value));
     }
 
-    if let Some(session) = SessionFile::runtime().load().await
+    if let Some(session) = SessionFile::runtime().load_if_present().await
         && session.network == network
         && session.data_dir == data_dir.path()
     {

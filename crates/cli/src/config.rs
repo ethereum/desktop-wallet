@@ -68,7 +68,7 @@ impl Command {
             Command::View => ConfigViewReport {
                 data_dir,
                 session: SessionFile::runtime()
-                    .load()
+                    .load_if_present()
                     .await
                     .map(|session| session.network.to_string()),
                 rpc_url: global.rpc_url.clone(),

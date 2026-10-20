@@ -39,7 +39,7 @@ impl GlobalArgs {
     /// at an interactive terminal and fails anywhere else, so a script never waits on a prompt.
     pub async fn open(&self) -> anyhow::Result<Instance> {
         let data_dir = self.data_dir();
-        let session = SessionFile::runtime().load().await;
+        let session = SessionFile::runtime().load_if_present().await;
         if let Some(session) = &session
             && session.data_dir == data_dir.path()
         {
