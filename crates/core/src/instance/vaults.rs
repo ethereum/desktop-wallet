@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use alloy_primitives::Address;
+use alloy_signer_local::PrivateKeySigner;
 use futures::future::join_all;
 
 use super::{Instance, InstanceError};
 use crate::{
     database::{Database, scoped::ScopedDatabase},
     factory::{BuildContext, Factory, FactoryError},
-    mnemonic::scan::EoaScan,
+    mnemonic::{Mnemonic, scan::EoaScan},
     network::NetworkEndpoint,
     profile::ProfileRecord,
     vault::{
@@ -17,6 +18,7 @@ use crate::{
             db::{AddressVaultDb, DerivedAddress},
         },
         db::{VaultDb, VaultRecord},
+        tornadocash::TornadoVault,
     },
 };
 
@@ -81,6 +83,23 @@ impl Instance {
         let missing = self.not_yet_stored(profile, addresses).await?;
         self.add_address_vaults(profile, &missing).await?;
         Ok(missing)
+    }
+
+    /// Returns a [`TornadoVault`] for `profile` using its derived signer.
+    pub async fn tornado_vault(
+        &self,
+        profile: &ProfileRecord,
+        endpoint: Arc<dyn NetworkEndpoint>,
+    ) -> Result<TornadoVault<PrivateKeySigner>, InstanceError> {
+        let phrase = self.recovery_phrase(profile).await?;
+        let mnemonic = Mnemonic::parse(&phrase)?;
+        let key = mnemonic.standard_address_key(0, profile.profile_index)?;
+        let signer = PrivateKeySigner::from_signing_key(key);
+        let db = Arc::new(ScopedDatabase::new(
+            Arc::new(self.profile_db(profile)),
+            b"vault:tornado",
+        ));
+        Ok(TornadoVault::new(signer, db, endpoint))
     }
 
     /// Builds each of `records` against `endpoint`, concurrently and in order. A vault that fails

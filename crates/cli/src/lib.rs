@@ -12,6 +12,7 @@ mod profile;
 mod report;
 mod secret_file;
 mod session;
+mod tornado;
 mod unlock;
 
 #[derive(Parser)]
@@ -40,6 +41,9 @@ enum Command {
     Network(network::Command),
     /// Shows a profile's balance of each asset across its vaults.
     Balance(balance::BalanceArgs),
+    /// Manages Tornado Cash pools and notes.
+    #[command(subcommand)]
+    Tornado(tornado::Command),
     /// Unlocks one network (default mainnet); any other network is locked.
     Unlock(unlock::UnlockArgs),
     /// Locks the wallet.
@@ -54,6 +58,7 @@ impl Cli {
             Command::Database(args) => args.run(&self.global).await,
             Command::Network(args) => args.run(&self.global).await,
             Command::Balance(args) => args.run(&self.global).await,
+            Command::Tornado(args) => args.run(&self.global).await,
             Command::Unlock(args) => args.run(&self.global).await,
             Command::Lock => unlock::run_lock(&self.global).await,
         }

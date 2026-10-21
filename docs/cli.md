@@ -21,6 +21,9 @@ edw profile rescan [profile] # scans a profile's addresses again and adds an add
 edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only
 
 edw balance [profile] [--verbose] # each asset's public, private and total holdings across a profile's vaults; --verbose adds each vault
+
+edw tornado pools # lists known Tornado Cash pools for the active network
+edw tornado notes [profile] [--all] [--recover] # lists notes held by a profile in Tornado Cash pools
 ```
 
 ### Global Args

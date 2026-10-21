@@ -3,8 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use alloy_primitives::{Address, U256};
 use alloy_signer::Signer;
 use alloy_sol_types::{SolCall, sol};
+pub use kohaku_tornadocash::Pool;
 use kohaku_tornadocash::{
-    Asset, Deposit, Note, Pool, Withdrawal, WithdrawalError,
+    Asset, Deposit, Note, Withdrawal, WithdrawalError,
     merkle_tree::{MerkleProof, MerkleTree, MerkleTreeExt},
     syncer::{DynSyncer, SyncEvent, Syncer},
 };
@@ -238,8 +239,20 @@ impl<S: Signer + Send + Sync> Vault for TornadoVault<S> {
 }
 
 impl<S: Signer + Send + Sync> TornadoVault<S> {
+    /// Every known pool on the current network.
+    pub async fn all_pools(&self) -> Result<Vec<Pool>, TornadoVaultError> {
+        let chain_id = self.provider.network_id().await?;
+        let mut pools: Vec<Pool> = Pool::POOLS
+            .iter()
+            .filter(|pool| pool.chain_id == chain_id)
+            .cloned()
+            .collect();
+        pools.sort_by_key(|pool| std::cmp::Reverse(pool.amount_wei));
+        Ok(pools)
+    }
+
     /// The current network's pools for `asset`, largest denomination first.
-    async fn pools(&self, asset: &AssetId) -> Result<Vec<Pool>, TornadoVaultError> {
+    pub async fn pools(&self, asset: &AssetId) -> Result<Vec<Pool>, TornadoVaultError> {
         let chain_id = self.provider.network_id().await?;
         let mut pools: Vec<Pool> = Pool::POOLS
             .iter()
@@ -264,8 +277,13 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
             .collect())
     }
 
+    /// Returns every pool the vault tracks.
+    pub async fn all_tracked_pools(&self) -> Result<Vec<Pool>, TornadoVaultError> {
+        Ok(self.db.tracked_pools().await?)
+    }
+
     /// Adds `pools` to the tracked pools.
-    async fn track(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
+    pub async fn track(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
         let mut tracked = self.db.tracked_pools().await?;
         let untracked: Vec<Pool> = pools
             .iter()
