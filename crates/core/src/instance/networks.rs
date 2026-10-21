@@ -67,6 +67,14 @@ impl Instance {
         self.add_rpc_config(config).await
     }
 
+    /// The active RPC config, or `None` when this network has no RPC config.
+    pub async fn active_rpc(&self) -> Result<Option<RpcConfig>, InstanceError> {
+        if self.rpc_configs().await?.is_empty() {
+            return Ok(None);
+        }
+        self.active_rpc_config().await.map(Some)
+    }
+
     /// The active RPC config, or the first one when none is marked active.
     async fn active_rpc_config(&self) -> Result<RpcConfig, InstanceError> {
         let mut configs = self.rpc_configs().await?;
@@ -81,7 +89,7 @@ impl Instance {
         Ok(configs.swap_remove(index))
     }
 
-    fn network_db(&self) -> ScopedDatabase {
+    pub(super) fn network_db(&self) -> ScopedDatabase {
         ScopedDatabase::new(self.store.clone(), NETWORK_SCOPE)
     }
 }

@@ -2,19 +2,22 @@ use std::{fmt, num::NonZeroU64, str::FromStr};
 
 pub use alloy::SimpleNetworkEndpoint;
 pub use endpoint::{NetworkEndpoint, NetworkEndpointError};
+pub use indexer_config::IndexerConfig;
 pub use presets::NetworkPreset;
 pub use rpc_config::{RpcConfig, RpcConfigKind};
 use serde::{Deserialize, Serialize};
 
 pub mod alloy;
+pub mod bundler_config;
 pub mod db;
 pub mod endpoint;
 pub mod http;
+pub mod indexer_config;
 mod logs;
 pub mod presets;
 pub mod rpc_config;
 
-pub const DEFAULT_EVENT_BLOCK_RANGE: NonZeroU64 = NonZeroU64::new(499).expect("non-zero");
+pub const DEFAULT_EVENT_BLOCK_RANGE: NonZeroU64 = NonZeroU64::new(500).expect("non-zero");
 
 /// Native asset of a network without a preset.
 const DEFAULT_NATIVE_ASSET: &str = "eth";

@@ -5,7 +5,7 @@ use alloy_signer_local::PrivateKeySigner;
 use anyhow::Context;
 use edw_core::{
     broadcast::submit_call,
-    bundler::{BundlerList, bundler_urls},
+    bundler::{BundlerList, Url},
     call::Call,
     instance::Instance,
     mnemonic::Mnemonic,
@@ -36,6 +36,7 @@ pub struct ShieldedWithdrawal<'a> {
     pub notes: &'a [TornadoNote],
     pub forward_to: Option<Address>,
     pub minimum_forward: Option<U256>,
+    pub bundler_urls: &'a [Url],
 }
 
 pub async fn choose_profile(
@@ -108,7 +109,13 @@ pub async fn open_vault(
     endpoint: Arc<dyn NetworkEndpoint>,
 ) -> Result<TornadoVault<alloy_signer_local::PrivateKeySigner>, anyhow::Error> {
     let key = mnemonic.keychain_key(profile.profile_index)?;
-    Ok(TornadoVault::open(key, instance.tornado_database(profile), endpoint).await?)
+    let indexer = instance.indexer_config().await?;
+    Ok(TornadoVault::open(
+        key,
+        instance.tornado_database(profile),
+        endpoint,
+        indexer.effective_url(),
+    )?)
 }
 
 /// `--amount-formatted` as decimal ETH, `--amount-raw` as wei, or a prompted ETH amount.
@@ -184,11 +191,10 @@ pub fn ensure_paymaster(notes: &[TornadoNote]) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-pub fn first_bundler(chain_id: u64) -> Result<String, anyhow::Error> {
-    let urls = bundler_urls(chain_id)?;
+pub fn first_bundler(urls: &[Url]) -> Result<String, anyhow::Error> {
     urls.first()
         .map(ToString::to_string)
-        .context("no bundler configured")
+        .context("no bundler configured; add one with `edw network bundler-config add --url <url>`")
 }
 
 /// Proves `notes` into one paymaster user operation and submits it. The caller stores the fresh
@@ -206,7 +212,7 @@ pub async fn submit_shielded(
             .phrase
             .standard_address_key(withdrawal.fresh_index, withdrawal.profile_index)?,
     );
-    let bundlers = BundlerList::from_urls(chain_id, &bundler_urls(chain_id)?)?;
+    let bundlers = BundlerList::from_urls(chain_id, withdrawal.bundler_urls)?;
     Ok(submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
         vault: withdrawal.vault,
         provider,

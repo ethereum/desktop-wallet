@@ -103,17 +103,18 @@ pub enum TornadoVaultError {
 }
 
 impl TornadoVault<PrivateKeySigner> {
-    /// A vault whose notes come from `signing_key` and whose pools sync from Saga, then the endpoint.
+    /// A vault whose notes come from `signing_key`. Pools sync from `indexer_url` when it is set,
+    /// then the endpoint.
     ///
     /// # Errors
-    /// Returns an error if the chain id or the Saga client cannot be obtained.
-    pub async fn open(
+    /// Returns an error if the Saga client cannot be obtained.
+    pub fn open(
         signing_key: SigningKey,
         db: Arc<dyn Database>,
         endpoint: Arc<dyn NetworkEndpoint>,
+        indexer_url: Option<&str>,
     ) -> Result<Self, TornadoVaultError> {
-        let chain_id = endpoint.network_id().await?;
-        let syncer = ChainedSyncer::tornado(chain_id, endpoint.clone())?;
+        let syncer = ChainedSyncer::tornado(endpoint.clone(), indexer_url)?;
         Ok(Self::with_syncer(
             PrivateKeySigner::from_signing_key(signing_key),
             db,

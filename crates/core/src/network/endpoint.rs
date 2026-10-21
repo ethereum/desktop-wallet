@@ -68,6 +68,11 @@ pub trait NetworkEndpoint: Send + Sync {
         Ok(tx.with_gas_limit(gas_limit))
     }
 
+    /// How many blocks one `eth_getLogs` request from this endpoint may cover.
+    fn event_block_range(&self) -> NonZeroU64 {
+        super::DEFAULT_EVENT_BLOCK_RANGE
+    }
+
     /// Reads `filter` over `blocks` in spans of at most `span`, in ascending block order.
     ///
     /// Costs one request per span. A failing span aborts the read, so a returned `Vec` always
@@ -150,7 +155,7 @@ pub enum NetworkEndpointError {
     /// The inner error type is not part of this API.
     #[error(transparent)]
     Backend(Box<dyn std::error::Error + Send + Sync>),
-    #[error("RPC URL `{0}` must be an http or https URL")]
+    #[error("URL `{0}` must be an http or https URL")]
     InvalidUrl(String),
     #[error(
         "endpoint serves network id {found}, but the network is configured as network id {expected}"

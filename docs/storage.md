@@ -1,7 +1,7 @@
 # Storage
 
 EDW keeps one encrypted store per network.
-It holds that network's RPC configs, the keyring, the profiles, and the protocol caches the profiles share.
+It holds that network's RPC configs, bundler URLs, indexer, the keyring, the profiles, and the protocol caches the profiles share.
 
 ## Layout
 
@@ -9,8 +9,10 @@ It holds that network's RPC configs, the keyring, the profiles, and the protocol
 <data-dir>/<network>/                 # "mainnet", "sepolia", "local", or the numeric network id
 
 network          / network            # Network { id, native_asset }
-                 / rpcConfigs         # Vec<RpcConfig>
+                 / rpcConfigs         # Vec<RpcConfig { name, kind, event_block_range, call_interval_ms }>
                  / activeRpcConfig    # name of the active RPC config
+                 / bundlerConfig      # Vec<String>, bundler URLs in fallback order
+                 / indexerConfig      # IndexerConfig { url, enabled }
 keyring          / mnemonics          # indices of the stored recovery phrases
                  / mnemonic:{m}       # one recovery phrase
 profiles         / index              # Vec<ProfileRecord { m, x, name }>
