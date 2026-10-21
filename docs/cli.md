@@ -12,7 +12,7 @@ edw network status # view the current network status
 edw network list # lists all configured networks
 edw network use <name|id> # switches to the subdatastore for said network
 edw network rpc-config list # lists this network's RPC configs; the active one is marked
-edw network rpc-config add <name> --url <url> # adds an RPC config, active when none is
+edw network rpc-config add <name> --url <url> [--use] # adds an RPC config. Active when none is, or when --use is set
 edw network rpc-config use <name> # makes an RPC config the active one
 
 edw profile list # lists all configured profiles

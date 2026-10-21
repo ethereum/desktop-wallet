@@ -10,7 +10,7 @@ use crate::{GlobalArgs, report::Report};
 pub enum Command {
     /// List this network's RPC configs. The active one is marked `*`.
     List(RpcConfigListArgs),
-    /// Add an RPC config. It becomes active when none is.
+    /// Add an RPC config. It becomes active when none is, or when `--use` is set.
     Add(RpcConfigAddArgs),
     /// Make an RPC config the active one.
     Use(RpcConfigUseArgs),
@@ -28,6 +28,9 @@ pub struct RpcConfigAddArgs {
     /// The widest block span one log request may ask this RPC for.
     #[arg(long, default_value_t = DEFAULT_EVENT_BLOCK_RANGE)]
     event_block_range: NonZeroU64,
+    /// Make this the active RPC config.
+    #[arg(long)]
+    r#use: bool,
 }
 
 #[derive(Args, Debug)]
@@ -157,6 +160,9 @@ impl RpcConfigAddArgs {
         let instance = global.open().await?;
         let config = RpcConfig::http(self.name.clone(), &self.url, self.event_block_range)?;
         instance.add_rpc_config(config.clone()).await?;
+        if self.r#use {
+            instance.use_rpc_config(&self.name).await?;
+        }
         let active =
             instance.active_rpc_config_name().await?.as_deref() == Some(self.name.as_str());
         RpcConfigAddReport {
