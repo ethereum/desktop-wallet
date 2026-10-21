@@ -17,7 +17,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 uuid = { workspace = true }
-reqwest = { workspace = true, features = ["json", "blocking"] }
+reqwest = { workspace = true }
 
 argon2 = { workspace = true }
 bip32 = { workspace = true }
@@ -29,6 +29,7 @@ zeroize = { workspace = true }
 rand = { workspace = true }
 kohaku-tornadocash = { workspace = true }
 kohaku-tornadocash-keychain = { workspace = true }
+kohaku-userop-kit = { workspace = true }
 
 alloy-primitives = { workspace = true, features = ["serde", "k256"] }
 alloy-provider = { workspace = true }

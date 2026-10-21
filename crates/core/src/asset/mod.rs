@@ -1,6 +1,7 @@
 //! The assets a wallet reads balances for.
 //!
-//! A default's metadata is fixed here. Any other ERC-20 has its metadata read from the network
+//! A default's metadata is fixed here. A profile tracks every default unless it opts out, and
+//! tracks any other ERC-20 it opts into. That other token's metadata is read from the network
 //! once, when it is first opted into, and is then registered wallet-wide.
 //!
 //! Functions take `wallet`, the network scope, and `profile`, the profile's own scope.
@@ -60,6 +61,8 @@ pub enum AssetError {
     NoDecimals(Address),
     #[error("{0} is opted into but not registered")]
     Unregistered(Address),
+    #[error("{0} is not a tracked asset")]
+    NotTracked(Address),
 }
 
 impl AssetId {
@@ -105,6 +108,11 @@ pub fn default_erc20s(network: NetworkId) -> Vec<Erc20Asset> {
                 18,
             ),
             Erc20Asset::known(
+                address!("0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"),
+                "WBTC",
+                8,
+            ),
+            Erc20Asset::known(
                 address!("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
                 "WETH",
                 18,
@@ -131,17 +139,22 @@ pub fn default_erc20s(network: NetworkId) -> Vec<Erc20Asset> {
     }
 }
 
-/// The ERC-20s a profile reads: the network's defaults, then its opted-in assets, each once.
+/// The ERC-20s a profile reads: the network's defaults, minus those it opted out of, then its
+/// opted-in assets, each once.
 pub async fn profile_erc20s(
     wallet: &dyn Database,
     profile: &dyn Database,
     network: NetworkId,
 ) -> Result<Vec<Erc20Asset>, AssetError> {
-    let mut assets = default_erc20s(network);
+    let opted_out = profile.get_opted_out().await?;
+    let mut assets: Vec<Erc20Asset> = default_erc20s(network)
+        .into_iter()
+        .filter(|asset| !opted_out.contains(&asset.address))
+        .collect();
     let registered = wallet.get_erc20s().await?;
 
     for address in profile.get_opted_in().await? {
-        if assets.iter().any(|asset| asset.address == address) {
+        if opted_out.contains(&address) || assets.iter().any(|asset| asset.address == address) {
             continue;
         }
         let asset = registered
@@ -155,7 +168,7 @@ pub async fn profile_erc20s(
 
 /// Opts the profile into the ERC-20 at `address`.
 ///
-/// A default needs no opt-in, so for one this records nothing.
+/// A default needs no opt-in record. Opting into one that was opted out clears that opt-out.
 pub async fn opt_in(
     wallet: &dyn Database,
     profile: &dyn Database,
@@ -167,6 +180,7 @@ pub async fn opt_in(
         .into_iter()
         .find(|asset| asset.address == address)
     {
+        clear_opt_out(profile, address).await?;
         return Ok(asset);
     }
 
@@ -185,7 +199,67 @@ pub async fn opt_in(
         opted_in.push(address);
         profile.put_opted_in(&opted_in).await?;
     }
+    clear_opt_out(profile, address).await?;
     Ok(asset)
+}
+
+/// Stops the profile tracking the ERC-20 at `address` and returns the asset it stopped tracking.
+///
+/// A default is recorded as opted out, so it stays out until opted back in. An extra opt-in is
+/// removed from `optedIn`. An address the profile does not track is an error.
+pub async fn opt_out(
+    wallet: &dyn Database,
+    profile: &dyn Database,
+    network: NetworkId,
+    address: Address,
+) -> Result<Erc20Asset, AssetError> {
+    let asset = if let Some(asset) = default_erc20s(network)
+        .into_iter()
+        .find(|asset| asset.address == address)
+    {
+        asset
+    } else {
+        let registered = wallet.get_erc20s().await?;
+        registered
+            .into_iter()
+            .find(|asset| asset.address == address)
+            .ok_or(AssetError::NotTracked(address))?
+    };
+
+    let is_default = default_erc20s(network)
+        .iter()
+        .any(|asset| asset.address == address);
+    let mut opted_in = profile.get_opted_in().await?;
+    if let Some(index) = opted_in.iter().position(|opted| *opted == address) {
+        opted_in.remove(index);
+        profile.put_opted_in(&opted_in).await?;
+    } else if !is_default {
+        return Err(AssetError::NotTracked(address));
+    }
+
+    if is_default {
+        remember_opt_out(profile, address).await?;
+    }
+    Ok(asset)
+}
+
+async fn clear_opt_out(profile: &dyn Database, address: Address) -> Result<(), AssetError> {
+    let mut opted_out = profile.get_opted_out().await?;
+    let Some(index) = opted_out.iter().position(|opted| *opted == address) else {
+        return Ok(());
+    };
+    opted_out.remove(index);
+    profile.put_opted_out(&opted_out).await?;
+    Ok(())
+}
+
+async fn remember_opt_out(profile: &dyn Database, address: Address) -> Result<(), AssetError> {
+    let mut opted_out = profile.get_opted_out().await?;
+    if !opted_out.contains(&address) {
+        opted_out.push(address);
+        profile.put_opted_out(&opted_out).await?;
+    }
+    Ok(())
 }
 
 /// Formats `amount` base units as a decimal string with no trailing fractional zeros, such as `1.5`.
@@ -369,9 +443,9 @@ mod tests {
     #[tokio::test]
     async fn a_profile_reads_the_defaults_then_its_opt_ins_each_once() {
         let (wallet, profile) = (MemoryDatabase::new(), MemoryDatabase::new());
-        let wbtc = Erc20Asset::known(TOKEN, "WBTC", 8);
+        let extra = Erc20Asset::known(TOKEN, "EXTRA", 8);
         wallet
-            .put_erc20s(std::slice::from_ref(&wbtc))
+            .put_erc20s(std::slice::from_ref(&extra))
             .await
             .unwrap();
         profile.put_opted_in(&[usdc(), TOKEN]).await.unwrap();
@@ -383,6 +457,74 @@ mod tests {
             .map(|asset| asset.symbol)
             .collect();
 
-        assert_eq!(symbols, ["USDC", "USDT", "DAI", "WETH", "WBTC"]);
+        assert_eq!(symbols, ["USDC", "USDT", "DAI", "WBTC", "WETH", "EXTRA"]);
+    }
+
+    #[tokio::test]
+    async fn opting_out_of_a_default_hides_it_until_it_is_opted_back_in() {
+        let (wallet, profile) = (MemoryDatabase::new(), MemoryDatabase::new());
+        let dai = default_erc20s(MAINNET)
+            .into_iter()
+            .find(|asset| asset.symbol == "DAI")
+            .unwrap()
+            .address;
+
+        opt_out(&wallet, &profile, MAINNET, dai).await.unwrap();
+        let hidden: Vec<String> = profile_erc20s(&wallet, &profile, MAINNET)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|asset| asset.symbol)
+            .collect();
+        assert!(!hidden.iter().any(|symbol| symbol == "DAI"));
+        assert_eq!(profile.get_opted_out().await.unwrap(), vec![dai]);
+
+        opt_in(
+            &wallet,
+            &profile,
+            mocked_provider(&Asserter::new()).as_ref(),
+            MAINNET,
+            dai,
+        )
+        .await
+        .unwrap();
+        let shown: Vec<String> = profile_erc20s(&wallet, &profile, MAINNET)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|asset| asset.symbol)
+            .collect();
+        assert!(shown.iter().any(|symbol| symbol == "DAI"));
+        assert!(profile.get_opted_out().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn opting_out_of_an_extra_token_removes_it_from_opted_in() {
+        let (wallet, profile) = (MemoryDatabase::new(), MemoryDatabase::new());
+        let extra = Erc20Asset::known(TOKEN, "EXTRA", 8);
+        wallet
+            .put_erc20s(std::slice::from_ref(&extra))
+            .await
+            .unwrap();
+        profile.put_opted_in(&[TOKEN]).await.unwrap();
+
+        opt_out(&wallet, &profile, MAINNET, TOKEN).await.unwrap();
+
+        assert!(profile.get_opted_in().await.unwrap().is_empty());
+        assert!(profile.get_opted_out().await.unwrap().is_empty());
+        let symbols: Vec<String> = profile_erc20s(&wallet, &profile, MAINNET)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|asset| asset.symbol)
+            .collect();
+        assert!(!symbols.iter().any(|symbol| symbol == "EXTRA"));
+    }
+
+    #[tokio::test]
+    async fn opting_out_of_an_untracked_token_is_refused() {
+        let (wallet, profile) = (MemoryDatabase::new(), MemoryDatabase::new());
+        let result = opt_out(&wallet, &profile, MAINNET, TOKEN).await;
+        assert!(matches!(result, Err(AssetError::NotTracked(TOKEN))));
     }
 }

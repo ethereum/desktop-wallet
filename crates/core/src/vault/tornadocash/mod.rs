@@ -1,8 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::{Address, U256};
-use alloy_signer::Signer;
+use alloy_signer::{Signer, k256::ecdsa::SigningKey};
+use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
+pub use amount::{
+    AmountError, cover_notes, deposit_pools, exact_notes, format_eth, parse_eth, parse_wei,
+};
 use kohaku_tornadocash::{
     Asset, Deposit, Note, Pool, Withdrawal, WithdrawalError,
     merkle_tree::{MerkleProof, MerkleTree, MerkleTreeExt},
@@ -10,6 +14,9 @@ use kohaku_tornadocash::{
 };
 use kohaku_tornadocash_keychain::{Keychain, KeychainError, recover};
 use tokio::sync::Mutex;
+pub use userop::{
+    PaymasterWithdrawal, PaymasterWithdrawalRequest, UserOpError, submit_paymaster_withdrawal,
+};
 
 use crate::{
     asset::AssetId,
@@ -20,13 +27,15 @@ use crate::{
         Balance, Vault, VaultError, VaultId, Visibility,
         tornadocash::{
             db::{NoteRecord, PoolDb, TornadoVaultDb},
-            syncer::NetworkEndpointSyncer,
+            syncer::{ChainedSyncer, NetworkEndpointSyncer},
         },
     },
 };
 
+mod amount;
 mod db;
 mod syncer;
+mod userop;
 
 sol!(
     contract Erc20 {
@@ -57,6 +66,18 @@ pub struct TornadoNote {
     pub spent: bool,
 }
 
+/// One unspent note, in the shape a balance readout can sum and print.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnspentNote {
+    pub asset: AssetId,
+    pub symbol: String,
+    pub decimals: u8,
+    pub token: Option<Address>,
+    pub amount_wei: U256,
+    pub pending: bool,
+    pub pool_id: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TornadoVaultError {
     #[error("database error: {0}")]
@@ -81,10 +102,41 @@ pub enum TornadoVaultError {
     UnsupportedVaultId(VaultId),
 }
 
+impl TornadoVault<PrivateKeySigner> {
+    /// A vault whose notes come from `signing_key` and whose pools sync from Saga, then the endpoint.
+    ///
+    /// # Errors
+    /// Returns an error if the chain id or the Saga client cannot be obtained.
+    pub async fn open(
+        signing_key: SigningKey,
+        db: Arc<dyn Database>,
+        endpoint: Arc<dyn NetworkEndpoint>,
+    ) -> Result<Self, TornadoVaultError> {
+        let chain_id = endpoint.network_id().await?;
+        let syncer = ChainedSyncer::tornado(chain_id, endpoint.clone())?;
+        Ok(Self::with_syncer(
+            PrivateKeySigner::from_signing_key(signing_key),
+            db,
+            endpoint,
+            DynSyncer::new(syncer),
+        ))
+    }
+}
+
 impl<S: Signer + Send + Sync> TornadoVault<S> {
     pub fn new(signer: S, db: Arc<dyn Database>, provider: Arc<dyn NetworkEndpoint>) -> Self {
         let syncer = DynSyncer::new(NetworkEndpointSyncer::new(provider.clone()));
+        Self::with_syncer(signer, db, provider, syncer)
+    }
 
+    /// `syncer` replaces the endpoint log syncer, for a chain that can read a CDN first.
+    #[must_use]
+    pub fn with_syncer(
+        signer: S,
+        db: Arc<dyn Database>,
+        provider: Arc<dyn NetworkEndpoint>,
+        syncer: DynSyncer,
+    ) -> Self {
         Self {
             trees_cache: Mutex::new(HashMap::new()),
             address: signer.address(),
@@ -144,6 +196,22 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         Ok(())
     }
 
+    /// Recovers notes in every known pool on the vault's current chain.
+    ///
+    /// Nonces are shared across pools. Scanning stops after 20 consecutive nonces with no
+    /// deposit in any pool. Returns how many unspent notes were stored.
+    pub async fn recover_chain(&self) -> Result<usize, TornadoVaultError> {
+        let chain_id = self.provider.network_id().await?;
+        let pools: Vec<Pool> = Pool::POOLS
+            .iter()
+            .filter(|pool| pool.chain_id == chain_id)
+            .cloned()
+            .collect();
+        self.recover(&pools).await?;
+        let notes = self.pool_notes(&pools).await?;
+        Ok(notes.iter().filter(|note| !note.spent).count())
+    }
+
     /// Returns the calls that deposit one new note into `pool`.
     ///
     /// ERC-20 deposits are preceded by an approval for the pool's denomination. The pool is
@@ -186,6 +254,24 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         let VaultId::Address(recipient) = to else {
             return Err(TornadoVaultError::UnsupportedVaultId(to.clone()));
         };
+        let (withdrawal, proof) = self.withdrawal_inputs(note, *recipient).await?;
+        let proven = withdrawal.prove(&proof, &mut rand::rng())?;
+        Ok(Call::new(
+            proven.target(),
+            proven.input().into(),
+            U256::ZERO,
+        ))
+    }
+
+    /// The unproven withdrawal of `note` to `recipient`, and the merkle proof it commits to.
+    ///
+    /// Syncs the pool first, so the proof is against a root still in the pool's on-chain history.
+    /// The caller proves it, which is what a paymaster user operation does for its sponsoring note.
+    pub async fn withdrawal_inputs(
+        &self,
+        note: &TornadoNote,
+        recipient: Address,
+    ) -> Result<(Withdrawal, MerkleProof), TornadoVaultError> {
         if note.spent {
             return Err(TornadoVaultError::NoteSpent(note.nonce));
         }
@@ -193,18 +279,10 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
             return Err(TornadoVaultError::NoteNotMined(note.nonce));
         };
 
-        //? Proofs must be against a root still in the pool's on-chain root history.
         self.sync(std::slice::from_ref(&note.pool)).await?;
-
         let derived = self.derive_note(note.nonce, &note.pool).await?;
         let proof = self.merkle_proof(&note.pool, leaf_index).await?;
-        let proven =
-            Withdrawal::new(&note.pool, derived, *recipient).prove(&proof, &mut rand::rng())?;
-        Ok(Call::new(
-            proven.target(),
-            proven.input().into(),
-            U256::ZERO,
-        ))
+        Ok((Withdrawal::new(&note.pool, derived, recipient), proof))
     }
 }
 
@@ -227,13 +305,7 @@ impl<S: Signer + Send + Sync> Vault for TornadoVault<S> {
         self.sync(&pools).await?;
 
         let notes = self.pool_notes(&pools).await?;
-        Ok(Balance::spendable(
-            notes
-                .iter()
-                .filter(|note| note.leaf_index.is_some() && !note.spent)
-                .map(|note| U256::from(note.pool.amount_wei))
-                .sum(),
-        ))
+        Ok(note_balance(&notes))
     }
 }
 
@@ -423,5 +495,91 @@ fn is_eq(pool: &Pool, asset: &AssetId) -> bool {
             AssetId::Erc20(asset_address),
         ) => pool_address == asset_address,
         _ => false,
+    }
+}
+
+/// Mined unspent notes are spendable. Unmined unspent notes are pending. Spent notes add nothing.
+fn note_balance(notes: &[TornadoNote]) -> Balance {
+    let mut balance = Balance::default();
+    for note in notes.iter().filter(|note| !note.spent) {
+        let amount = U256::from(note.pool.amount_wei);
+        if note.leaf_index.is_some() {
+            balance.spendable = balance.spendable.saturating_add(amount);
+        } else {
+            balance.pending = balance.pending.saturating_add(amount);
+        }
+    }
+    balance
+}
+
+/// The unspent notes, mined and still waiting to be mined.
+#[must_use]
+pub fn unspent_holdings(notes: &[TornadoNote]) -> Vec<UnspentNote> {
+    notes
+        .iter()
+        .filter(|note| !note.spent)
+        .map(|note| {
+            let (asset, token) = match &note.pool.asset {
+                Asset::Native { .. } => (AssetId::Native, None),
+                Asset::Erc20 { address, .. } => (AssetId::Erc20(*address), Some(*address)),
+            };
+            UnspentNote {
+                asset,
+                symbol: note.pool.symbol().to_string(),
+                decimals: note.pool.asset.decimals(),
+                token,
+                amount_wei: U256::from(note.pool.amount_wei),
+                pending: note.leaf_index.is_none(),
+                pool_id: note.pool.id(),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use alloy_primitives::address;
+
+    use super::*;
+
+    fn note(pool: Pool, leaf_index: Option<u32>, spent: bool) -> TornadoNote {
+        TornadoNote {
+            pool,
+            nonce: 0,
+            leaf_index,
+            spent,
+        }
+    }
+
+    #[test]
+    fn unmined_unspent_notes_are_pending_and_spent_notes_are_ignored() {
+        let notes = [
+            note(Pool::ETHEREUM_ETHER_01, Some(1), false),
+            note(Pool::ETHEREUM_ETHER_1, None, false),
+            note(Pool::ETHEREUM_ETHER_10, Some(2), true),
+        ];
+        let balance = note_balance(&notes);
+        assert_eq!(
+            balance.spendable,
+            U256::from(Pool::ETHEREUM_ETHER_01.amount_wei)
+        );
+        assert_eq!(
+            balance.pending,
+            U256::from(Pool::ETHEREUM_ETHER_1.amount_wei)
+        );
+
+        let holdings = unspent_holdings(&notes);
+        assert_eq!(holdings.len(), 2);
+        assert_eq!(holdings[0].asset, AssetId::Native);
+        assert!(!holdings[0].pending);
+        assert_eq!(holdings[0].pool_id, Pool::ETHEREUM_ETHER_01.id());
+        assert!(holdings[1].pending);
+
+        let dai_address = address!("0x6B175474E89094C44Da98b954EedeAC495271d0F");
+        let dai = unspent_holdings(&[note(Pool::ETHEREUM_DAI_100, Some(0), false)]);
+        assert_eq!(dai[0].asset, AssetId::Erc20(dai_address));
+        assert_eq!(dai[0].symbol, "dai");
+        assert_eq!(dai[0].token, Some(dai_address));
     }
 }

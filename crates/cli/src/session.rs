@@ -6,6 +6,7 @@ use std::{
 use anyhow::Context;
 use edw_core::{
     database::{Database, file::FileDatabase},
+    instance::DataDir,
     network::NetworkId,
 };
 use zeroize::Zeroizing;
@@ -55,6 +56,18 @@ impl SessionFile {
         };
         let _ = self.store(&session).await;
         Some(session)
+    }
+
+    /// The live session whose wallet instance is still in its data directory.
+    ///
+    /// A session for an instance that has been removed is deleted, so the wallet is locked.
+    pub async fn load_if_present(&self) -> Option<Session> {
+        let session = self.load().await?;
+        if DataDir::new(&session.data_dir).has_instance(session.network) {
+            return Some(session);
+        }
+        let _ = self.clear().await;
+        None
     }
 
     pub async fn store(&self, session: &Session) -> Result<(), anyhow::Error> {
@@ -146,5 +159,40 @@ mod tests {
         assert!(!sessions.clear().await.unwrap());
         assert!(sessions.load().await.is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_session_for_a_removed_instance_is_dropped() {
+        let (sessions, runtime) = isolated();
+        sessions.store(&sample(NetworkId(1))).await.unwrap();
+
+        assert!(sessions.load_if_present().await.is_none());
+        assert!(sessions.load().await.is_none());
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[tokio::test]
+    async fn a_session_for_an_existing_instance_is_kept() {
+        let (sessions, runtime) = isolated();
+        let data = std::env::temp_dir().join(format!(
+            "edw-data-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let instance = data.join("mainnet");
+        std::fs::create_dir_all(&instance).unwrap();
+        std::fs::write(instance.join("record"), b"x").unwrap();
+        let session = Session {
+            data_dir: DataDir::new(&data).path().to_path_buf(),
+            network: NetworkId(1),
+            password: Zeroizing::new("secret".into()),
+        };
+        sessions.store(&session).await.unwrap();
+
+        let loaded = sessions.load_if_present().await.unwrap();
+        assert_eq!(loaded.network, NetworkId(1));
+        assert_eq!(loaded.password.as_str(), "secret");
+        let _ = std::fs::remove_dir_all(runtime);
+        let _ = std::fs::remove_dir_all(data);
     }
 }

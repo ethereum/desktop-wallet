@@ -76,6 +76,13 @@ impl Mnemonic {
         Zeroizing::new(self.inner.to_string())
     }
 
+    /// Tornado note keychain signer at `m/44'/60'/<profileIndex>'/29795'/0/0`.
+    ///
+    /// This is one secp256k1 key. The vault derives every note from its signatures.
+    pub fn keychain_key(&self, profile_index: u32) -> Result<SigningKey, MnemonicError> {
+        self.derive(&format!("m/44'/60'/{profile_index}'/29795'/0/0"))
+    }
+
     /// Standard public-address key at `m/44'/60'/<profileIndex>'/0/<address_index>`.
     ///
     /// `profile_index` defaults to `0` when omitted (`None`).

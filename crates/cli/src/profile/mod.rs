@@ -103,6 +103,8 @@ struct ProfileListReport {
 struct NewReport {
     profile: ProfileSummary,
     new_phrase: bool,
+    /// Unspent Tornado notes recovered when the profile reuses a stored phrase.
+    tornado_notes: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -116,12 +118,16 @@ struct ImportReport {
     profile: ProfileSummary,
     addresses: Vec<ScannedAddress>,
     next_unused: Option<u32>,
+    /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed.
+    tornado_notes: Option<u32>,
 }
 
 #[derive(Serialize)]
 struct RescanReport {
     profile: ProfileSummary,
     added: Vec<ScannedAddress>,
+    /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed.
+    tornado_notes: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -170,18 +176,19 @@ impl fmt::Display for ProfileListReport {
 
 impl Report for NewReport {
     const KIND: &'static str = "edw/profile-new";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for NewReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Created profile {}.", self.profile)
+        write!(f, "Created profile {}.", self.profile)?;
+        write_tornado_count(f, self.tornado_notes)
     }
 }
 
 impl Report for ImportReport {
     const KIND: &'static str = "edw/profile-import";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for ImportReport {
@@ -198,27 +205,29 @@ impl fmt::Display for ImportReport {
         if let Some(next_unused) = self.next_unused {
             write!(f, "\nnext unused eoa index: {next_unused}")?;
         }
-        Ok(())
+        write_tornado_count(f, self.tornado_notes)
     }
 }
 
 impl Report for RescanReport {
     const KIND: &'static str = "edw/profile-rescan";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for RescanReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Rescanned profile {}.", self.profile)?;
         if self.added.is_empty() {
-            return write!(f, "\nno new addresses");
+            write!(f, "\nno new addresses")?;
+        } else {
+            let addresses: Vec<String> = self
+                .added
+                .iter()
+                .map(|added| format!("{}: {}", added.index, added.address))
+                .collect();
+            write!(f, "\nadded addresses {}", addresses.join(" "))?;
         }
-        let addresses: Vec<String> = self
-            .added
-            .iter()
-            .map(|added| format!("{}: {}", added.index, added.address))
-            .collect();
-        write!(f, "\nadded addresses {}", addresses.join(" "))
+        write_tornado_count(f, self.tornado_notes)
     }
 }
 
@@ -295,16 +304,23 @@ impl NewArgs {
         };
         // A new phrase has never been used, but another wallet may have used a stored one.
         let scan = if shared.is_some() {
-            scan(&instance, &profile, global).await
+            scan(&instance, &profile).await
         } else {
             None
         };
         instance
             .add_scanned_address_vaults(&profile, scan.as_ref())
             .await?;
+        // A brand-new phrase has no deposits to find. A stored phrase might.
+        let tornado_notes = if shared.is_some() {
+            recover_tornado(&instance, &profile).await
+        } else {
+            None
+        };
         NewReport {
             profile: ProfileSummary::from(&profile),
             new_phrase: shared.is_none(),
+            tornado_notes,
         }
         .emit(global.mode())
     }
@@ -318,7 +334,7 @@ impl ImportArgs {
         let name = prompt_profile_name(self.name.clone(), input)?;
         let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
 
-        let scan = scan(&instance, &profile, global).await;
+        let scan = scan(&instance, &profile).await;
         instance
             .add_scanned_address_vaults(&profile, scan.as_ref())
             .await?;
@@ -335,10 +351,12 @@ impl ImportArgs {
             ),
             None => (Vec::new(), None),
         };
+        let tornado_notes = recover_tornado(&instance, &profile).await;
         ImportReport {
             profile: ProfileSummary::from(&profile),
             addresses,
             next_unused,
+            tornado_notes,
         }
         .emit(global.mode())
     }
@@ -379,9 +397,10 @@ impl RescanArgs {
             choose_profile(&profiles, global.input())?
         };
 
-        let endpoint = instance.endpoint(global.rpc_url.as_deref()).await?;
+        let endpoint = instance.rpc().await?;
         let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
         let added = instance.add_missing_address_vaults(&profile, &scan).await?;
+        let tornado_notes = recover_tornado(&instance, &profile).await;
         RescanReport {
             profile: ProfileSummary::from(&profile),
             added: added
@@ -391,6 +410,7 @@ impl RescanArgs {
                     address: address.to_string(),
                 })
                 .collect(),
+            tornado_notes,
         }
         .emit(global.mode())
     }
@@ -421,7 +441,7 @@ impl RevealPhraseArgs {
 
         let input = Input::Terminal;
         let data_dir = global.data_dir();
-        let network = match SessionFile::runtime().load().await {
+        let network = match SessionFile::runtime().load_if_present().await {
             Some(session) if session.data_dir == data_dir.path() => session.network,
             _ => unlock::choose_network(&data_dir, input)?,
         };
@@ -467,14 +487,45 @@ impl RevealPhraseArgs {
     }
 }
 
+/// Recovers Tornado notes on the current chain, or warns on stderr and returns `None` when the
+/// scan fails.
+async fn recover_tornado(instance: &Instance, profile: &ProfileRecord) -> Option<u32> {
+    let recovered: Result<u32, anyhow::Error> = async {
+        let endpoint = instance.rpc().await?;
+        let phrase = crate::spend::mnemonic(instance, profile).await?;
+        let vault = crate::spend::open_vault(instance, profile, &phrase, endpoint).await?;
+        let count = vault.recover_chain().await?;
+        Ok(u32::try_from(count)?)
+    }
+    .await;
+    match recovered {
+        Ok(count) => Some(count),
+        Err(error) => {
+            eprintln!("The Tornado scan failed: {error:#}");
+            None
+        }
+    }
+}
+
+fn tornado_count_line(count: u32) -> String {
+    match count {
+        0 => "no unspent tornado notes".to_string(),
+        1 => "1 unspent tornado note".to_string(),
+        count => format!("{count} unspent tornado notes"),
+    }
+}
+
+fn write_tornado_count(f: &mut fmt::Formatter<'_>, count: Option<u32>) -> fmt::Result {
+    match count {
+        Some(count) => write!(f, "\n{}", tornado_count_line(count)),
+        None => Ok(()),
+    }
+}
+
 /// Scans `profile`'s addresses, or warns on stderr that only address 0 gets an address vault and
 /// returns `None` when the scan fails.
-async fn scan(
-    instance: &Instance,
-    profile: &ProfileRecord,
-    global: &GlobalArgs,
-) -> Option<EoaScan> {
-    let scan = match instance.endpoint(global.rpc_url.as_deref()).await {
+async fn scan(instance: &Instance, profile: &ProfileRecord) -> Option<EoaScan> {
+    let scan = match instance.rpc().await {
         Ok(endpoint) => instance.scan_profile(profile, endpoint.as_ref()).await,
         Err(error) => Err(error),
     };
@@ -549,5 +600,17 @@ pub fn choose_profile(
                 .context("name the profile as `mnemonic/profile` or by name")?;
             Ok(several[choice].clone())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tornado_count_names_how_many_notes_were_found() {
+        assert_eq!(tornado_count_line(0), "no unspent tornado notes");
+        assert_eq!(tornado_count_line(1), "1 unspent tornado note");
+        assert_eq!(tornado_count_line(3), "3 unspent tornado notes");
     }
 }

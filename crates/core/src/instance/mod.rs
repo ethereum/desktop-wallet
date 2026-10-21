@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+pub use address::FreshAddress;
 pub use data_dir::DataDir;
 
 use crate::{
@@ -23,12 +24,13 @@ use crate::{
     vault::{address::db::AddressVaultDatabaseError, db::VaultDatabaseError},
 };
 
+mod address;
 mod data_dir;
 mod networks;
 mod profiles;
 mod vaults;
 
-/// Scope holding the [`Network`] record and its endpoint configs.
+/// Scope holding the [`Network`] record and its RPC configs.
 const NETWORK_SCOPE: &[u8] = b"network";
 
 /// One opened wallet instance: the encrypted store of a single network.
@@ -57,18 +59,16 @@ pub enum InstanceError {
     Unlock(#[source] EncryptedDatabaseError),
     #[error("the {0} instance has no network record; run `edw unlock --network {0}`")]
     MissingNetwork(NetworkId),
-    #[error("endpoint name cannot be empty")]
-    EmptyEndpointName,
-    #[error("endpoint `{0}` already exists")]
-    DuplicateEndpoint(String),
-    #[error("no endpoint `{0}`")]
-    UnknownEndpoint(String),
-    #[error(
-        "no endpoint configured; add your own with `edw network endpoint add <name> --url <url>`"
-    )]
-    NoEndpoints,
-    #[error("endpoint `{name}` cannot be used for {network_id}")]
-    UnusableEndpoint {
+    #[error("RPC config name cannot be empty")]
+    EmptyRpcConfigName,
+    #[error("RPC config `{0}` already exists")]
+    DuplicateRpcConfig(String),
+    #[error("no RPC config `{0}`")]
+    UnknownRpcConfig(String),
+    #[error("no RPC config; add one with `edw network rpc-config add <name> --url <url>`")]
+    NoRpcConfigs,
+    #[error("RPC config `{name}` cannot be used for {network_id}")]
+    UnusableRpcConfig {
         name: String,
         network_id: NetworkId,
         #[source]
@@ -105,9 +105,10 @@ impl Instance {
         Ok(Self { network, store })
     }
 
-    /// Opens the instance for `network_id`, and creates an empty one on first use.
+    /// Opens the instance for `network_id`, and creates one on first use.
     ///
-    /// Records the network on first use. Never adds an endpoint: the user brings their own.
+    /// Records the network on first use. Mainnet and Sepolia also start with an active public
+    /// RPC config.
     pub async fn open_or_create(
         data_dir: &DataDir,
         network_id: NetworkId,
@@ -123,7 +124,11 @@ impl Instance {
             records.put_network(&network).await?;
             network
         };
-        Ok(Self { network, store })
+        let instance = Self { network, store };
+        if !exists {
+            instance.install_default_rpc_config().await?;
+        }
+        Ok(instance)
     }
 
     #[must_use]

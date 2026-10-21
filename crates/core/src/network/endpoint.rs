@@ -4,6 +4,7 @@ use alloy_consensus::TxEnvelope;
 use alloy_eips::eip7702::constants::EIP7702_DELEGATION_DESIGNATOR;
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{Address, Bytes, TxHash, U256};
+use alloy_provider::DynProvider;
 use alloy_rpc_types_eth::{Filter, Log, TransactionReceipt, TransactionRequest};
 use async_trait::async_trait;
 
@@ -129,6 +130,11 @@ pub trait NetworkEndpoint: Send + Sync {
             return Ok(true);
         }
         Ok(!self.balance(address).await?.is_zero())
+    }
+
+    /// Alloy provider for a user operation. Endpoints without one return `None`.
+    fn provider(&self) -> Option<DynProvider> {
+        None
     }
 }
 

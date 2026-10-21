@@ -17,8 +17,8 @@ docs/       # this specification
 ```sh
 Instance              # one unlocked network: its encrypted store, opened with the decryption password
 Network               # a chain by network id; owns its native asset. One instance per network
-NetworkEndpointConfig # a stored, named way to reach the network (http today; ipc, light clients later). One is active
-NetworkEndpoint       # what a config resolves into at runtime; must serve the network id before use
+RpcConfig             # a stored, named way to reach the network (one http URL today; several URLs, ipc, or light clients later). One is active
+NetworkEndpoint       # what an RPC config resolves into at runtime; must serve the network id before use
 Profile               # a user-named group of signers, executors and vaults at one index of a recovery phrase
 Signer                # signs for one address: seed-derived, hardware, remote
 Executor              # sends transactions for one address: EOA, EIP-7702 delegate
@@ -26,7 +26,7 @@ Vault                 # holds assets behind deposit/withdraw: EOA, stealth addre
 Database              # byte key/value store: scoped -> encrypted -> file or memory backend
 ```
 
-- `NetworkEndpoint` is a narrow trait the wallet owns, not alloy's `Provider`. Signatures may use alloy value types, never its transport machinery.
+- `NetworkEndpoint` is a narrow trait the wallet owns, not alloy's `Provider`. An `RpcConfig` resolves into one before use. Signatures may use alloy value types, never its transport machinery.
 - Vault to vault transfers withdraw straight into the target when the source supports it, else withdraw to an ephemeral address and deposit, atomically.
 
 ## Storage

@@ -2696,6 +2696,7 @@ name = "edw-cli"
 version = "0.0.1"
 dependencies = [
  "alloy-primitives",
+ "alloy-signer-local",
  "anyhow",
  "async-trait",
  "clap",
@@ -2740,6 +2741,7 @@ dependencies = [
  "kohaku-fork-kit",
  "kohaku-tornadocash",
  "kohaku-tornadocash-keychain",
+ "kohaku-userop-kit",
  "postcard",
  "rand 0.10.3",
  "reqwest 0.13.5",
@@ -3915,7 +3917,7 @@ dependencies = [
 [[package]]
 name = "kohaku-fork-kit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3928,15 +3930,26 @@ dependencies = [
 [[package]]
 name = "kohaku-merkle-tree"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
+name = "kohaku-rpc-provider"
+version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
+dependencies = [
+ "alloy",
+ "futures",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kohaku-tornadocash"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "ark-bn254",
@@ -3947,6 +3960,7 @@ dependencies = [
  "flate2",
  "hex",
  "kohaku-merkle-tree",
+ "kohaku-rpc-provider",
  "kohaku-tornadocash-circuit",
  "kohaku-userop-kit",
  "num-bigint 0.5.1",
@@ -3965,7 +3979,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-circuit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "brotli",
  "postcard",
@@ -3979,7 +3993,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-keychain"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "cfg_aliases",
@@ -3990,7 +4004,7 @@ dependencies = [
 [[package]]
 name = "kohaku-userop-kit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#1eb1d01f9b37f78490f585e0166f44b1cba439aa"
+source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
 dependencies = [
  "alloy",
  "alloy-sol-types",
@@ -5086,7 +5100,6 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "encoding_rs",
- "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -5342,9 +5355,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -6681,18 +6694,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

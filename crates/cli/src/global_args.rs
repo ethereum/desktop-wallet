@@ -9,9 +9,6 @@ use crate::{input::Input, report::Mode, session::SessionFile, unlock};
 pub struct GlobalArgs {
     #[arg(long, global = true, env = "DATA_DIR", default_value = "./.edw/")]
     data_dir: PathBuf,
-    /// Overrides the unlocked network's endpoint for this invocation.
-    #[arg(long, global = true, env = "RPC_URL")]
-    pub rpc_url: Option<String>,
     /// Never prompt, and print one JSON document on stdout. Anything a command needs must come
     /// from flags, the environment, the session, or piped stdin.
     #[arg(long, global = true, visible_alias = "porcelain")]
@@ -39,7 +36,7 @@ impl GlobalArgs {
     /// at an interactive terminal and fails anywhere else, so a script never waits on a prompt.
     pub async fn open(&self) -> anyhow::Result<Instance> {
         let data_dir = self.data_dir();
-        let session = SessionFile::runtime().load().await;
+        let session = SessionFile::runtime().load_if_present().await;
         if let Some(session) = &session
             && session.data_dir == data_dir.path()
         {

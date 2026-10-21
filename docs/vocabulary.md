@@ -49,7 +49,7 @@ Example:
 
 ## Asset
 
-Assets are configured wallet-wide and opted-in to on a per **profile** basis.
+Assets are configured wallet-wide. A profile tracks the network's defaults, can opt out of them, and can opt into more.
 Prefer 'asset' over 'token' or 'currency'.
 
 ### Metadata
@@ -73,11 +73,11 @@ This should be properly formatted to the users **locale**
 
 A **network** is a chain identified by its network id.
 
-### Endpoint
+### RPC config
 
-A **network endpoint config** is a stored, named way to reach the network: its kind (http, ipc, light clients) and per-endpoint settings. A network has any number of them and one is active.
+An **RPC config** is a stored, named way to reach the network. It can hold one URL today and more than one URL, or another kind of connection, later. A network has any number of them and one is active. Mainnet starts on `https://ethereum.publicnode.com` and Sepolia on `https://ethereum-sepolia-rpc.publicnode.com`, both named `publicnode`.
 
-A **network endpoint** is what an endpoint config resolves into at runtime: essentially a DynProvider.
+A config resolves at runtime into a connection that must serve that network.
 
 ## Flashcall
 

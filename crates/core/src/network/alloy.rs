@@ -6,7 +6,10 @@ use alloy_transport::TransportError;
 use async_trait::async_trait;
 use reqwest::Url;
 
-use super::endpoint::{FeeEstimate, NetworkEndpoint, NetworkEndpointError};
+use super::{
+    endpoint::{FeeEstimate, NetworkEndpoint, NetworkEndpointError},
+    http::outbound_http,
+};
 
 #[derive(Debug, Clone)]
 pub struct SimpleNetworkEndpoint {
@@ -66,6 +69,10 @@ impl NetworkEndpoint for SimpleNetworkEndpoint {
     ) -> Result<Option<TransactionReceipt>, NetworkEndpointError> {
         Ok(self.provider.get_transaction_receipt(tx).await?)
     }
+
+    fn provider(&self) -> Option<DynProvider> {
+        Some(self.provider.clone())
+    }
 }
 
 impl SimpleNetworkEndpoint {
@@ -74,9 +81,17 @@ impl SimpleNetworkEndpoint {
         Self { provider }
     }
 
-    #[must_use]
-    pub fn new_http(url: Url) -> Self {
-        Self::from(ProviderBuilder::new().connect_http(url).erased())
+    /// Connects with the shared [`outbound_http`] client.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client cannot be built.
+    pub fn new_http(url: Url) -> Result<Self, NetworkEndpointError> {
+        let client = outbound_http()
+            .build()
+            .map_err(|error| NetworkEndpointError::Backend(Box::new(error)))?;
+        Ok(Self::from(
+            ProviderBuilder::new().connect_reqwest(client, url).erased(),
+        ))
     }
 }
 

@@ -1,4 +1,4 @@
-use super::{Network, NetworkEndpointConfig};
+use super::{Network, RpcConfig};
 use crate::database::{Database, DatabaseError};
 
 #[async_trait::async_trait]
@@ -15,33 +15,28 @@ pub trait NetworkDb: Database {
         Ok(())
     }
 
-    async fn get_endpoint_configs(
-        &self,
-    ) -> Result<Vec<NetworkEndpointConfig>, NetworkDatabaseError> {
-        let Some(bytes) = self.get(b"endpointConfigs").await? else {
+    async fn get_rpc_configs(&self) -> Result<Vec<RpcConfig>, NetworkDatabaseError> {
+        let Some(bytes) = self.get(b"rpcConfigs").await? else {
             return Ok(vec![]);
         };
         Ok(postcard::from_bytes(&bytes)?)
     }
 
-    async fn put_endpoint_configs(
-        &self,
-        configs: &[NetworkEndpointConfig],
-    ) -> Result<(), NetworkDatabaseError> {
-        self.put(b"endpointConfigs", &postcard::to_stdvec(configs)?)
+    async fn put_rpc_configs(&self, configs: &[RpcConfig]) -> Result<(), NetworkDatabaseError> {
+        self.put(b"rpcConfigs", &postcard::to_stdvec(configs)?)
             .await?;
         Ok(())
     }
 
-    async fn get_active_endpoint(&self) -> Result<Option<String>, NetworkDatabaseError> {
-        let Some(bytes) = self.get(b"activeEndpoint").await? else {
+    async fn get_active_rpc_config(&self) -> Result<Option<String>, NetworkDatabaseError> {
+        let Some(bytes) = self.get(b"activeRpcConfig").await? else {
             return Ok(None);
         };
         Ok(Some(postcard::from_bytes(&bytes)?))
     }
 
-    async fn put_active_endpoint(&self, name: &str) -> Result<(), NetworkDatabaseError> {
-        self.put(b"activeEndpoint", &postcard::to_stdvec(&name)?)
+    async fn put_active_rpc_config(&self, name: &str) -> Result<(), NetworkDatabaseError> {
+        self.put(b"activeRpcConfig", &postcard::to_stdvec(&name)?)
             .await?;
         Ok(())
     }
