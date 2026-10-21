@@ -14,12 +14,11 @@ use kohaku_userop_kit::{
     user_operation::UserOperationHash,
 };
 
+use super::{TornadoVault, TornadoVaultError, format_eth};
 use crate::{
     bundler::BundlerList,
     vault::{VaultId, tornadocash::TornadoNote},
 };
-
-use super::{TornadoVault, TornadoVaultError, format_eth};
 
 const FEE_ATTEMPTS: usize = 3;
 

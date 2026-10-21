@@ -1,10 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::{Address, U256};
-use alloy_signer::Signer;
-use alloy_signer::k256::ecdsa::SigningKey;
+use alloy_signer::{Signer, k256::ecdsa::SigningKey};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
+pub use amount::{
+    AmountError, cover_notes, deposit_pools, exact_notes, format_eth, parse_eth, parse_wei,
+};
 use kohaku_tornadocash::{
     Asset, Deposit, Note, Pool, Withdrawal, WithdrawalError,
     merkle_tree::{MerkleProof, MerkleTree, MerkleTreeExt},
@@ -12,6 +14,9 @@ use kohaku_tornadocash::{
 };
 use kohaku_tornadocash_keychain::{Keychain, KeychainError, recover};
 use tokio::sync::Mutex;
+pub use userop::{
+    PaymasterWithdrawal, PaymasterWithdrawalRequest, UserOpError, submit_paymaster_withdrawal,
+};
 
 use crate::{
     asset::AssetId,
@@ -25,12 +30,6 @@ use crate::{
             syncer::{ChainedSyncer, NetworkEndpointSyncer},
         },
     },
-};
-pub use amount::{
-    AmountError, cover_notes, deposit_pools, exact_notes, format_eth, parse_eth, parse_wei,
-};
-pub use userop::{
-    PaymasterWithdrawal, PaymasterWithdrawalRequest, UserOpError, submit_paymaster_withdrawal,
 };
 
 mod amount;
