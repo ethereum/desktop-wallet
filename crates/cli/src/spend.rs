@@ -25,6 +25,7 @@ pub struct Account {
     pub index: u32,
     pub address: Address,
     pub signer: Arc<dyn Signer>,
+    pub key: PrivateKeySigner,
 }
 
 pub struct ShieldedWithdrawal<'a> {
@@ -78,11 +79,13 @@ pub fn account_at(
     index: u32,
 ) -> Result<Account, anyhow::Error> {
     let key = mnemonic.standard_address_key(index, profile_index)?;
-    let signer = SimpleSigner::from_key(key);
+    let signer = SimpleSigner::from_key(key.clone());
+    let key = PrivateKeySigner::from_signing_key(key);
     Ok(Account {
         index,
         address: signer.address(),
         signer: Arc::new(signer),
+        key,
     })
 }
 
