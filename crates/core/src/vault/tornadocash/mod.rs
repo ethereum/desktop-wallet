@@ -85,7 +85,7 @@ pub struct UnspentNote {
 pub enum TornadoVaultError {
     #[error(transparent)]
     Amount(#[from] AmountError),
-    #[error("Extended pool {0} is disabled")]
+    #[error("extended pool {0} is disabled")]
     ExtendedDisabled(String),
     #[error("database error: {0}")]
     Database(#[from] db::TornadoVaultDbError),

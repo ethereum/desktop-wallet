@@ -96,7 +96,7 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
                 "{} ETH{}",
                 format_eth(U256::from(pool.amount_wei)),
                 if pool.is_extended() {
-                    " (Extended)"
+                    " (extended)"
                 } else {
                     ""
                 }

@@ -222,19 +222,14 @@ pub async fn submit_shielded(
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod extended_tests {
-    use edw_core::vault::tornadocash::PoolSelection;
-
     use super::*;
 
     #[test]
     fn mixed_notes_choose_an_available_paymaster() {
         // Build pools through the public amount API so CLI tests need no direct kohaku dependency.
-        let pools = edw_core::vault::tornadocash::deposit_pools_with_selection(
-            parse_eth("3.1").expect("amount"),
-            1,
-            PoolSelection::IncludeExtended,
-        )
-        .expect("pools");
+        let pools =
+            edw_core::vault::tornadocash::deposit_pools(parse_eth("3.1").expect("amount"), 1)
+                .expect("pools");
         let mut notes: Vec<_> = pools
             .into_iter()
             .enumerate()

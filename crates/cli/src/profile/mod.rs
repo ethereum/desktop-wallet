@@ -36,7 +36,7 @@ pub struct ListArgs {}
 #[derive(Args, Debug)]
 #[command(group = ArgGroup::new("phrase").args(["new_phrase", "phrase_of"]))]
 pub struct NewArgs {
-    /// Use only canonical Tornado pools for this profile, excluding Extended pools.
+    /// Exclude extended Tornado pools for this profile.
     #[arg(long)]
     no_extended_pools: bool,
     #[arg(long)]
@@ -57,7 +57,7 @@ pub struct NewArgs {
 
 #[derive(Args, Debug)]
 pub struct ImportArgs {
-    /// Use only canonical Tornado pools for this profile, excluding Extended pools.
+    /// Exclude extended Tornado pools for this profile.
     #[arg(long)]
     no_extended_pools: bool,
     #[arg(long)]
@@ -315,9 +315,11 @@ impl NewArgs {
             }
             profile
         };
-        instance
-            .set_profile_use_extended_pools(&profile, !self.no_extended_pools)
-            .await?;
+        if self.no_extended_pools {
+            instance
+                .set_profile_use_extended_pools(&profile, false)
+                .await?;
+        }
         // A new phrase has never been used, but another wallet may have used a stored one.
         let scan = if shared.is_some() {
             scan(&instance, &profile).await
@@ -349,9 +351,11 @@ impl ImportArgs {
         let phrase = self.phrase(input)?;
         let name = prompt_profile_name(self.name.clone(), input)?;
         let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
-        instance
-            .set_profile_use_extended_pools(&profile, !self.no_extended_pools)
-            .await?;
+        if self.no_extended_pools {
+            instance
+                .set_profile_use_extended_pools(&profile, false)
+                .await?;
+        }
 
         let scan = scan(&instance, &profile).await;
         instance

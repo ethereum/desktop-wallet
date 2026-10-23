@@ -33,7 +33,7 @@ edw transfer --from <index|address|tornado> --to <address> --amount <eth> [--pro
 
 `shield`, `unshield`, and `transfer` move native ETH. At a terminal they ask for anything left off the command line, then wait for an explicit yes before broadcasting. `--non-interactive` asks for nothing: a missing required field is an error, and invoking the command is the authorization. Piped stdin supplies the missing fields and skips the confirmation.
 
-`shield` and `unshield` take the amount as `--amount-formatted` (decimal ETH, such as `1.1`) or `--amount-raw` (integer wei). Neither flag is required: a terminal prompts for decimal ETH, and piped stdin supplies that same line. Profiles use all known native ETH pools by default, including Extended pools. An explicitly opted-out profile uses canonical pools only. Classic denominations are mainnet `0.1`, `1`, `10`, `100` ETH and Sepolia `0.1`, `1`, `10` ETH. Extended denominations on both chains are `0.01`, `0.03`, `0.3`, `3`, `30` ETH. Amounts must be exact sums of these denominations; `1.15` ETH is supported, while `1` wei is rejected. Shielding uses the fewest notes (for example, `33.34` ETH becomes `30 + 3 + 0.3 + 0.03 + 0.01`). Unshield also requires the profile to hold unspent notes that sum to that amount.
+`shield` and `unshield` take the amount as `--amount-formatted` (decimal ETH, such as `1.1`) or `--amount-raw` (integer wei). Neither flag is required: a terminal prompts for decimal ETH, and piped stdin supplies that same line. Profiles use all known native ETH pools by default, including extended pools. An explicitly opted-out profile uses canonical pools only. Classic denominations are mainnet `0.1`, `1`, `10`, `100` ETH and Sepolia `0.1`, `1`, `10` ETH. The extended denominations on both chains are `0.01`, `0.03`, `0.3`, `3`, `30` ETH. Amounts must be exact sums of these denominations; `1.15` ETH is supported, while `1` wei is rejected. Shielding uses the fewest notes (for example, `33.34` ETH becomes `30 + 3 + 0.3 + 0.03 + 0.01`). Unshield also requires the profile to hold unspent notes that sum to that amount.
 
 `unshield` without `--gas-payer` and `transfer --from tornado` submit one ERC-4337 user operation from the next fresh address. The largest selected note with paymaster support pays gas through the Tornado paymaster. That note's remainder, and every other note, land on the fresh address. Without `--to`, `unshield` leaves the remainder there. `unshield --to` and `transfer --from tornado` add a final call that forwards the remainder after the sponsor fee. A tornado transfer whose notes cannot cover `--amount` after that fee is an error. A selection with no paymaster-capable note is an error in this mode; use `unshield --gas-payer INDEX` for externally paid gas. Mainnet and Sepolia try `https://public.pimlico.io/v2/{chainId}/rpc`. `EDW_BUNDLER_URLS`, a comma-separated list, replaces that default. A failed estimate or send tries the next URL. The receipt is read from the bundler that accepted the operation. A `shield` of one note stays an ordinary transaction from the paying account. A `shield` of several notes is one user operation from that account, sent to the same bundler. The operation installs the EIP-7702 delegation when the account does not already have it, and the account pays gas from its own ETH. Any other batch of calls from an EOA uses that same user operation. A transfer from an index or address stays an ordinary transaction.
 
@@ -48,22 +48,22 @@ Pool sync tries the Saga CDN (`https://saga.gordosoluciones.xyz`, or `EDW_SAGA_U
 --data-dir # runs with the specified data directory
 ```
 
-### Extended Tornado pools
+### Tornado pools
 
-All pools are enabled by default, including for existing profiles without a saved preference. To create or import a canonical-only profile, explicitly opt out at creation:
+`edw profile new` and `edw profile import` include all pools by default. No pool flags are needed. To exclude extended pools, use the single opt-out flag at creation:
 
 ```sh
-edw profile new --name canonical --no-extended-pools
-edw profile import --name canonical --phrase-file /path/to/phrase --no-extended-pools
+edw profile new --no-extended-pools
+edw profile import --no-extended-pools --phrase-file /path/to/phrase
 ```
 
-The preference is saved per profile in the current network instance. Profiles on the same recovery phrase can choose independently. Profile listings label opted-out profiles `canonical pools only`; JSON profile summaries expose `use_extended_pools`. There is no per-operation override. The configured vault applies the preference consistently to recovery, balances, syncing, deposit packing and automatic note selection. SDK consumers configure `PoolSet` once; individual wallet commands ask the configured vault to plan deposits or select notes.
+Only an explicit opt-out saves a preference for the profile in the current network instance. Profiles on the same recovery phrase can choose independently. Profile listings label opted-out profiles `canonical pools only`; JSON profile summaries expose `use_extended_pools`. There is no per-operation override. The profile preference applies to recovery, balances, syncing, deposit packing and note selection.
 
-Canonical-only profiles exclude Extended pools from their active view without deleting stored notes or sync cursors. SDK-level preference changes take effect when reopening the vault; there is currently no CLI command to change an existing profile's preference. Canonical membership follows the SDK catalog: a future promotion makes that pool available to canonical-only profiles without changing its identity. This classification is not an anonymity score.
+Canonical-only profiles exclude extended pools from their active view without deleting stored notes or sync cursors. SDK-level preference changes take effect when reopening the vault; there is currently no CLI command to change an existing profile's preference. Canonical membership follows the SDK catalog: a future promotion makes that pool available to canonical-only profiles without changing its identity. This classification is not an anonymity score.
 
 If Saga has no stream for a pool, the wallet reads its events from the configured RPC starting at its deployment block. Pending and spent notes are excluded from withdrawal selection; exact withdrawals minimize note count, and transfers minimize count then excess value.
 
-The new pools have no configured privacy paymaster. A mixed withdrawal can use a selected classic note with paymaster support as its sponsor. To spend Extended-only holdings, pay gas from a funded standard account:
+The new pools have no configured privacy paymaster. A mixed withdrawal can use a selected classic note with paymaster support as its sponsor. To spend extended-only holdings, pay gas from a funded standard account:
 
 ```sh
 edw unshield --amount-formatted 0.03 --gas-payer 0 --to 0xYourRecipient --profile my-profile

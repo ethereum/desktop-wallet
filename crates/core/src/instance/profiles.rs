@@ -23,19 +23,15 @@ impl Instance {
         InstanceError,
     > {
         use crate::vault::tornadocash::{PoolSelection, TornadoVault};
-        let selection = if self.profile_use_extended_pools(profile).await? {
-            PoolSelection::IncludeExtended
+        let vault = TornadoVault::open(key, self.tornado_database(profile), endpoint).await?;
+        if self.profile_use_extended_pools(profile).await? {
+            Ok(vault)
         } else {
-            PoolSelection::Classic
-        };
-        Ok(
-            TornadoVault::open(key, self.tornado_database(profile), endpoint)
-                .await?
-                .with_pool_selection(selection),
-        )
+            Ok(vault.with_pool_selection(PoolSelection::Classic))
+        }
     }
 
-    /// The profile's Tornado pool policy. Existing profiles default to Extended enabled.
+    /// The profile's Tornado pool policy. Profiles include extended pools unless explicitly opted out.
     pub async fn profile_use_extended_pools(
         &self,
         profile: &ProfileRecord,
@@ -293,11 +289,14 @@ mod tests {
             .await
             .unwrap();
         let amount = U256::from(3 * 10_u128.pow(16));
-        for enabled in [true, false, true] {
-            instance
-                .set_profile_use_extended_pools(&profile, enabled)
-                .await
-                .unwrap();
+        // The first open has no saved preference and must use all pools by default.
+        for preference in [None, Some(false), Some(true)] {
+            if let Some(enabled) = preference {
+                instance
+                    .set_profile_use_extended_pools(&profile, enabled)
+                    .await
+                    .unwrap();
+            }
             let mock = Asserter::new();
             mock.push_success(&U64::from(1)); // Open vault.
             mock.push_success(&U64::from(1)); // Plan deposits.
@@ -312,7 +311,7 @@ mod tests {
                 .await
                 .unwrap();
             let plan = vault.deposit_pools(amount).await;
-            assert_eq!(plan.is_ok(), enabled);
+            assert_eq!(plan.is_ok(), preference.unwrap_or(true));
         }
     }
 

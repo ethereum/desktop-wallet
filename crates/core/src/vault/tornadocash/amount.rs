@@ -234,25 +234,17 @@ mod tests {
     }
 
     #[test]
-    fn extended_packing_is_opt_in_and_minimal_on_both_chains() {
+    fn default_packing_includes_extended_and_is_minimal_on_both_chains() {
         for chain in [1, 11_155_111] {
             let amount = parse_eth("33.34").expect("amount");
             assert!(deposit_pools_with_selection(amount, chain, PoolSelection::Classic).is_err());
-            let pools = deposit_pools_with_selection(amount, chain, PoolSelection::IncludeExtended)
-                .expect("extended pack");
+            let pools = deposit_pools(amount, chain).expect("default pack");
             assert_eq!(
                 pools.iter().map(Pool::amount).collect::<Vec<_>>(),
                 ["30", "3", "0.3", "0.03", "0.01"]
             );
             assert!(pools.iter().all(Pool::is_extended));
-            assert!(
-                deposit_pools_with_selection(
-                    amount + U256::from(1),
-                    chain,
-                    PoolSelection::IncludeExtended
-                )
-                .is_err()
-            );
+            assert!(deposit_pools(amount + U256::from(1), chain).is_err());
         }
     }
 
