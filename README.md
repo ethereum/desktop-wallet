@@ -6,7 +6,7 @@
 
 ## Development
 
-The wallet currently uses the sibling `../kohaku-rs` checkout for its Kohaku dependencies, including the Extended pool catalog. Keep these repositories beside one another while developing this coordinated change. A standalone release should replace those path dependencies with a Git revision after the Kohaku changes have been published.
+Kohaku dependencies are pinned to a published Git revision in `crates/Cargo.toml` and `crates/Cargo.lock`, including the Extended pool catalog. Builds do not require a sibling Kohaku checkout.
 
 To setup dev environment:
 

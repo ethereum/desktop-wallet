@@ -222,8 +222,9 @@ pub async fn submit_shielded(
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod extended_tests {
-    use super::*;
     use edw_core::vault::tornadocash::PoolSelection;
+
+    use super::*;
 
     #[test]
     fn mixed_notes_choose_an_available_paymaster() {

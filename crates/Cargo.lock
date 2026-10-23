@@ -3917,6 +3917,7 @@ dependencies = [
 [[package]]
 name = "kohaku-fork-kit"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3929,6 +3930,7 @@ dependencies = [
 [[package]]
 name = "kohaku-merkle-tree"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -3936,6 +3938,7 @@ dependencies = [
 [[package]]
 name = "kohaku-rpc-provider"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
 dependencies = [
  "alloy",
  "futures",
@@ -3946,6 +3949,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
 dependencies = [
  "alloy",
  "ark-bn254",
@@ -3975,6 +3979,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-circuit"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
 dependencies = [
  "brotli",
  "postcard",
@@ -3988,6 +3993,7 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-keychain"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
 dependencies = [
  "alloy",
  "cfg_aliases",
@@ -3998,6 +4004,7 @@ dependencies = [
 [[package]]
 name = "kohaku-userop-kit"
 version = "0.1.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
 dependencies = [
  "alloy",
  "alloy-sol-types",

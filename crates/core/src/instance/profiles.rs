@@ -283,9 +283,10 @@ mod tests {
 
     #[tokio::test]
     async fn opening_a_profile_applies_saved_policy_to_deposit_planning() {
-        use crate::test_support::mocked_provider;
         use alloy_primitives::{U64, U256};
         use alloy_transport::mock::Asserter;
+
+        use crate::test_support::mocked_provider;
         let instance = Instance::in_memory(NetworkId(1));
         let (_, profile) = instance
             .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, None)
