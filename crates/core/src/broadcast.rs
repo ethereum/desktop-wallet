@@ -17,7 +17,7 @@ use kohaku_userop_kit::{
 };
 
 use crate::{
-    bundler::{BundlerList, BundlerListError, bundler_urls},
+    bundler::{BundlerList, BundlerListError, Url},
     call::Call,
     delegate::simple::{SIMPLE_DELEGATE_ADDRESS, SimpleDelegate},
     network::endpoint::NetworkEndpointError,
@@ -195,6 +195,7 @@ async fn wait_mined(endpoint: &dyn NetworkEndpoint, tx: TxHash) -> Result<(), Br
 ///
 /// The account pays gas from its own balance. The operation carries an EIP-7702 authorization
 /// for the Simple7702 account when that delegation is not already installed.
+/// `bundler_urls` are tried in order; pass the wallet's configured bundler URLs.
 ///
 /// # Errors
 /// Returns an error when `calls` is empty, the endpoint has no provider, no bundler is
@@ -203,6 +204,7 @@ pub async fn submit_user_operation(
     endpoint: &dyn NetworkEndpoint,
     signer: &PrivateKeySigner,
     calls: &[Call],
+    bundler_urls: &[Url],
 ) -> Result<SubmittedUserOperation, BroadcastError> {
     if calls.is_empty() {
         return Err(BroadcastError::EmptyUserOperation);
@@ -229,7 +231,7 @@ pub async fn submit_user_operation(
     if already_delegated(endpoint, owner, &operation.user_op).await? {
         operation.user_op.authorization = UserOpAuthorization::None;
     }
-    let bundlers = BundlerList::from_urls(chain_id, &bundler_urls(chain_id)?)?;
+    let bundlers = BundlerList::from_urls(chain_id, bundler_urls)?;
     let gas = bundlers.estimate_gas(&operation, None).await?;
     apply_gas(&mut operation.user_op, gas);
     let signed_operation = operation
