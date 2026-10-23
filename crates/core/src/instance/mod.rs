@@ -42,6 +42,8 @@ pub struct Instance {
 #[derive(Debug, thiserror::Error)]
 pub enum InstanceError {
     #[error(transparent)]
+    Tornado(#[from] crate::vault::tornadocash::TornadoVaultError),
+    #[error(transparent)]
     AddressVaultDatabase(#[from] AddressVaultDatabaseError),
     #[error(transparent)]
     Asset(#[from] AssetError),

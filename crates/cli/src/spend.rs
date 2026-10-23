@@ -111,7 +111,7 @@ pub async fn open_vault(
     endpoint: Arc<dyn NetworkEndpoint>,
 ) -> Result<TornadoVault<alloy_signer_local::PrivateKeySigner>, anyhow::Error> {
     let key = mnemonic.keychain_key(profile.profile_index)?;
-    Ok(TornadoVault::open(key, instance.tornado_database(profile), endpoint).await?)
+    Ok(instance.open_tornado_vault(profile, key, endpoint).await?)
 }
 
 /// `--amount-formatted` as decimal ETH, `--amount-raw` as wei, or a prompted ETH amount.
@@ -176,14 +176,10 @@ pub fn note_eth(note: &TornadoNote) -> String {
     format_eth(U256::from(note.pool.amount_wei))
 }
 
-pub fn ensure_paymaster(notes: &[TornadoNote]) -> Result<(), anyhow::Error> {
-    let sponsor = notes.first().context("no notes to withdraw")?;
-    if sponsor.pool.paymaster.is_none() {
-        anyhow::bail!(
-            "the {} ETH pool has no paymaster, so this withdrawal cannot be bundled",
-            note_eth(sponsor)
-        );
-    }
+pub fn ensure_paymaster(notes: &mut [TornadoNote]) -> Result<(), anyhow::Error> {
+    let index = notes.iter().position(|note| note.pool.paymaster.is_some())
+        .context("no selected note has a paymaster; use `edw unshield --gas-payer <address-index>` to pay gas from a standard account")?;
+    notes.swap(0, index);
     Ok(())
 }
 
@@ -221,4 +217,33 @@ pub async fn submit_shielded(
         bundlers,
     })
     .await?)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod extended_tests {
+    use super::*;
+
+    #[test]
+    fn mixed_notes_choose_an_available_paymaster() {
+        // Build pools through the public amount API so CLI tests need no direct kohaku dependency.
+        let pools =
+            edw_core::vault::tornadocash::deposit_pools(parse_eth("3.1").expect("amount"), 1)
+                .expect("pools");
+        let mut notes: Vec<_> = pools
+            .into_iter()
+            .enumerate()
+            .map(|(i, pool)| TornadoNote {
+                pool,
+                nonce: i as u64,
+                leaf_index: Some(0),
+                spent: false,
+            })
+            .collect();
+        assert!(notes[0].pool.paymaster.is_none());
+        ensure_paymaster(&mut notes).expect("classic sponsor");
+        assert!(notes[0].pool.paymaster.is_some());
+        assert_eq!(notes.len(), 2);
+        assert!(ensure_paymaster(&mut notes[1..]).is_err());
+    }
 }

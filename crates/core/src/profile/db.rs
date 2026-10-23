@@ -5,6 +5,20 @@ use crate::database::{Database, DatabaseError};
 
 #[async_trait::async_trait]
 pub trait ProfileDb: Database {
+    /// Missing preferences (including existing profiles) use the wallet default: enabled.
+    async fn use_extended_pools(&self) -> Result<bool, ProfileDatabaseError> {
+        let Some(bytes) = self.get(b"useExtendedPools").await? else {
+            return Ok(true);
+        };
+        Ok(postcard::from_bytes(&bytes)?)
+    }
+
+    async fn put_use_extended_pools(&self, enabled: bool) -> Result<(), ProfileDatabaseError> {
+        self.put(b"useExtendedPools", &postcard::to_stdvec(&enabled)?)
+            .await?;
+        Ok(())
+    }
+
     async fn get_pointer(&self) -> Result<Option<(u32, u32)>, ProfileDatabaseError> {
         let Some(bytes) = self.get(b"pointer").await? else {
             return Ok(None);

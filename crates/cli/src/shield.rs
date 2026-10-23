@@ -3,10 +3,8 @@ use std::fmt;
 use alloy_primitives::{Address, U256};
 use clap::{ArgGroup, Args};
 use edw_core::{
-    broadcast::submit_user_operation,
-    call::Call,
-    network::NetworkEndpoint,
-    vault::tornadocash::{deposit_pools, format_eth},
+    broadcast::submit_user_operation, call::Call, network::NetworkEndpoint,
+    vault::tornadocash::format_eth,
 };
 use serde::Serialize;
 
@@ -89,11 +87,21 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     let phrase = mnemonic(&instance, &profile).await?;
     let payer = account_at(&phrase, profile.profile_index, from)?;
     let endpoint = instance.rpc().await?;
-    let chain_id = endpoint.network_id().await?;
-    let pools = deposit_pools(amount, chain_id)?;
+    let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
+    let pools = vault.deposit_pools(amount).await?;
     let notes: Vec<String> = pools
         .iter()
-        .map(|pool| format!("{} ETH", format_eth(U256::from(pool.amount_wei))))
+        .map(|pool| {
+            format!(
+                "{} ETH{}",
+                format_eth(U256::from(pool.amount_wei)),
+                if pool.is_extended() {
+                    " (extended)"
+                } else {
+                    ""
+                }
+            )
+        })
         .collect();
     let summary = confirmation(amount, &notes, from, payer.address, pools.len() > 1);
     if !confirm(input, &summary)? {
@@ -110,7 +118,6 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
             format_eth(total)
         );
     }
-    let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
     let mut calls = Vec::new();
     for pool in &pools {
         calls.extend(vault.deposit(pool).await?);

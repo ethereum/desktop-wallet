@@ -2,7 +2,7 @@ use alloy_primitives::{
     U256,
     utils::{format_units, parse_units},
 };
-use kohaku_tornadocash::{Asset, Pool};
+use kohaku_tornadocash::{Asset, Pool, PoolPackingError, PoolSelection, PoolSet};
 
 use crate::vault::tornadocash::TornadoNote;
 
@@ -22,33 +22,38 @@ pub enum AmountError {
     Parse(String),
 }
 
+impl From<PoolPackingError> for AmountError {
+    fn from(error: PoolPackingError) -> Self {
+        match error {
+            PoolPackingError::Zero => Self::Zero,
+            PoolPackingError::NoNativePools { chain_id } => Self::NoNativePools { chain_id },
+            PoolPackingError::NotADenominationSum { amount, chain_id } => {
+                Self::NotADenominationSum { amount, chain_id }
+            }
+        }
+    }
+}
+
 /// Splits `amount` into native ETH pool deposits, largest denomination first.
 ///
 /// # Errors
 /// Returns an error when `amount` is zero, the chain has no native pools, or `amount` is not a
 /// sum of those denominations.
 pub fn deposit_pools(amount: U256, chain_id: u64) -> Result<Vec<Pool>, AmountError> {
-    if amount.is_zero() {
-        return Err(AmountError::Zero);
-    }
-    let pools = native_pools(chain_id);
-    if pools.is_empty() {
-        return Err(AmountError::NoNativePools { chain_id });
-    }
-    let mut remaining = amount;
-    let mut chosen = Vec::new();
-    for pool in &pools {
-        let denom = U256::from(pool.amount_wei);
-        let count = u64_from(remaining / denom);
-        for _ in 0..count {
-            chosen.push(pool.clone());
-        }
-        remaining -= denom * U256::from(count);
-    }
-    if !remaining.is_zero() {
-        return Err(AmountError::NotADenominationSum { amount, chain_id });
-    }
-    Ok(chosen)
+    deposit_pools_with_selection(amount, chain_id, PoolSelection::default())
+}
+
+/// Packs an amount using the enabled pool families, with the fewest deposits.
+/// The catalog's native denominations form the canonical 1/3/10 decimal coin system.
+pub fn deposit_pools_with_selection(
+    amount: U256,
+    chain_id: u64,
+    selection: PoolSelection,
+) -> Result<Vec<Pool>, AmountError> {
+    PoolSet::new(chain_id)
+        .with_selection(selection)
+        .deposit_pools(amount)
+        .map_err(Into::into)
 }
 
 /// Notes whose denominations sum to `amount`, largest first.
@@ -61,31 +66,14 @@ pub fn exact_notes(amount: U256, notes: &[TornadoNote]) -> Result<Vec<TornadoNot
     if amount.is_zero() {
         return Err(AmountError::Zero);
     }
-    let mut available = eligible(notes);
-    let denoms = denominations(&available);
-    let mut remaining = amount;
-    let mut chosen = Vec::new();
-    for denom in denoms {
-        let unit = U256::from(denom);
-        let want = u64_from(remaining / unit);
-        let taken = take(
-            &mut available,
-            denom,
-            usize::try_from(want).unwrap_or(usize::MAX),
-        );
-        remaining -= unit * U256::from(taken.len() as u64);
-        chosen.extend(taken);
-    }
-    if !remaining.is_zero() {
-        return Err(AmountError::CannotMake { amount });
-    }
-    Ok(chosen)
+    let available = eligible(notes);
+    let mut best = None;
+    select_notes(&available, 0, amount, false, &mut Vec::new(), &mut best);
+    best.ok_or(AmountError::CannotMake { amount })
 }
 
-/// The smallest largest-first set of notes whose value is at least `amount`.
-///
-/// Whole denominations are taken largest first. A remainder takes the smallest held note that
-/// covers it.
+/// The fewest notes covering `amount`, preferring the least excess value on ties.
+/// Returns the chosen notes largest first.
 ///
 /// # Errors
 /// Returns an error when the held notes sum to less than `amount`.
@@ -93,29 +81,10 @@ pub fn cover_notes(amount: U256, notes: &[TornadoNote]) -> Result<Vec<TornadoNot
     if amount.is_zero() {
         return Err(AmountError::Zero);
     }
-    let mut available = eligible(notes);
-    let denoms = denominations(&available);
-    let mut remaining = amount;
-    let mut chosen = Vec::new();
-    for denom in denoms {
-        let unit = U256::from(denom);
-        let want = usize::try_from(u64_from(remaining / unit)).unwrap_or(usize::MAX);
-        let taken = take(&mut available, denom, want);
-        remaining -= unit * U256::from(taken.len() as u64);
-        chosen.extend(taken);
-    }
-    if remaining.is_zero() {
-        return Ok(chosen);
-    }
-    available.sort_by_key(|note| note.pool.amount_wei);
-    let Some(extra) = available
-        .into_iter()
-        .find(|note| U256::from(note.pool.amount_wei) >= remaining)
-    else {
-        return Err(AmountError::CannotCover { amount });
-    };
-    chosen.push(extra);
-    Ok(chosen)
+    let available = eligible(notes);
+    let mut best = None;
+    select_notes(&available, 0, amount, true, &mut Vec::new(), &mut best);
+    best.ok_or(AmountError::CannotCover { amount })
 }
 
 /// Parses a decimal ETH amount into wei.
@@ -155,10 +124,11 @@ pub fn format_eth(amount: U256) -> String {
     }
 }
 
-fn native_pools(chain_id: u64) -> Vec<Pool> {
+#[cfg(test)]
+fn native_pools(chain_id: u64, selection: PoolSelection) -> Vec<Pool> {
     let mut pools: Vec<Pool> = Pool::POOLS
         .iter()
-        .filter(|pool| pool.chain_id == chain_id && is_native_eth(pool))
+        .filter(|pool| pool.chain_id == chain_id && selection.includes(pool) && is_native_eth(pool))
         .cloned()
         .collect();
     pools.sort_by_key(|pool| std::cmp::Reverse(pool.amount_wei));
@@ -175,25 +145,75 @@ fn eligible(notes: &[TornadoNote]) -> Vec<TornadoNote> {
     notes
 }
 
-fn denominations(notes: &[TornadoNote]) -> Vec<u128> {
-    let mut denoms: Vec<u128> = notes.iter().map(|note| note.pool.amount_wei).collect();
-    denoms.sort_unstable();
-    denoms.dedup();
-    denoms.reverse();
-    denoms
+fn select_notes(
+    notes: &[TornadoNote],
+    start: usize,
+    remaining: U256,
+    cover: bool,
+    chosen: &mut Vec<TornadoNote>,
+    best: &mut Option<Vec<TornadoNote>>,
+) {
+    if remaining.is_zero() {
+        if best.as_ref().is_none_or(|best| {
+            chosen.len() < best.len()
+                || (chosen.len() == best.len() && note_sum(chosen) < note_sum(best))
+        }) {
+            *best = Some(chosen.clone());
+        }
+        return;
+    }
+    let Some(first) = notes.get(start) else {
+        return;
+    };
+    if best.as_ref().is_some_and(|best| chosen.len() >= best.len()) {
+        return;
+    }
+    // Even using only the largest remaining note, this many notes are necessary.
+    let lower_bound = remaining.div_ceil(U256::from(first.pool.amount_wei));
+    if best
+        .as_ref()
+        .is_some_and(|best| lower_bound > U256::from(best.len() - chosen.len()))
+    {
+        return;
+    }
+    let total: U256 = notes[start..]
+        .iter()
+        .map(|note| U256::from(note.pool.amount_wei))
+        .sum();
+    if total < remaining {
+        return;
+    }
+    let denom = first.pool.amount_wei;
+    let end = start
+        + notes[start..]
+            .iter()
+            .take_while(|note| note.pool.amount_wei == denom)
+            .count();
+    let unit = U256::from(denom);
+    let want = remaining / unit + U256::from(u8::from(cover && remaining % unit != U256::ZERO));
+    let max = usize::try_from(u64_from(want))
+        .unwrap_or(usize::MAX)
+        .min(end - start);
+    let original = chosen.len();
+    for count in (0..=max).rev() {
+        chosen.extend_from_slice(&notes[start..start + count]);
+        select_notes(
+            notes,
+            end,
+            remaining.saturating_sub(unit * U256::from(count)),
+            cover,
+            chosen,
+            best,
+        );
+        chosen.truncate(original);
+    }
 }
 
-fn take(notes: &mut Vec<TornadoNote>, denom: u128, count: usize) -> Vec<TornadoNote> {
-    let mut taken = Vec::new();
-    notes.retain(|note| {
-        if taken.len() < count && note.pool.amount_wei == denom {
-            taken.push(note.clone());
-            false
-        } else {
-            true
-        }
-    });
-    taken
+fn note_sum(notes: &[TornadoNote]) -> U256 {
+    notes
+        .iter()
+        .map(|note| U256::from(note.pool.amount_wei))
+        .sum()
 }
 
 fn is_native_eth(pool: &Pool) -> bool {
@@ -211,6 +231,129 @@ mod tests {
 
     fn wei(eth_tenths: u128) -> U256 {
         U256::from(eth_tenths) * U256::from(10_u128.pow(17))
+    }
+
+    #[test]
+    fn default_packing_includes_extended_and_is_minimal_on_both_chains() {
+        for chain in [1, 11_155_111] {
+            let amount = parse_eth("33.34").expect("amount");
+            assert!(deposit_pools_with_selection(amount, chain, PoolSelection::Classic).is_err());
+            let pools = deposit_pools(amount, chain).expect("default pack");
+            assert_eq!(
+                pools.iter().map(Pool::amount).collect::<Vec<_>>(),
+                ["30", "3", "0.3", "0.03", "0.01"]
+            );
+            assert!(pools.iter().all(Pool::is_extended));
+            assert!(deposit_pools(amount + U256::from(1), chain).is_err());
+        }
+    }
+
+    #[test]
+    fn packing_matches_dynamic_programming_minimum() {
+        // Compare greedy packing against an independent optimum through 4 ETH.
+        for chain in [1, 11_155_111] {
+            for selection in [PoolSelection::Classic, PoolSelection::IncludeExtended] {
+                let pools = native_pools(chain, selection);
+                let coins: Vec<usize> = pools
+                    .iter()
+                    .map(|pool| (pool.amount_wei / 10_u128.pow(16)) as usize)
+                    .collect();
+                let mut minimum = vec![usize::MAX; 401];
+                minimum[0] = 0;
+                for amount in 1..minimum.len() {
+                    for coin in &coins {
+                        if *coin <= amount && minimum[amount - coin] != usize::MAX {
+                            minimum[amount] = minimum[amount].min(minimum[amount - coin] + 1);
+                        }
+                    }
+                    let packed = deposit_pools_with_selection(
+                        U256::from(amount) * U256::from(10_u128.pow(16)),
+                        chain,
+                        selection,
+                    );
+                    if minimum[amount] == usize::MAX {
+                        assert!(packed.is_err());
+                    } else {
+                        assert_eq!(packed.expect("pack").len(), minimum[amount]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_selection_backtracks_when_greedy_would_fail() {
+        let mut notes = vec![held(Pool::ETHEREUM_ETHER_01, 0)];
+        notes.extend((1..=4).map(|nonce| held(Pool::ETHEREUM_ETHER_003, nonce)));
+        let chosen =
+            exact_notes(parse_eth("0.12").expect("amount"), &notes).expect("four .03 notes");
+        assert_eq!(chosen.len(), 4);
+        assert!(
+            chosen
+                .iter()
+                .all(|note| note.pool == Pool::ETHEREUM_ETHER_003)
+        );
+    }
+
+    #[test]
+    fn covering_minimizes_count_then_excess_and_ignores_ineligible_notes() {
+        let mut notes = vec![
+            held(Pool::ETHEREUM_ETHER_1, 0),
+            held(Pool::ETHEREUM_ETHER_03, 1),
+            held(Pool::ETHEREUM_ETHER_01, 2),
+        ];
+        notes.extend((3..=6).map(|nonce| held(Pool::ETHEREUM_ETHER_003, nonce)));
+        let amount = parse_eth("0.12").expect("amount");
+        let cover = cover_notes(amount, &notes).expect("cover");
+        assert_eq!(cover.len(), 1);
+        assert_eq!(cover[0].pool, Pool::ETHEREUM_ETHER_03);
+        notes[0].spent = true;
+        notes[1].leaf_index = None;
+        assert_eq!(exact_notes(amount, &notes).expect("exact").len(), 4);
+        assert!(cover_notes(parse_eth("1").expect("amount"), &notes).is_err());
+    }
+
+    #[test]
+    fn held_note_selection_matches_brute_force() {
+        let notes = vec![
+            held(Pool::ETHEREUM_ETHER_03, 0),
+            held(Pool::ETHEREUM_ETHER_01, 1),
+            held(Pool::ETHEREUM_ETHER_003, 2),
+            held(Pool::ETHEREUM_ETHER_003, 3),
+            held(Pool::ETHEREUM_ETHER_001, 4),
+        ];
+        for cents in 1..=50 {
+            let amount = U256::from(cents) * U256::from(10_u128.pow(16));
+            let mut exact = None;
+            let mut cover = None;
+            for mask in 1..(1 << notes.len()) {
+                let subset: Vec<_> = notes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| mask & (1 << i) != 0)
+                    .map(|(_, note)| note.clone())
+                    .collect();
+                let key = (subset.len(), note_sum(&subset));
+                if key.1 == amount && exact.is_none_or(|best| key < best) {
+                    exact = Some(key);
+                }
+                if key.1 >= amount && cover.is_none_or(|best| key < best) {
+                    cover = Some(key);
+                }
+            }
+            assert_eq!(
+                exact_notes(amount, &notes)
+                    .ok()
+                    .map(|chosen| (chosen.len(), note_sum(&chosen))),
+                exact
+            );
+            assert_eq!(
+                cover_notes(amount, &notes)
+                    .ok()
+                    .map(|chosen| (chosen.len(), note_sum(&chosen))),
+                cover
+            );
+        }
     }
 
     #[test]
@@ -232,9 +375,23 @@ mod tests {
     }
 
     #[test]
-    fn a_fraction_of_the_smallest_pool_is_rejected() {
-        assert!(deposit_pools(parse_eth("0.05").expect("0.05"), 1).is_err());
-        assert!(deposit_pools(parse_eth("1.15").expect("1.15"), 1).is_err());
+    fn canonical_only_rejects_extended_amounts() {
+        assert!(
+            deposit_pools_with_selection(
+                parse_eth("0.05").expect("0.05"),
+                1,
+                PoolSelection::Classic
+            )
+            .is_err()
+        );
+        assert!(
+            deposit_pools_with_selection(
+                parse_eth("1.15").expect("1.15"),
+                1,
+                PoolSelection::Classic
+            )
+            .is_err()
+        );
         assert!(deposit_pools(U256::from(1_u8), 1).is_err());
     }
 
