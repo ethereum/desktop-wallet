@@ -36,6 +36,9 @@ pub struct ListArgs {}
 #[derive(Args, Debug)]
 #[command(group = ArgGroup::new("phrase").args(["new_phrase", "phrase_of"]))]
 pub struct NewArgs {
+    /// Use only canonical Tornado pools for this profile, excluding Extended pools.
+    #[arg(long)]
+    no_extended_pools: bool,
     #[arg(long)]
     name: Option<String>,
     /// Create the profile on a new recovery phrase.
@@ -54,6 +57,9 @@ pub struct NewArgs {
 
 #[derive(Args, Debug)]
 pub struct ImportArgs {
+    /// Use only canonical Tornado pools for this profile, excluding Extended pools.
+    #[arg(long)]
+    no_extended_pools: bool,
     #[arg(long)]
     name: Option<String>,
     /// Read the recovery phrase from this file instead of stdin. It must be owned by you with
@@ -90,6 +96,7 @@ pub struct ProfileSummary {
     mnemonic_index: u32,
     profile_index: u32,
     name: Option<String>,
+    use_extended_pools: bool,
     #[serde(skip)]
     display_name: String,
 }
@@ -135,26 +142,31 @@ struct RenameReport {
     profile: ProfileSummary,
 }
 
-impl From<&ProfileRecord> for ProfileSummary {
-    fn from(profile: &ProfileRecord) -> Self {
-        Self {
+impl ProfileSummary {
+    pub async fn load(instance: &Instance, profile: &ProfileRecord) -> anyhow::Result<Self> {
+        Ok(Self {
             mnemonic_index: profile.mnemonic_index,
             profile_index: profile.profile_index,
             name: profile.name.clone(),
+            use_extended_pools: instance.profile_use_extended_pools(profile).await?,
             display_name: profile.display_name(),
-        }
+        })
     }
 }
 
 impl fmt::Display for ProfileSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.display_name)
+        write!(f, "{}", self.display_name)?;
+        if !self.use_extended_pools {
+            write!(f, " (canonical pools only)")?;
+        }
+        Ok(())
     }
 }
 
 impl Report for ProfileListReport {
     const KIND: &'static str = "edw/profile-list";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for ProfileListReport {
@@ -165,18 +177,14 @@ impl fmt::Display for ProfileListReport {
                 "No profiles. Create one with `edw profile new` or `edw profile import`."
             );
         }
-        let names: Vec<&str> = self
-            .profiles
-            .iter()
-            .map(|profile| profile.display_name.as_str())
-            .collect();
+        let names: Vec<String> = self.profiles.iter().map(ToString::to_string).collect();
         write!(f, "{}", names.join("\n"))
     }
 }
 
 impl Report for NewReport {
     const KIND: &'static str = "edw/profile-new";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
 }
 
 impl fmt::Display for NewReport {
@@ -188,7 +196,7 @@ impl fmt::Display for NewReport {
 
 impl Report for ImportReport {
     const KIND: &'static str = "edw/profile-import";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
 }
 
 impl fmt::Display for ImportReport {
@@ -211,7 +219,7 @@ impl fmt::Display for ImportReport {
 
 impl Report for RescanReport {
     const KIND: &'static str = "edw/profile-rescan";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
 }
 
 impl fmt::Display for RescanReport {
@@ -233,7 +241,7 @@ impl fmt::Display for RescanReport {
 
 impl Report for RenameReport {
     const KIND: &'static str = "edw/profile-rename";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for RenameReport {
@@ -257,10 +265,15 @@ impl Command {
 
 impl ListArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let mut profiles = global.open().await?.profiles().await?;
+        let instance = global.open().await?;
+        let mut profiles = instance.profiles().await?;
         profiles.sort_by_key(ProfileRecord::key);
+        let mut summaries = Vec::new();
+        for profile in &profiles {
+            summaries.push(ProfileSummary::load(&instance, profile).await?);
+        }
         ProfileListReport {
-            profiles: profiles.iter().map(ProfileSummary::from).collect(),
+            profiles: summaries,
         }
         .emit(global.mode())
     }
@@ -302,6 +315,9 @@ impl NewArgs {
             }
             profile
         };
+        instance
+            .set_profile_use_extended_pools(&profile, !self.no_extended_pools)
+            .await?;
         // A new phrase has never been used, but another wallet may have used a stored one.
         let scan = if shared.is_some() {
             scan(&instance, &profile).await
@@ -318,7 +334,7 @@ impl NewArgs {
             None
         };
         NewReport {
-            profile: ProfileSummary::from(&profile),
+            profile: ProfileSummary::load(&instance, &profile).await?,
             new_phrase: shared.is_none(),
             tornado_notes,
         }
@@ -333,6 +349,9 @@ impl ImportArgs {
         let phrase = self.phrase(input)?;
         let name = prompt_profile_name(self.name.clone(), input)?;
         let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
+        instance
+            .set_profile_use_extended_pools(&profile, !self.no_extended_pools)
+            .await?;
 
         let scan = scan(&instance, &profile).await;
         instance
@@ -353,7 +372,7 @@ impl ImportArgs {
         };
         let tornado_notes = recover_tornado(&instance, &profile).await;
         ImportReport {
-            profile: ProfileSummary::from(&profile),
+            profile: ProfileSummary::load(&instance, &profile).await?,
             addresses,
             next_unused,
             tornado_notes,
@@ -402,7 +421,7 @@ impl RescanArgs {
         let added = instance.add_missing_address_vaults(&profile, &scan).await?;
         let tornado_notes = recover_tornado(&instance, &profile).await;
         RescanReport {
-            profile: ProfileSummary::from(&profile),
+            profile: ProfileSummary::load(&instance, &profile).await?,
             added: added
                 .iter()
                 .map(|(index, address)| ScannedAddress {
@@ -418,13 +437,12 @@ impl RescanArgs {
 
 impl RenameArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
-        let record = global
-            .open()
-            .await?
+        let instance = global.open().await?;
+        let record = instance
             .rename_profile(&self.selector, Some(self.new_name.clone()))
             .await?;
         RenameReport {
-            profile: ProfileSummary::from(&record),
+            profile: ProfileSummary::load(&instance, &record).await?,
         }
         .emit(global.mode())
     }
@@ -604,8 +622,33 @@ pub fn choose_profile(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creation_and_import_accept_opt_out_but_default_to_extended() {
+        use clap::Parser;
+        for command in ["new", "import"] {
+            for opt_out in [false, true] {
+                let mut args = vec!["edw", "profile", command];
+                if opt_out {
+                    args.push("--no-extended-pools");
+                }
+                let cli = crate::Cli::try_parse_from(args).expect("valid profile arguments");
+                let crate::Command::Profile(profile) = cli.command else {
+                    panic!("profile command")
+                };
+                let selected = match profile {
+                    Command::New(args) => args.no_extended_pools,
+                    Command::Import(args) => args.no_extended_pools,
+                    _ => panic!("creation command"),
+                };
+                assert_eq!(selected, opt_out);
+            }
+        }
+        assert!(crate::Cli::try_parse_from(["edw", "shield", "--no-extended-pools"]).is_err());
+    }
 
     #[test]
     fn tornado_count_names_how_many_notes_were_found() {

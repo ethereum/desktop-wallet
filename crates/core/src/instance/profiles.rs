@@ -8,10 +8,58 @@ use crate::{
     keyring::Keyring,
     mnemonic::{Mnemonic, MnemonicRecord, scan::EoaScan},
     network::NetworkEndpoint,
-    profile::{ProfileIndex, ProfileRecord},
+    profile::{ProfileDb, ProfileError, ProfileIndex, ProfileRecord},
 };
 
 impl Instance {
+    /// Opens Tornado with the profile's saved pool policy. Commands need no pool options.
+    pub async fn open_tornado_vault(
+        &self,
+        profile: &ProfileRecord,
+        key: alloy_signer::k256::ecdsa::SigningKey,
+        endpoint: std::sync::Arc<dyn NetworkEndpoint>,
+    ) -> Result<
+        crate::vault::tornadocash::TornadoVault<alloy_signer_local::PrivateKeySigner>,
+        InstanceError,
+    > {
+        use crate::vault::tornadocash::{PoolSelection, TornadoVault};
+        let selection = if self.profile_use_extended_pools(profile).await? {
+            PoolSelection::IncludeExtended
+        } else {
+            PoolSelection::Classic
+        };
+        Ok(
+            TornadoVault::open(key, self.tornado_database(profile), endpoint)
+                .await?
+                .with_pool_selection(selection),
+        )
+    }
+
+    /// The profile's Tornado pool policy. Existing profiles default to Extended enabled.
+    pub async fn profile_use_extended_pools(
+        &self,
+        profile: &ProfileRecord,
+    ) -> Result<bool, InstanceError> {
+        self.profile_db(profile)
+            .use_extended_pools()
+            .await
+            .map_err(ProfileError::from)
+            .map_err(Into::into)
+    }
+
+    /// Configures the profile independently of its serialized identity record.
+    pub async fn set_profile_use_extended_pools(
+        &self,
+        profile: &ProfileRecord,
+        enabled: bool,
+    ) -> Result<(), InstanceError> {
+        self.profile_db(profile)
+            .put_use_extended_pools(enabled)
+            .await
+            .map_err(ProfileError::from)
+            .map_err(Into::into)
+    }
+
     pub async fn profiles(&self) -> Result<Vec<ProfileRecord>, InstanceError> {
         Ok(self.profile_index().list().await?)
     }
@@ -192,6 +240,79 @@ mod tests {
 
     fn instance() -> Instance {
         Instance::in_memory(NetworkId(1337))
+    }
+
+    #[tokio::test]
+    async fn pool_preference_is_profile_scoped_persistent_and_preserves_identity_encoding() {
+        let instance = instance();
+        let (_, first) = instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, Some("first".into()))
+            .await
+            .unwrap();
+        let second = instance
+            .add_profile(first.mnemonic_index, Some(1), Some("second".into()))
+            .await
+            .unwrap();
+        let before = postcard::to_stdvec(&instance.profiles().await.unwrap()).unwrap();
+        assert!(instance.profile_use_extended_pools(&first).await.unwrap());
+        instance
+            .set_profile_use_extended_pools(&first, false)
+            .await
+            .unwrap();
+        assert!(!instance.profile_use_extended_pools(&first).await.unwrap());
+        assert!(instance.profile_use_extended_pools(&second).await.unwrap());
+        assert_eq!(
+            before,
+            postcard::to_stdvec(&instance.profiles().await.unwrap()).unwrap()
+        );
+        let reopened = Instance {
+            network: instance.network.clone(),
+            store: instance.store.clone(),
+        };
+        let renamed = reopened
+            .set_profile_name(
+                first.mnemonic_index,
+                first.profile_index,
+                Some("renamed".into()),
+            )
+            .await
+            .unwrap();
+        assert!(!reopened.profile_use_extended_pools(&renamed).await.unwrap());
+        assert!(reopened.profile_use_extended_pools(&second).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn opening_a_profile_applies_saved_policy_to_deposit_planning() {
+        use crate::test_support::mocked_provider;
+        use alloy_primitives::{U64, U256};
+        use alloy_transport::mock::Asserter;
+        let instance = Instance::in_memory(NetworkId(1));
+        let (_, profile) = instance
+            .import_profile(Zeroizing::new(FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap();
+        let amount = U256::from(3 * 10_u128.pow(16));
+        for enabled in [true, false, true] {
+            instance
+                .set_profile_use_extended_pools(&profile, enabled)
+                .await
+                .unwrap();
+            let mock = Asserter::new();
+            mock.push_success(&U64::from(1)); // Open vault.
+            mock.push_success(&U64::from(1)); // Plan deposits.
+            let key = instance
+                .mnemonic(&profile)
+                .await
+                .unwrap()
+                .keychain_key(profile.profile_index)
+                .unwrap();
+            let vault = instance
+                .open_tornado_vault(&profile, key, mocked_provider(&mock))
+                .await
+                .unwrap();
+            let plan = vault.deposit_pools(amount).await;
+            assert_eq!(plan.is_ok(), enabled);
+        }
     }
 
     #[tokio::test]

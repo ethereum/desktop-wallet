@@ -2,10 +2,7 @@ use std::fmt;
 
 use alloy_primitives::{Address, Bytes, U256};
 use clap::Args;
-use edw_core::{
-    call::Call,
-    vault::tornadocash::{cover_notes, format_eth},
-};
+use edw_core::{call::Call, vault::tornadocash::format_eth};
 use serde::Serialize;
 
 use crate::{
@@ -160,9 +157,8 @@ async fn tornado(
 ) -> Result<(), anyhow::Error> {
     let vault = open_vault(instance, profile, phrase, endpoint.clone()).await?;
     eprintln!("Syncing Tornado pools...");
-    let held = vault.notes().await?;
-    let notes = cover_notes(amount, &held)?;
-    ensure_paymaster(&notes)?;
+    let mut notes = vault.cover_notes(amount).await?;
+    ensure_paymaster(&mut notes)?;
     let chain_id = endpoint.network_id().await?;
     let fresh = instance
         .fresh_address(profile, phrase, endpoint.as_ref())
