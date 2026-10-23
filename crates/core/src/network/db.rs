@@ -1,4 +1,4 @@
-use super::{Network, RpcConfig};
+use super::{IndexerConfig, Network, RpcConfig};
 use crate::database::{Database, DatabaseError};
 
 #[async_trait::async_trait]
@@ -37,6 +37,32 @@ pub trait NetworkDb: Database {
 
     async fn put_active_rpc_config(&self, name: &str) -> Result<(), NetworkDatabaseError> {
         self.put(b"activeRpcConfig", &postcard::to_stdvec(&name)?)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_bundler_config(&self) -> Result<Option<Vec<String>>, NetworkDatabaseError> {
+        let Some(bytes) = self.get(b"bundlerConfig").await? else {
+            return Ok(None);
+        };
+        Ok(Some(postcard::from_bytes(&bytes)?))
+    }
+
+    async fn put_bundler_config(&self, urls: &[String]) -> Result<(), NetworkDatabaseError> {
+        self.put(b"bundlerConfig", &postcard::to_stdvec(urls)?)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_indexer_config(&self) -> Result<Option<IndexerConfig>, NetworkDatabaseError> {
+        let Some(bytes) = self.get(b"indexerConfig").await? else {
+            return Ok(None);
+        };
+        Ok(Some(postcard::from_bytes(&bytes)?))
+    }
+
+    async fn put_indexer_config(&self, config: &IndexerConfig) -> Result<(), NetworkDatabaseError> {
+        self.put(b"indexerConfig", &postcard::to_stdvec(config)?)
             .await?;
         Ok(())
     }

@@ -7,14 +7,7 @@ use kohaku_tornadocash::{
 };
 use tracing::{info, warn};
 
-use crate::network::{
-    DEFAULT_EVENT_BLOCK_RANGE, NetworkEndpoint, NetworkEndpointError, http::outbound_http,
-};
-
-/// Default Saga CDN. `EDW_SAGA_URL` replaces this base; the chain suffix is applied after that.
-pub const SAGA_CDN_BASE: &str = "https://saga.gordosoluciones.xyz";
-
-const SAGA_URL_ENV: &str = "EDW_SAGA_URL";
+use crate::network::{NetworkEndpoint, NetworkEndpointError, http::outbound_http};
 
 /// How long a Saga request may take before the syncer treats the CDN as down.
 const SAGA_TIMEOUT: Duration = Duration::from_secs(30);
@@ -35,21 +28,21 @@ pub struct NetworkEndpointSyncer {
 }
 
 impl ChainedSyncer<SagaSyncer, NetworkEndpointSyncer> {
-    /// Saga for mainnet and Sepolia, and the endpoint for every chain.
+    /// Saga when `indexer_url` is set, and the endpoint for every chain.
     ///
     /// # Errors
     /// Returns an error if the Saga HTTP client cannot be built.
     pub fn tornado(
-        chain_id: u64,
         endpoint: Arc<dyn NetworkEndpoint>,
+        indexer_url: Option<&str>,
     ) -> Result<Self, NetworkEndpointError> {
-        let primary = match saga_base_url(chain_id) {
+        let primary = match indexer_url {
             Some(url) => {
                 let client = outbound_http()
                     .timeout(SAGA_TIMEOUT)
                     .build()
                     .map_err(|error| NetworkEndpointError::Backend(Box::new(error)))?;
-                Some(SagaSyncer::with_client(client, &url))
+                Some(SagaSyncer::with_client(client, url))
             }
             None => None,
         };
@@ -100,7 +93,7 @@ impl NetworkEndpointSyncer {
             .logs_in_range(
                 &filter,
                 range.start..=range.end - 1,
-                DEFAULT_EVENT_BLOCK_RANGE,
+                self.provider.event_block_range(),
             )
             .await?;
 
@@ -149,27 +142,6 @@ where
             return self.fallback.sync_range(pool, from_block, to_block).await;
         };
         chain_range(primary, &self.fallback, pool, from_block, to_block).await
-    }
-}
-
-/// The Saga base for `chain_id`, or `None` when this chain has no CDN.
-///
-/// Mainnet uses the base as-is. Sepolia uses `{base}/sepolia`.
-#[must_use]
-pub fn saga_base_url(chain_id: u64) -> Option<String> {
-    saga_base_url_with(chain_id, std::env::var(SAGA_URL_ENV).ok())
-}
-
-fn saga_base_url_with(chain_id: u64, override_url: Option<String>) -> Option<String> {
-    let base = override_url.unwrap_or_else(|| SAGA_CDN_BASE.to_string());
-    let base = base.trim().trim_end_matches('/');
-    if base.is_empty() {
-        return None;
-    }
-    match chain_id {
-        1 => Some(base.to_string()),
-        11_155_111 => Some(format!("{base}/sepolia")),
-        _ => None,
     }
 }
 
@@ -328,23 +300,5 @@ mod tests {
             .expect("endpoint covers the hole at the start");
         assert_eq!(joined.range, 10..40);
         assert_eq!(rpc.calls(), vec![(10, 40)]);
-    }
-
-    #[test]
-    fn saga_urls_follow_the_chain() {
-        assert_eq!(saga_base_url_with(1, None).as_deref(), Some(SAGA_CDN_BASE));
-        assert_eq!(
-            saga_base_url_with(11_155_111, None).as_deref(),
-            Some("https://saga.gordosoluciones.xyz/sepolia")
-        );
-        assert_eq!(saga_base_url_with(31_337, None), None);
-        assert_eq!(
-            saga_base_url_with(1, Some("https://cdn.example/".into())).as_deref(),
-            Some("https://cdn.example")
-        );
-        assert_eq!(
-            saga_base_url_with(11_155_111, Some("https://cdn.example".into())).as_deref(),
-            Some("https://cdn.example/sepolia")
-        );
     }
 }

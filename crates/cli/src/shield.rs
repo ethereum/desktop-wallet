@@ -4,6 +4,7 @@ use alloy_primitives::{Address, U256};
 use clap::{ArgGroup, Args};
 use edw_core::{
     broadcast::submit_user_operation,
+    bundler::Url,
     call::Call,
     network::NetworkEndpoint,
     vault::tornadocash::{deposit_pools, format_eth},
@@ -115,8 +116,13 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     for pool in &pools {
         calls.extend(vault.deposit(pool).await?);
     }
+    let bundler_urls = if calls.len() > 1 {
+        instance.bundler_urls().await?
+    } else {
+        Vec::new()
+    };
     let (transactions, user_operation, bundler) =
-        broadcast(endpoint.as_ref(), &payer, &notes, &calls).await?;
+        broadcast(endpoint.as_ref(), &payer, &notes, &calls, &bundler_urls).await?;
     ShieldReport {
         from: payer.address.to_string(),
         notes,
@@ -153,12 +159,13 @@ async fn broadcast(
     payer: &Account,
     notes: &[String],
     calls: &[Call],
+    bundler_urls: &[Url],
 ) -> Result<(Vec<String>, Option<String>, Option<String>), anyhow::Error> {
     if calls.is_empty() {
         anyhow::bail!("shield produced no calls");
     }
     if calls.len() > 1 {
-        return match submit_user_operation(endpoint, &payer.key, calls).await {
+        return match submit_user_operation(endpoint, &payer.key, calls, bundler_urls).await {
             Ok(submitted) => {
                 eprintln!(
                     "Submitted {} as one user operation {}",

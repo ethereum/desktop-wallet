@@ -163,11 +163,11 @@ async fn tornado(
     let held = vault.notes().await?;
     let notes = cover_notes(amount, &held)?;
     ensure_paymaster(&notes)?;
-    let chain_id = endpoint.network_id().await?;
     let fresh = instance
         .fresh_address(profile, phrase, endpoint.as_ref())
         .await?;
-    let bundler = first_bundler(chain_id)?;
+    let bundler_urls = instance.bundler_urls().await?;
+    let bundler = first_bundler(&bundler_urls)?;
     let sponsor = notes.first().map(note_eth).unwrap_or_default();
     let summary = format!(
         "Transfer {} ETH from tornado to {to}.\nUnshields {}.\nSponsoring note {sponsor} ETH pays gas through the Tornado paymaster.\nRuns as fresh address {} ({}).\nBundler {bundler}.\nForwards the remainder after that fee to {to}. The remainder has to cover {} ETH.",
@@ -194,6 +194,7 @@ async fn tornado(
         notes: &notes,
         forward_to: Some(to),
         minimum_forward: Some(amount),
+        bundler_urls: &bundler_urls,
     })
     .await?;
     instance.commit_fresh_address(profile, fresh.index).await?;

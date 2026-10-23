@@ -92,7 +92,8 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     let fresh = instance
         .fresh_address(&profile, &phrase, endpoint.as_ref())
         .await?;
-    let bundler = first_bundler(chain_id)?;
+    let bundler_urls = instance.bundler_urls().await?;
+    let bundler = first_bundler(&bundler_urls)?;
     if !confirm(
         input,
         &summary(amount, &notes, fresh.index, &fresh.address, to, &bundler),
@@ -109,6 +110,7 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         notes: &notes,
         forward_to: to,
         minimum_forward: None,
+        bundler_urls: &bundler_urls,
     })
     .await?;
     instance.commit_fresh_address(&profile, fresh.index).await?;
