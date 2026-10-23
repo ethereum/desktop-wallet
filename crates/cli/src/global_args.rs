@@ -7,7 +7,15 @@ use crate::{input::Input, report::Mode, session::SessionFile, unlock};
 
 #[derive(Args)]
 pub struct GlobalArgs {
-    #[arg(long, global = true, env = "DATA_DIR", default_value = "./.edw/")]
+    /// Wallet data directory (defaults to ~/.edw).
+    #[arg(
+        long,
+        global = true,
+        env = "DATA_DIR",
+        default_value_os_t = std::env::home_dir()
+            .map(|home| home.join(".edw"))
+            .unwrap_or_default()
+    )]
     data_dir: PathBuf,
     /// Never prompt, and print one JSON document on stdout. Anything a command needs must come
     /// from flags, the environment, the session, or piped stdin.

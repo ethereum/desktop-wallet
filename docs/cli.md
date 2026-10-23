@@ -45,5 +45,5 @@ Pool sync tries the Saga CDN (`https://saga.gordosoluciones.xyz`, or `EDW_SAGA_U
 
 ```sh
 --non-interactive, --porcelain # runs in non-interactive mode
---data-dir # runs with the specified data directory
+--data-dir # runs with the specified data directory (default: ~/.edw; env: DATA_DIR)
 ```
