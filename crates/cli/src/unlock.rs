@@ -12,7 +12,7 @@ use crate::{
     GlobalArgs, failure,
     input::Input,
     report::Report,
-    session::{Session, SessionFile},
+    session::{self, Session, SessionFile},
 };
 
 /// Where a script may pass the decryption password. Any process running as the user can read
@@ -36,6 +36,7 @@ struct UnlockReport {
     created: Option<String>,
     already_unlocked: bool,
     locked: Option<String>,
+    session_held: bool,
     #[serde(skip)]
     session_error: Option<String>,
 }
@@ -47,7 +48,7 @@ struct LockReport {
 
 impl Report for UnlockReport {
     const KIND: &'static str = "edw/unlock";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for UnlockReport {
@@ -69,7 +70,10 @@ impl fmt::Display for UnlockReport {
                 f,
                 "Password accepted, but a session could not be saved: {error}"
             )?;
-            return write!(f, "The next command will require `edw unlock` again.");
+            return write!(
+                f,
+                "Each command will ask for the password again at a terminal, or read {PASSWORD_ENV}."
+            );
         }
 
         if self.already_unlocked {
@@ -112,12 +116,12 @@ impl UnlockArgs {
         let existed = data_dir.has_instance(network);
         let sessions = SessionFile::runtime();
         let previous = sessions.load_if_present().await;
-        let was_same = previous
-            .as_ref()
-            .is_some_and(|s| s.network == network && s.data_dir == data_dir.path());
         let previous_network = previous.as_ref().map(|s| s.network);
 
         let password = password(&data_dir, network, global.input()).await?;
+        let was_same = previous.is_some_and(|s| {
+            s.network == network && s.data_dir == data_dir.path() && s.password == password
+        });
         Instance::open_or_create(&data_dir, network, password.as_bytes()).await?;
 
         let session = Session {
@@ -127,10 +131,19 @@ impl UnlockArgs {
         };
         let session_error = match sessions.store(&session).await {
             Ok(()) => None,
-            Err(error) if global.non_interactive => {
-                return Err(error.context("password accepted, but no session could be held"));
+            Err(error) => {
+                if let Some(previous) = previous_network
+                    && let Err(clear_error) = sessions.clear().await
+                {
+                    return Err(clear_error.context(format!(
+                        "password accepted, but no session could be held, and the session for {previous} could not be removed, so it is still unlocked"
+                    )));
+                }
+                if global.non_interactive && session::can_hold() {
+                    return Err(error.context("password accepted, but no session could be held"));
+                }
+                Some(format!("{error:#}"))
             }
-            Err(error) => Some(format!("{error:#}")),
         };
         let held = session_error.is_none();
         UnlockReport {
@@ -140,6 +153,7 @@ impl UnlockArgs {
             locked: previous_network
                 .filter(|previous| held && *previous != network)
                 .map(|previous| previous.to_string()),
+            session_held: held,
             session_error,
         }
         .emit(global.mode())
@@ -170,7 +184,9 @@ pub async fn prompt_unlock(data_dir: &DataDir, input: Input) -> Result<Instance,
         network,
         password,
     };
-    if let Err(error) = SessionFile::runtime().store(&session).await {
+    if session::can_hold()
+        && let Err(error) = SessionFile::runtime().store(&session).await
+    {
         eprintln!("Password accepted, but a session could not be saved: {error:#}");
     }
     Ok(instance)
@@ -189,13 +205,27 @@ pub fn choose_network(data_dir: &DataDir, input: Input) -> Result<NetworkId, any
             let choice = input
                 .choose("Select a network to unlock:", &labels)?
                 .ok_or_else(|| {
-                    failure::usage(
-                        "several wallet instances exist; run `edw unlock --network <name or id>`",
-                    )
+                    failure::usage(if session::can_hold() {
+                        "several wallet instances exist; run `edw unlock --network <name or id>`"
+                    } else {
+                        "several wallet instances exist, and with no session here none can be chosen without a terminal; use a data directory that holds one"
+                    })
                 })?;
             Ok(several[choice])
         }
     }
+}
+
+/// The decryption password from [`PASSWORD_ENV`], when it is set.
+pub fn env_password() -> Result<Option<Zeroizing<String>>, anyhow::Error> {
+    std::env::var_os(PASSWORD_ENV)
+        .map(|value| {
+            value
+                .into_string()
+                .map(Zeroizing::new)
+                .map_err(|_| failure::usage(format!("{PASSWORD_ENV} is not valid UTF-8")))
+        })
+        .transpose()
 }
 
 /// The decryption password, from the environment, the session, or `input`.
@@ -204,16 +234,17 @@ async fn password(
     network: NetworkId,
     input: Input,
 ) -> Result<Zeroizing<String>, anyhow::Error> {
-    if let Some(value) = std::env::var_os(PASSWORD_ENV) {
-        let value = value
-            .into_string()
-            .map_err(|_| failure::usage(format!("{PASSWORD_ENV} is not valid UTF-8")))?;
-        return Ok(Zeroizing::new(value));
+    if let Some(password) = env_password()? {
+        return Ok(password);
     }
 
-    if let Some(session) = SessionFile::runtime().load_if_present().await
+    // Only a stale session is skipped; other open errors are left to `open_or_create`, which
+    // repairs a missing network record.
+    let sessions = SessionFile::runtime();
+    if let Some(session) = sessions.load_if_present().await
         && session.network == network
         && session.data_dir == data_dir.path()
+        && !matches!(sessions.open(&session).await, Ok(None))
     {
         return Ok(session.password);
     }

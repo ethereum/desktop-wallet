@@ -7,11 +7,7 @@ use edw_core::{
 };
 use serde::Serialize;
 
-use crate::{
-    GlobalArgs,
-    report::Report,
-    session::{Session, SessionFile},
-};
+use crate::{GlobalArgs, report::Report, session::SessionFile};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -102,12 +98,19 @@ impl Command {
 
 /// Reads the configuration without prompting, so it works while the wallet is locked.
 async fn view(data_dir: &DataDir) -> Result<ConfigViewReport, anyhow::Error> {
-    let session = SessionFile::runtime().load_if_present().await;
-    let unlocked = session
-        .as_ref()
-        .filter(|session| session.data_dir == data_dir.path());
-    let rpc_config = match unlocked {
-        Some(session) => active_rpc_config(data_dir, session).await?,
+    let sessions = SessionFile::runtime();
+    let mut session = sessions.load_if_present().await;
+    let mut instance = None;
+    if let Some(held) = &session
+        && held.data_dir == data_dir.path()
+    {
+        instance = sessions.open(held).await?;
+        if instance.is_none() {
+            session = None;
+        }
+    }
+    let rpc_config = match &instance {
+        Some(instance) => active_rpc_config(instance).await?,
         None => None,
     };
     Ok(ConfigViewReport {
@@ -117,7 +120,7 @@ async fn view(data_dir: &DataDir) -> Result<ConfigViewReport, anyhow::Error> {
             .iter()
             .map(ToString::to_string)
             .collect(),
-        locked: unlocked.is_none(),
+        locked: instance.is_none(),
         session: session.map(|session| SessionView {
             network: session.network.to_string(),
             data_dir: session.data_dir.display().to_string(),
@@ -126,11 +129,7 @@ async fn view(data_dir: &DataDir) -> Result<ConfigViewReport, anyhow::Error> {
     })
 }
 
-async fn active_rpc_config(
-    data_dir: &DataDir,
-    session: &Session,
-) -> Result<Option<RpcConfigView>, anyhow::Error> {
-    let instance = Instance::open(data_dir, session.network, session.password.as_bytes()).await?;
+async fn active_rpc_config(instance: &Instance) -> Result<Option<RpcConfigView>, anyhow::Error> {
     Ok(instance
         .active_rpc()
         .await?

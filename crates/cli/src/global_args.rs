@@ -4,7 +4,13 @@ use clap::Args;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
 use edw_core::instance::{DataDir, Instance};
 
-use crate::{failure, input::Input, report::Mode, session::SessionFile, unlock};
+use crate::{
+    failure,
+    input::Input,
+    report::Mode,
+    session::{self, SessionFile},
+    unlock,
+};
 
 #[derive(Args)]
 pub struct GlobalArgs {
@@ -35,30 +41,47 @@ impl GlobalArgs {
         Input::detect(self.non_interactive)
     }
 
-    /// Opens the instance the session holds unlocked. Without one, prompts for the password
-    /// at an interactive terminal and fails anywhere else, so a script never waits on a prompt.
+    /// Opens the session's instance, else unlocks it from `EDW_DECRYPTION_PASSWORD` or a terminal
+    /// prompt, keeping a session for the prompt. Piped stdin is left to the command's fields.
     pub async fn open(&self) -> anyhow::Result<Instance> {
         let data_dir = self.data_dir();
-        let session = SessionFile::runtime().load_if_present().await;
-        if let Some(session) = &session
-            && session.data_dir == data_dir.path()
+        let sessions = SessionFile::runtime();
+        let mut session = sessions.load_if_present().await;
+        if let Some(held) = &session
+            && held.data_dir == data_dir.path()
         {
-            return Ok(
-                Instance::open(&data_dir, session.network, session.password.as_bytes()).await?,
-            );
+            if let Some(instance) = sessions.open(held).await? {
+                return Ok(instance);
+            }
+            session = None;
         }
 
-        if self.input() == Input::Terminal {
+        let input = self.input();
+        if let Some(password) = unlock::env_password()? {
+            let network = unlock::choose_network(&data_dir, input)?;
+            return Ok(Instance::open(&data_dir, network, password.as_bytes()).await?);
+        }
+        if input == Input::Terminal {
             return unlock::prompt_unlock(&data_dir, Input::Terminal).await;
         }
         match session {
             Some(session) => Err(failure::locked(format!(
-                "wallet is unlocked for {} at {}, not {}; run `edw unlock [--network <name or id>]`",
+                "wallet is unlocked for {} at {}, not {}; run `edw unlock [--network <name or id>]` or set EDW_DECRYPTION_PASSWORD",
                 session.network,
                 session.data_dir.display(),
                 data_dir.path().display()
             ))),
-            None => Err(failure::locked("wallet is locked; run `edw unlock`")),
+            None if session::can_hold() => match sessions.check_readable().await {
+                Ok(()) => Err(failure::locked(
+                    "wallet is locked; run `edw unlock` or set EDW_DECRYPTION_PASSWORD",
+                )),
+                Err(error) => Err(failure::locked(format!(
+                    "wallet is locked, and {error}; set EDW_DECRYPTION_PASSWORD"
+                ))),
+            },
+            None => Err(failure::locked(
+                "wallet is locked, and no session can be held here; set EDW_DECRYPTION_PASSWORD",
+            )),
         }
     }
 }
