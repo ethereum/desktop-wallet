@@ -7,6 +7,8 @@ The crate is concerned purely with inputs and outputs, not with underlying machi
 
 ```sh
 edw lock/unlock # locks or unlocks the datastore
+edw config path # prints the data directory
+edw config view # the data directory, its network instances, the session, and the active RPC config; works while locked
 
 edw network view # the active RPC, the bundler URLs, and the indexer
 edw network rpc-config list # lists this network's RPC configs; the active one is marked
@@ -55,3 +57,18 @@ Pool sync tries the Saga indexer when it is on (`https://saga.gordosoluciones.xy
 The data directory defaults to `~/.edw`, or `./.edw/` when there is no home directory. Earlier versions defaulted to `./.edw/` and read `DATA_DIR`; move that directory to `~/.edw`, or pass `--data-dir ./.edw`.
 
 Logs go to stderr at `warn` by default. `RUST_LOG`, when set, takes precedence over `-v` and `-q`.
+
+### Exit Codes
+
+| Code | Class | When |
+|---|---|---|
+| 0 | | the command succeeded, or a confirmation was declined |
+| 1 | `other` | any failure not listed below, including a value the wallet core rejects, such as an unknown profile name or an amount that is not a sum of pool denominations, an unreachable RPC endpoint or bundler, or a reverted transaction |
+| 2 | `usage` | an argument the CLI rejects itself, such as a missing flag, a malformed address, or an unusable phrase file |
+| 3 | `locked` | no session or password to open the wallet with, or a wrong password |
+
+With `--non-interactive`, a failure prints one `edw/error` document on stdout instead of text on stderr. Argument errors that clap reports while parsing are always text, with code 2.
+
+```json
+{"kind":"edw/error","version":1,"class":"locked","message":"wallet is locked; run `edw unlock`"}
+```

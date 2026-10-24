@@ -4,7 +4,7 @@ use clap::Args;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
 use edw_core::instance::{DataDir, Instance};
 
-use crate::{input::Input, report::Mode, session::SessionFile, unlock};
+use crate::{failure, input::Input, report::Mode, session::SessionFile, unlock};
 
 #[derive(Args)]
 pub struct GlobalArgs {
@@ -52,13 +52,13 @@ impl GlobalArgs {
             return unlock::prompt_unlock(&data_dir, Input::Terminal).await;
         }
         match session {
-            Some(session) => anyhow::bail!(
+            Some(session) => Err(failure::locked(format!(
                 "wallet is unlocked for {} at {}, not {}; run `edw unlock [--network <name or id>]`",
                 session.network,
                 session.data_dir.display(),
                 data_dir.path().display()
-            ),
-            None => anyhow::bail!("wallet is locked; run `edw unlock`"),
+            ))),
+            None => Err(failure::locked("wallet is locked; run `edw unlock`")),
         }
     }
 }
