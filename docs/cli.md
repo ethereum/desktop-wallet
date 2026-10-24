@@ -50,5 +50,7 @@ Pool sync tries the Saga indexer when it is on (`https://saga.gordosoluciones.xy
 
 ```sh
 --non-interactive, --porcelain # runs in non-interactive mode
---data-dir # runs with the specified data directory
+--data-dir # runs with the specified data directory; env: EDW_DATA_DIR
 ```
+
+The data directory defaults to `~/.edw`, or `./.edw/` when there is no home directory. Earlier versions defaulted to `./.edw/` and read `DATA_DIR`; move that directory to `~/.edw`, or pass `--data-dir ./.edw`.

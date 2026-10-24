@@ -7,7 +7,7 @@ use crate::{input::Input, report::Mode, session::SessionFile, unlock};
 
 #[derive(Args)]
 pub struct GlobalArgs {
-    #[arg(long, global = true, env = "DATA_DIR", default_value = "./.edw/")]
+    #[arg(long, global = true, env = "EDW_DATA_DIR", default_value_os_t = default_data_dir())]
     data_dir: PathBuf,
     /// Never prompt, and print one JSON document on stdout. Anything a command needs must come
     /// from flags, the environment, the session, or piped stdin.
@@ -58,4 +58,8 @@ impl GlobalArgs {
             None => anyhow::bail!("wallet is locked; run `edw unlock`"),
         }
     }
+}
+
+fn default_data_dir() -> PathBuf {
+    std::env::home_dir().map_or_else(|| PathBuf::from("./.edw/"), |home| home.join(".edw"))
 }
