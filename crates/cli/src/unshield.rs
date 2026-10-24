@@ -10,7 +10,7 @@ use crate::{
     report::Report,
     spend::{
         ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster, first_bundler,
-        mnemonic, note_eth, open_vault, submit_shielded, tornado_amount,
+        mnemonic, note_eth, open_vault, parse_address, submit_shielded, tornado_amount,
     },
 };
 
@@ -139,7 +139,7 @@ fn destination(
     };
     match text.as_deref() {
         None | Some("") => Ok(None),
-        Some(value) => Ok(Some(value.parse()?)),
+        Some(value) => Ok(Some(parse_address(value)?)),
     }
 }
 

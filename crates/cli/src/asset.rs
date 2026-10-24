@@ -1,11 +1,13 @@
-use std::{fmt, str::FromStr};
+use std::fmt;
 
-use alloy_primitives::Address;
-use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use crate::{GlobalArgs, report::Report, spend::choose_profile};
+use crate::{
+    GlobalArgs,
+    report::Report,
+    spend::{choose_profile, parse_address},
+};
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -133,8 +135,4 @@ async fn opt_out(global: &GlobalArgs, args: &AddressArgs) -> anyhow::Result<()> 
         address: asset.address.to_string(),
     }
     .emit(global.mode())
-}
-
-fn parse_address(raw: &str) -> anyhow::Result<Address> {
-    Address::from_str(raw).context("expected an ERC-20 address")
 }

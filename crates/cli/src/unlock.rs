@@ -1,6 +1,5 @@
 use std::fmt;
 
-use anyhow::Context;
 use clap::Args;
 use edw_core::{
     instance::{DataDir, Instance},
@@ -10,7 +9,7 @@ use serde::Serialize;
 use zeroize::Zeroizing;
 
 use crate::{
-    GlobalArgs,
+    GlobalArgs, failure,
     input::Input,
     report::Report,
     session::{Session, SessionFile},
@@ -163,7 +162,8 @@ pub async fn prompt_unlock(data_dir: &DataDir, input: Input) -> Result<Instance,
     eprintln!("Wallet is locked; unlocking {network}.");
     let password = input
         .secret("Decryption password: ")?
-        .context(MISSING_PASSWORD)?;
+        .filter(|password| !password.is_empty())
+        .ok_or_else(|| failure::locked("no decryption password was entered"))?;
     let instance = Instance::open(data_dir, network, password.as_bytes()).await?;
     let session = Session {
         data_dir: data_dir.path().to_path_buf(),
@@ -179,18 +179,20 @@ pub async fn prompt_unlock(data_dir: &DataDir, input: Input) -> Result<Instance,
 /// The only instance under `data_dir`, or the one picked when there are several.
 pub fn choose_network(data_dir: &DataDir, input: Input) -> Result<NetworkId, anyhow::Error> {
     match data_dir.instances().as_slice() {
-        [] => anyhow::bail!(
+        [] => Err(failure::not_found(format!(
             "no wallet instance at {}; run `edw unlock`",
             data_dir.path().display()
-        ),
+        ))),
         [only] => Ok(*only),
         several => {
             let labels: Vec<String> = several.iter().map(ToString::to_string).collect();
             let choice = input
                 .choose("Select a network to unlock:", &labels)?
-                .context(
-                    "several wallet instances exist; run `edw unlock --network <name or id>`",
-                )?;
+                .ok_or_else(|| {
+                    failure::usage(
+                        "several wallet instances exist; run `edw unlock --network <name or id>`",
+                    )
+                })?;
             Ok(several[choice])
         }
     }
@@ -205,7 +207,7 @@ async fn password(
     if let Some(value) = std::env::var_os(PASSWORD_ENV) {
         let value = value
             .into_string()
-            .map_err(|_| anyhow::anyhow!("{PASSWORD_ENV} is not valid UTF-8"))?;
+            .map_err(|_| failure::usage(format!("{PASSWORD_ENV} is not valid UTF-8")))?;
         return Ok(Zeroizing::new(value));
     }
 
@@ -219,7 +221,8 @@ async fn password(
     if data_dir.has_instance(network) {
         input
             .secret("Decryption password: ")?
-            .context(MISSING_PASSWORD)
+            .filter(|password| !password.is_empty())
+            .ok_or_else(|| failure::locked(MISSING_PASSWORD))
     } else {
         setup(data_dir, network, input)
     }
@@ -232,7 +235,9 @@ fn setup(
     input: Input,
 ) -> Result<Zeroizing<String>, anyhow::Error> {
     if input == Input::Disabled {
-        anyhow::bail!("{MISSING_PASSWORD}; nothing was created");
+        return Err(failure::locked(format!(
+            "{MISSING_PASSWORD}; nothing was created"
+        )));
     }
     eprintln!(
         "No wallet instance exists for {network} at {}.",
@@ -243,9 +248,16 @@ fn setup(
 
     let password = input
         .secret("New decryption password: ")?
-        .context(MISSING_PASSWORD)?;
+        .ok_or_else(|| failure::locked(MISSING_PASSWORD))?;
+    if password.is_empty() && input == Input::Piped {
+        return Err(failure::locked(format!(
+            "{MISSING_PASSWORD}; nothing was created"
+        )));
+    }
     if password.is_empty() {
-        anyhow::bail!("the decryption password cannot be empty; nothing was created");
+        return Err(failure::usage(
+            "the decryption password cannot be empty; nothing was created",
+        ));
     }
 
     // Only a typed password can hold a typo worth catching; piped stdin would just be
@@ -253,9 +265,11 @@ fn setup(
     if input == Input::Terminal {
         let confirmation = input
             .secret("Confirm decryption password: ")?
-            .context(MISSING_PASSWORD)?;
+            .ok_or_else(|| failure::locked(MISSING_PASSWORD))?;
         if password.as_str() != confirmation.as_str() {
-            anyhow::bail!("the passwords do not match; nothing was created");
+            return Err(failure::usage(
+                "the passwords do not match; nothing was created",
+            ));
         }
     }
 

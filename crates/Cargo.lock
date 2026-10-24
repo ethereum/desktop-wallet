@@ -2705,8 +2705,10 @@ dependencies = [
 name = "edw-cli"
 version = "0.0.1"
 dependencies = [
+ "alloy-json-rpc",
  "alloy-primitives",
  "alloy-signer-local",
+ "alloy-transport",
  "anyhow",
  "async-trait",
  "clap",
@@ -2714,6 +2716,8 @@ dependencies = [
  "edw-core",
  "futures",
  "inventory",
+ "kohaku-tornadocash",
+ "kohaku-userop-kit",
  "libc",
  "rpassword",
  "serde",

@@ -1,10 +1,10 @@
-use std::io::IsTerminal;
+use std::{io::IsTerminal, process::ExitCode};
 
 use clap::Parser;
 use edw_cli::Cli;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let filter = tracing_subscriber::EnvFilter::builder()
@@ -17,7 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_ansi(std::io::stderr().is_terminal())
         .init();
 
-    cli.run().await?;
-
-    Ok(())
+    match cli.run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => cli.fail(&error),
+    }
 }

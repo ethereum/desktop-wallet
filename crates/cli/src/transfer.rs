@@ -9,12 +9,12 @@ use edw_core::{
 use serde::Serialize;
 
 use crate::{
-    GlobalArgs,
+    GlobalArgs, failure,
     report::Report,
     spend::{
         ShieldedWithdrawal, account_at, account_by_address, choose_profile, confirm, declined,
-        ensure_paymaster, eth_amount, first_bundler, mnemonic, note_eth, open_vault, send_one,
-        submit_shielded,
+        ensure_paymaster, eth_amount, first_bundler, mnemonic, note_eth, open_vault, parse_address,
+        send_one, submit_shielded,
     },
     unshield::note_lines,
 };
@@ -92,7 +92,7 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
         "From (index, address, or tornado): ",
     )?;
     let amount = eth_amount(args.amount.as_deref(), input, "Amount (ETH): ")?;
-    let to: Address = required(args.to.as_deref(), input, "To: ")?.parse()?;
+    let to = parse_address(&required(args.to.as_deref(), input, "To: ")?)?;
     let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
     if from.eq_ignore_ascii_case("tornado") {
@@ -104,7 +104,7 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     let payer = if let Ok(index) = from.parse::<u32>() {
         account_at(&phrase, profile.profile_index, index)?
     } else {
-        account_by_address(&phrase, profile.profile_index, from.parse()?)?
+        account_by_address(&phrase, profile.profile_index, parse_address(&from)?)?
     };
     let summary = format!(
         "Transfer {} ETH from {} ({}) to {to}.\nGas is paid by that same account.",
@@ -225,6 +225,6 @@ fn required(
         None => input
             .line(label)?
             .filter(|line| !line.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("pass {label}")),
+            .ok_or_else(|| failure::usage(format!("pass {label}"))),
     }
 }
