@@ -69,7 +69,10 @@ impl fmt::Display for UnlockReport {
                 f,
                 "Password accepted, but a session could not be saved: {error}"
             )?;
-            return write!(f, "The next command will require `edw unlock` again.");
+            return write!(
+                f,
+                "Each command will ask for the password again at a terminal, or read {PASSWORD_ENV}."
+            );
         }
 
         if self.already_unlocked {
@@ -170,7 +173,10 @@ pub async fn prompt_unlock(data_dir: &DataDir, input: Input) -> Result<Instance,
         network,
         password,
     };
-    if let Err(error) = SessionFile::runtime().store(&session).await {
+    let sessions = SessionFile::runtime();
+    if sessions.can_hold()
+        && let Err(error) = sessions.store(&session).await
+    {
         eprintln!("Password accepted, but a session could not be saved: {error:#}");
     }
     Ok(instance)
@@ -189,13 +195,27 @@ pub fn choose_network(data_dir: &DataDir, input: Input) -> Result<NetworkId, any
             let choice = input
                 .choose("Select a network to unlock:", &labels)?
                 .ok_or_else(|| {
-                    failure::usage(
-                        "several wallet instances exist; run `edw unlock --network <name or id>`",
-                    )
+                    failure::usage(if SessionFile::runtime().can_hold() {
+                        "several wallet instances exist; run `edw unlock --network <name or id>`"
+                    } else {
+                        "several wallet instances exist, and with no session here none can be chosen without a terminal; use a data directory that holds one"
+                    })
                 })?;
             Ok(several[choice])
         }
     }
+}
+
+/// The decryption password from [`PASSWORD_ENV`], when it is set.
+pub fn env_password() -> Result<Option<Zeroizing<String>>, anyhow::Error> {
+    std::env::var_os(PASSWORD_ENV)
+        .map(|value| {
+            value
+                .into_string()
+                .map(Zeroizing::new)
+                .map_err(|_| failure::usage(format!("{PASSWORD_ENV} is not valid UTF-8")))
+        })
+        .transpose()
 }
 
 /// The decryption password, from the environment, the session, or `input`.
@@ -204,11 +224,8 @@ async fn password(
     network: NetworkId,
     input: Input,
 ) -> Result<Zeroizing<String>, anyhow::Error> {
-    if let Some(value) = std::env::var_os(PASSWORD_ENV) {
-        let value = value
-            .into_string()
-            .map_err(|_| failure::usage(format!("{PASSWORD_ENV} is not valid UTF-8")))?;
-        return Ok(Zeroizing::new(value));
+    if let Some(password) = env_password()? {
+        return Ok(password);
     }
 
     if let Some(session) = SessionFile::runtime().load_if_present().await
