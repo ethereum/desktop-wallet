@@ -29,7 +29,7 @@ pub struct BalanceArgs {
     selector: Option<String>,
     /// Also list each vault's balance and each unspent Tornado note.
     #[arg(long)]
-    verbose: bool,
+    detailed: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -115,7 +115,7 @@ struct BalanceReport {
     assets: Vec<AssetRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vaults: Option<Vec<VaultRow>>,
-    /// Unspent Tornado notes. Present only with `--verbose`.
+    /// Unspent Tornado notes. Present only with `--detailed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     tornado_notes: Option<Vec<TornadoNoteRow>>,
 }
@@ -202,7 +202,7 @@ impl BalanceArgs {
             }
         };
         let vaults = self
-            .verbose
+            .detailed
             .then(|| vault_rows(&assets, &read, &unbuilt))
             .transpose()?;
         let holdings: Vec<UnspentNote> = holdings
@@ -211,7 +211,7 @@ impl BalanceArgs {
             .collect();
         let mut totals = balance::totals(&read, assets.len());
         fold_tornado(&assets, &mut totals, &holdings);
-        let tornado_notes = (self.verbose && tornado_ok)
+        let tornado_notes = (self.detailed && tornado_ok)
             .then(|| note_rows(&holdings))
             .transpose()?;
 
@@ -549,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn verbose_tornado_section_lists_each_note() {
+    fn detailed_tornado_section_lists_each_note() {
         assert_eq!(tornado_lines(&[]), "\n\ntornado\n  no notes");
         let lines = tornado_lines(&[
             TornadoNoteRow {

@@ -20,6 +20,7 @@ pub enum Command {
     /// The pool indexer: its URL, and whether it is on.
     IndexerConfig(indexer_config::IndexerConfigArgs),
     /// View network status, latest reported block-height, etc
+    #[command(hide = true)]
     Status,
 }
 

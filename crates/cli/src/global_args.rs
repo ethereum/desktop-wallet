@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Args;
+use clap_verbosity_flag::{Verbosity, WarnLevel};
 use edw_core::instance::{DataDir, Instance};
 
 use crate::{input::Input, report::Mode, session::SessionFile, unlock};
@@ -13,6 +14,8 @@ pub struct GlobalArgs {
     /// from flags, the environment, the session, or piped stdin.
     #[arg(long, global = true, visible_alias = "porcelain")]
     pub non_interactive: bool,
+    #[command(flatten)]
+    pub verbosity: Verbosity<WarnLevel>,
 }
 
 impl GlobalArgs {

@@ -10,8 +10,10 @@ pub enum Command {
     /// Prints the unlocked network instance store path.
     Path,
     /// Applies pending database migrations.
+    #[command(hide = true)]
     Migrate,
     /// Deletes profile database data.
+    #[command(hide = true)]
     Purge,
 }
 

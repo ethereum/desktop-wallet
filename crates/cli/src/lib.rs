@@ -64,6 +64,12 @@ enum Command {
 }
 
 impl Cli {
+    /// The log level that `-v` and `-q` select, starting from `warn`.
+    #[must_use]
+    pub fn log_level(&self) -> tracing_subscriber::filter::LevelFilter {
+        self.global.verbosity.tracing_level_filter()
+    }
+
     pub async fn run(&self) -> Result<(), anyhow::Error> {
         match &self.command {
             Command::Config(args) => args.run(&self.global).await,
