@@ -34,12 +34,12 @@ Logs go to stderr at `warn` by default. `RUST_LOG`, when set, takes precedence o
 
 ### Exit Codes
 
-| Code | Class | When |
-|---|---|---|
-| 0 | | the command succeeded, or a confirmation was declined |
-| 1 | `other` | any failure not listed below, including a value the wallet core rejects, such as an unknown profile name or an amount that is not a sum of pool denominations, an unreachable RPC endpoint or bundler, or a reverted transaction |
-| 2 | `usage` | an argument the CLI rejects itself, such as a missing flag, a malformed address, or an unusable phrase file |
-| 3 | `locked` | no session or password to open the wallet with, or a wrong password |
+| Code | Class    | When                                                                                                                                                                                                                             |
+| ---- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    |          | the command succeeded, or a confirmation was declined                                                                                                                                                                            |
+| 1    | `other`  | any failure not listed below, including a value the wallet core rejects, such as an unknown profile name or an amount that is not a sum of pool denominations, an unreachable RPC endpoint or bundler, or a reverted transaction |
+| 2    | `usage`  | an argument the CLI rejects itself, such as a missing flag, a malformed address, or an unusable phrase file                                                                                                                      |
+| 3    | `locked` | no session or password to open the wallet with, or a wrong password                                                                                                                                                              |
 
 With `--non-interactive`, a failure prints one `edw/error` document on stdout instead of text on stderr. Argument errors that clap reports while parsing are always text, with code 2.
 
