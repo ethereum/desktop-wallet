@@ -1,11 +1,18 @@
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand};
 
-use crate::global_args::GlobalArgs;
+use crate::{
+    failure::ErrorReport,
+    global_args::GlobalArgs,
+    report::{Mode, Report},
+};
 
 mod asset;
 mod balance;
 mod config;
 mod database;
+mod failure;
 mod fresh;
 mod global_args;
 mod input;
@@ -64,6 +71,24 @@ enum Command {
 }
 
 impl Cli {
+    /// The log level that `-v` and `-q` select, starting from `warn`.
+    #[must_use]
+    pub fn log_level(&self) -> tracing_subscriber::filter::LevelFilter {
+        self.global.verbosity.tracing_level_filter()
+    }
+
+    /// Reports `error`, as an `edw/error` document on stdout under `--non-interactive` or as
+    /// text on stderr otherwise, and returns the exit code for its class.
+    #[must_use]
+    pub fn fail(&self, error: &anyhow::Error) -> ExitCode {
+        let report = ErrorReport::new(error);
+        let mode = self.global.mode();
+        if matches!(mode, Mode::Human) || report.emit(mode).is_err() {
+            eprintln!("Error: {error:?}");
+        }
+        ExitCode::from(report.class().exit_code())
+    }
+
     pub async fn run(&self) -> Result<(), anyhow::Error> {
         match &self.command {
             Command::Config(args) => args.run(&self.global).await,

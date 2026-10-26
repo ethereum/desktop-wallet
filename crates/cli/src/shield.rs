@@ -12,7 +12,7 @@ use edw_core::{
 use serde::Serialize;
 
 use crate::{
-    GlobalArgs,
+    GlobalArgs, failure,
     report::Report,
     spend::{
         Account, account_at, choose_profile, confirm, declined, mnemonic, open_vault, send_one,
@@ -83,7 +83,10 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
         None => input
             .line("Pay from address index [0]: ")?
             .filter(|line| !line.is_empty())
-            .map(|line| line.parse::<u32>())
+            .map(|line| {
+                line.parse::<u32>()
+                    .map_err(|_| failure::usage(format!("`{line}` is not an address index")))
+            })
             .transpose()?
             .unwrap_or(0),
     };

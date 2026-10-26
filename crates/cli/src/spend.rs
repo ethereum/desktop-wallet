@@ -19,7 +19,7 @@ use edw_core::{
 };
 use zeroize::Zeroizing;
 
-use crate::input::Input;
+use crate::{failure, input::Input};
 
 pub struct Account {
     pub index: u32,
@@ -59,7 +59,7 @@ pub async fn choose_profile(
             let labels: Vec<String> = several.iter().map(ProfileRecord::display_name).collect();
             let choice = input
                 .choose("Select a profile:", &labels)?
-                .context("pass --profile <profile>")?;
+                .ok_or_else(|| failure::usage("pass --profile <profile>"))?;
             Ok(several[choice].clone())
         }
     }
@@ -105,6 +105,11 @@ pub fn account_by_address(
     )
 }
 
+pub fn parse_address(text: &str) -> Result<Address, anyhow::Error> {
+    text.parse()
+        .map_err(|error| failure::usage(format!("`{text}` is not an address: {error}")))
+}
+
 pub async fn open_vault(
     instance: &Instance,
     profile: &ProfileRecord,
@@ -130,16 +135,16 @@ pub fn tornado_amount(
     input: Input,
 ) -> Result<U256, anyhow::Error> {
     match (formatted, raw) {
-        (Some(_), Some(_)) => {
-            anyhow::bail!("pass only one of --amount-formatted and --amount-raw")
-        }
+        (Some(_), Some(_)) => Err(failure::usage(
+            "pass only one of --amount-formatted and --amount-raw",
+        )),
         (Some(amount), None) => Ok(parse_eth(amount)?),
         (None, Some(amount)) => Ok(parse_wei(amount)?),
         (None, None) => {
             let text = input
                 .line("Amount (ETH): ")?
                 .filter(|line| !line.is_empty())
-                .context("pass --amount-formatted or --amount-raw")?;
+                .ok_or_else(|| failure::usage("pass --amount-formatted or --amount-raw"))?;
             Ok(parse_eth(&text)?)
         }
     }
@@ -151,7 +156,7 @@ pub fn eth_amount(given: Option<&str>, input: Input, label: &str) -> Result<U256
         None => input
             .line(label)?
             .filter(|line| !line.is_empty())
-            .context(format!("pass {label}"))?,
+            .ok_or_else(|| failure::usage(format!("pass {label}")))?,
     };
     Ok(parse_eth(&text)?)
 }
