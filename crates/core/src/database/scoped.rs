@@ -35,6 +35,10 @@ impl ScopedDatabase {
 
 #[async_trait::async_trait]
 impl Database for ScopedDatabase {
+    async fn lock(&self) -> Result<super::DatabaseGuard, DatabaseError> {
+        self.db.lock().await
+    }
+
     async fn get(&self, key: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, DatabaseError> {
         self.db.get(&self.scoped_key(key)).await
     }

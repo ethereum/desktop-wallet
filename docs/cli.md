@@ -30,8 +30,8 @@ edw asset opt-in <address> [--profile SELECTOR] # tracks an ERC-20, or restores 
 edw asset opt-out <address> [--profile SELECTOR] # stops tracking an ERC-20. A default is recorded as opted out; any other token is removed from its opt-ins. That hides its public balance and its Tornado notes
 edw balance [profile] [--detailed] # each asset's public, private and total holdings; the private total includes Tornado notes. --detailed lists each vault and each unspent Tornado note
 edw next-fresh-address [--peek] [--profile SELECTOR]
-edw shield [--amount-formatted <tokens> | --amount-raw <base-units>] [--token SYMBOL] [--from INDEX] [--profile SELECTOR]
-edw unshield [--amount-formatted <tokens> | --amount-raw <base-units>] [--token SYMBOL] [--to <address> | --tail-calls <target:calldata[:wei],...>] [--profile SELECTOR]
+edw shield [--amount-formatted <tokens> | --amount-raw <base-units>] [--token SYMBOL] [--prepare | --from INDEX] [--profile SELECTOR]
+edw unshield [--amount-formatted <tokens> | --amount-raw <base-units>] [--token SYMBOL] [--to <address> | --tail-calls <target:calldata[:wei],...>] [--expected-fresh-address ADDRESS] [--profile SELECTOR]
 edw transfer --from <index|address|tornado> --to <address> --amount <eth> [--profile SELECTOR]
 ```
 
@@ -60,6 +60,29 @@ edw unshield --amount-formatted 1 --tail-calls '0x111111111111111111111111111111
 Gas is measured by the configured bundlers, with 20% headroom. During fee quoting, simulation-only native ETH balance overrides compensate for the SDK's temporary 10% sponsor fee. ERC-20 proceeds come from actual token withdrawals in the simulated execution; token balance storage overrides are unnecessary. The final operation is simulated again with real proofs and **no funding overrides**; reverts or estimates exceeding the quoted gas limits abort before signing. The RPC and bundler must support state overrides; there is no guessed gas fallback. Native tail values must fit after the fee; token transfers and approvals are checked by the final simulation.
 
 The core withdrawal API accepts an external Alloy signer. Fee quoting and simulation use dummy UserOp signatures; the owner signs only the final UserOp and, when needed, its EIP-7702 authorization. CLI profiles currently derive software keys from mnemonics; this change does not add hardware-wallet profile discovery or transport. Reports identify the withdrawal token, the fee token, and the number of custom tail calls separately. The reported fee is the proven maximum reserve; a paymaster refund of unused gas can leave additional change on the fresh account.
+
+`shield --prepare --non-interactive` reserves new Tornado notes in the encrypted wallet database and returns one `edw/shield-prepared` JSON document. It never broadcasts, checks payer balances, or signs a transaction/UserOp, and needs no `--from`. `--prepare` and `--from` conflict. It constructs calls rather than independently simulating them: the final combined UserOp is simulated by `unshield` after its proceeds are available.
+
+The document contains `chain_id`, `token`, `broadcast: false`, public `notes` metadata (nonce, pool ID, commitment, amount), ordered `calls` (`target`, `data`, decimal native-wei `value` strings), and `tail_calls`, a string ready for `unshield --tail-calls`. ERC-20 preparations include approval before each deposit. It contains no note secrets. To retry the same intended deposit, reuse the saved output; invoking preparation again deliberately creates different notes.
+
+Reservation holds a cross-process database lock across nonce allocation and note persistence. The nonce advance is flushed to disk before derivation, and the pending record is saved before any calldata is returned. Failure, cancellation, abandoned calls, or a broken stdout pipe never roll back consumed nonces. Restarting continues from that high-water mark. Rescan preserves local pending reservations and never rewinds the counter. Exported calls remain valid after a failed simulation, so do not recycle their nonces or roll the wallet database back to an older backup while those calls might still be submitted. Keep the encrypted wallet database backed up with the recovery phrase.
+
+A seed-only restore cannot reconstruct reservations that never appeared on-chain. Import/rescan normally discover notes until 20 consecutive nonces have no deposits. After many abandoned preparations, use `profile import --tornado-gap-limit N` or `profile rescan PROFILE --tornado-gap-limit N` with a gap large enough to cross the unused range and discover later mined notes. This recovers on-chain notes; it does not recover unbroadcast reservations or make an old database safe to reuse alongside newer exported calls.
+
+For an agent composing ETH unshield → swap → USDC shield (with wallet credentials/session already configured):
+
+```sh
+edw next-fresh-address --peek --profile alice --non-interactive
+edw shield --prepare --token USDC --amount-formatted 100 --profile alice --non-interactive
+# Save the preparation JSON. Append its tail_calls after the swap calls.
+edw unshield --amount-formatted 1 --profile alice --non-interactive \
+  --expected-fresh-address "$FRESH_ADDRESS" \
+  --tail-calls "$SWAP_CALLS,$SHIELD_CALLS"
+```
+
+`unshield --non-interactive` **broadcasts directly** after proving and simulation; invoking it is authorization. There is no `--broadcast` flag and no `--next` flag: unshield already uses the next fresh account. To construct deposit calls without submission, use `shield --prepare`. A swap should guarantee at least the chosen pool denominations, with its output available to the executing fresh account. Any surplus remains there.
+
+`--expected-fresh-address` is optional. If supplied, unshield aborts before proving/signing/submission when its selected account differs. A mismatch does not inherently guarantee an EVM revert: arbitrary calldata can still succeed with a recipient address baked into an earlier quote, so use the explicit check when calls were built for a peeked address.
 
 `next-fresh-address` prints the next standard address that this profile has not handed out and that has no nonce, code, or ETH, then stores it. `--peek` prints the same address and writes nothing. A declined command does not store a fresh address. `unshield` and `transfer --from tornado` store it once a bundler accepts the user operation, then wait for the receipt.
 

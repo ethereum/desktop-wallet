@@ -222,5 +222,70 @@ async fn check_forward(
         Some(provider.get_balance(recipient).await?),
         submitted.forwarded
     );
+    check_prepared_reshield(provider, vault, pool, urls).await?;
+    Ok(())
+}
+
+async fn check_prepared_reshield(
+    provider: &DynProvider,
+    vault: &TornadoVault<PrivateKeySigner>,
+    source: &Pool,
+    urls: &[crate::bundler::Url],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let target = deploy_pool(provider.clone(), Some(10_u128.pow(16))).await?;
+    // Prepare the deposit while the eventual fresh sender has no funds yet.
+    let prepared = vault
+        .prepare_deposits(std::slice::from_ref(&target))
+        .await?;
+    let nonce = prepared[0].nonce;
+    let calls = prepared[0].calls.clone();
+    for call in vault.deposit(source).await? {
+        provider
+            .send_transaction(
+                alloy_rpc_types_eth::TransactionRequest::default()
+                    .to(call.target)
+                    .value(call.value)
+                    .input(call.data.into()),
+            )
+            .await?
+            .watch()
+            .await?;
+    }
+    let notes: Vec<_> = vault
+        .notes()
+        .await?
+        .into_iter()
+        .filter(|note| note.pool == *source && !note.spent)
+        .collect();
+    let owner = PrivateKeySigner::random();
+    assert_eq!(provider.get_balance(owner.address()).await?, U256::ZERO);
+    let submitted = submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
+        vault,
+        provider: provider.clone(),
+        owner: &owner,
+        asset: &Asset::ETH,
+        tail_calls: &calls,
+        notes: &notes,
+        forward_to: None,
+        minimum_forward: None,
+        chain_id: source.chain_id,
+        bundlers: BundlerList::from_urls(source.chain_id, urls)?,
+    })
+    .await?;
+    submitted.wait().await?;
+    let held = vault.notes().await?;
+    let reshielded = held
+        .iter()
+        .find(|note| note.pool == target && note.nonce == nonce)
+        .ok_or("prepared note was lost")?;
+    assert!(
+        reshielded.leaf_index.is_some(),
+        "prepared note must be recognized once its call is mined"
+    );
+    assert!(!reshielded.spent);
+    assert_eq!(
+        provider.get_balance(target.address).await?,
+        U256::from(target.amount_wei)
+    );
     Ok(())
 }

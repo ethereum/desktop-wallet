@@ -65,6 +65,9 @@ pub struct ImportArgs {
     /// Exclude extended Tornado pools for this profile.
     #[arg(long)]
     no_extended_pools: bool,
+    /// Consecutive unused Tornado nonces to scan (default 20). Increase after abandoned preparations.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    tornado_gap_limit: Option<u64>,
     #[arg(long)]
     name: Option<String>,
     /// Read the recovery phrase from this file instead of stdin. It must be owned by you with
@@ -86,6 +89,9 @@ pub struct RenameArgs {
 
 #[derive(Args, Debug)]
 pub struct RescanArgs {
+    /// Consecutive unused Tornado nonces to scan (default 20). Increase for seed-only recovery.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    tornado_gap_limit: Option<u64>,
     /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
     selector: Option<String>,
 }
@@ -380,7 +386,7 @@ impl NewArgs {
             .await?;
         // A brand-new phrase has no deposits to find. A stored phrase might.
         let tornado_notes = if shared.is_some() {
-            recover_tornado(&instance, &profile).await
+            recover_tornado(&instance, &profile, None).await
         } else {
             None
         };
@@ -424,7 +430,7 @@ impl ImportArgs {
             ),
             None => (Vec::new(), None),
         };
-        let tornado_notes = recover_tornado(&instance, &profile).await;
+        let tornado_notes = recover_tornado(&instance, &profile, self.tornado_gap_limit).await;
         ImportReport {
             profile: ProfileSummary::load(&instance, &profile).await?,
             addresses,
@@ -473,7 +479,7 @@ impl RescanArgs {
         let endpoint = instance.rpc().await?;
         let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
         let added = instance.add_missing_address_vaults(&profile, &scan).await?;
-        let tornado_notes = recover_tornado(&instance, &profile).await;
+        let tornado_notes = recover_tornado(&instance, &profile, self.tornado_gap_limit).await;
         RescanReport {
             profile: ProfileSummary::load(&instance, &profile).await?,
             added: added
@@ -597,24 +603,17 @@ impl RevealPhraseArgs {
 
 /// Recovers Tornado notes on the current chain, or warns on stderr and returns `None` when the
 /// scan fails.
-async fn recover_tornado(instance: &Instance, profile: &ProfileRecord) -> Option<u32> {
+async fn recover_tornado(
+    instance: &Instance,
+    profile: &ProfileRecord,
+    gap_limit: Option<u64>,
+) -> Option<u32> {
     let recovered: Result<u32, anyhow::Error> = async {
         let endpoint = instance.rpc().await?;
         let phrase = crate::spend::mnemonic(instance, profile).await?;
         let vault = crate::spend::open_vault(instance, profile, &phrase, endpoint).await?;
         eprintln!("Recovering Tornado notes...");
-        let recovery = vault.recover_chain_with_progress(|index, total, pool| {
-            eprintln!("Syncing Tornado pool {index}/{total}: {pool}");
-        });
-        tokio::pin!(recovery);
-        let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
-        heartbeat.tick().await;
-        let count = loop {
-            tokio::select! {
-                result = &mut recovery => break result?,
-                _ = heartbeat.tick() => eprintln!("Still recovering Tornado notes..."),
-            }
-        };
+        let count = vault.recover_chain_with_gap(gap_limit).await?;
         Ok(u32::try_from(count)?)
     }
     .await;

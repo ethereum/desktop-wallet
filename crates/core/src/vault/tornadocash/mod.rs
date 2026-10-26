@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use alloy_signer::{Signer, k256::ecdsa::SigningKey};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
@@ -9,9 +9,9 @@ pub use amount::{
     exact_notes_for_asset, format_amount, format_eth, parse_amount, parse_eth, parse_wei,
     resolve_asset, withdrawal_notes,
 };
-pub use kohaku_tornadocash::Asset;
+pub use kohaku_tornadocash::{Asset, Pool};
 use kohaku_tornadocash::{
-    Deposit, Note, Pool, Withdrawal, WithdrawalError,
+    Deposit, Note, Withdrawal, WithdrawalError,
     merkle_tree::{MerkleProof, MerkleTree, MerkleTreeExt},
     syncer::{DynSyncer, SyncEvent, Syncer},
 };
@@ -38,6 +38,9 @@ use crate::{
 mod amount;
 mod db;
 mod estimation;
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod reservation_tests;
 mod syncer;
 mod userop;
 #[cfg(test)]
@@ -73,6 +76,15 @@ pub struct TornadoNote {
     pub spent: bool,
 }
 
+/// Public metadata and ordered calls for a durably reserved deposit. No spending secrets.
+#[derive(Clone, Debug)]
+pub struct PreparedDeposit {
+    pub pool: Pool,
+    pub nonce: u64,
+    pub commitment: B256,
+    pub calls: Vec<Call>,
+}
+
 /// One unspent note, in the shape a balance readout can sum and print.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnspentNote {
@@ -101,6 +113,8 @@ pub enum TornadoVaultError {
     TokenBalance(String),
     #[error("merkle tree error: {0}")]
     MerkleTree(String),
+    #[error("Tornado keychain nonce exhausted")]
+    NonceExhausted,
     #[error("note {0} has not been mined")]
     NoteNotMined(u64),
     #[error("note {0} has already been spent")]
@@ -134,6 +148,14 @@ impl TornadoVault<PrivateKeySigner> {
 }
 
 impl<S: Signer + Send + Sync> TornadoVault<S> {
+    async fn operation_lock(&self) -> Result<crate::database::DatabaseGuard, TornadoVaultError> {
+        Ok(self
+            .db
+            .lock()
+            .await
+            .map_err(db::TornadoVaultDbError::from)?)
+    }
+
     pub fn new(signer: S, db: Arc<dyn Database>, provider: Arc<dyn NetworkEndpoint>) -> Self {
         let syncer = DynSyncer::new(NetworkEndpointSyncer::new(provider.clone()));
         Self::with_syncer(signer, db, provider, syncer)
@@ -159,6 +181,11 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
 
     /// Syncs the given pools' events up to the latest block, updating the vault's notes.
     pub async fn sync(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
+        let _guard = self.operation_lock().await?;
+        self.sync_unlocked(pools).await
+    }
+
+    async fn sync_unlocked(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
         //? `block_height` is inclusive, sync ranges are half-open.
         let end = self.provider.block_height().await?.saturating_add(1);
 
@@ -171,38 +198,69 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
 
     /// Recovers all notes derived from the vault's signer for the given pools.
     ///
-    /// Replaces the pools' stored notes, so deposits not yet mined are forgotten. A later
-    /// `recover` finds them once they are.
+    /// Keeps local reservations, including unbroadcast deposits. Recovery never rewinds the
+    /// nonce counter. `gap_limit` recovery defaults apply only when discovering unknown notes.
     pub async fn recover(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
+        self.recover_with_gap(pools, None).await
+    }
+
+    /// Recovers with an explicit discovery gap for seed-only restores after abandoned preparations.
+    pub async fn recover_with_gap(
+        &self,
+        pools: &[Pool],
+        gap_limit: Option<u64>,
+    ) -> Result<(), TornadoVaultError> {
+        let _guard = self.operation_lock().await?;
         self.track(pools).await?;
-        self.sync(pools).await?;
+        self.sync_unlocked(pools).await?;
 
         let mut snapshots = Vec::new();
         for pool in pools {
             snapshots.extend(self.pool_db(pool).snapshots().await?);
         }
-        let recovered = recover(&self.keychain, &snapshots, None).await?;
+        let recovered = recover(&self.keychain, &snapshots, gap_limit).await?;
+        // Publish the recovered high-water mark before writing recovered records, so an
+        // interrupted rescan cannot leave newly discovered notes ahead of the counter.
+        let recovered_next = recovered
+            .iter()
+            .map(|found| {
+                found
+                    .nonce
+                    .checked_add(1)
+                    .ok_or(TornadoVaultError::NonceExhausted)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+        let stored_next = self.db.next_nonce().await?;
+        self.db
+            .put_next_nonce(recovered_next.max(stored_next))
+            .await?;
 
         for pool in pools {
-            let mut notes = Vec::new();
+            let mut notes = self.pool_db(pool).notes().await?;
             for found in recovered.iter().filter(|found| found.pool == *pool) {
                 let note = self.derive_note(found.nonce, pool).await?;
-                notes.push(NoteRecord {
+                let record = NoteRecord {
                     nonce: found.nonce,
                     leaf_index: Some(found.deposit.leaf_index),
                     spent: found.withdrawal.is_some(),
                     commitment: note.commitment(),
                     nullifier_hash: note.nullifier_hash(),
-                });
+                };
+                if let Some(existing) = notes
+                    .iter_mut()
+                    .find(|existing| existing.commitment == record.commitment)
+                {
+                    *existing = record;
+                } else {
+                    notes.push(record);
+                }
             }
             self.pool_db(pool).put_notes(&notes).await?;
         }
 
-        let recovered_next = recovered.iter().map(|found| found.nonce + 1).max();
-        let stored_next = self.db.next_nonce().await?;
-        self.db
-            .put_next_nonce(recovered_next.unwrap_or(0).max(stored_next))
-            .await?;
         Ok(())
     }
 
@@ -211,15 +269,26 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// Nonces are shared across pools. Scanning stops after 20 consecutive nonces with no
     /// deposit in any pool. Returns how many unspent notes were stored.
     pub async fn recover_chain(&self) -> Result<usize, TornadoVaultError> {
+        self.recover_chain_with_gap(None).await
+    }
+
+    /// Discovers chain notes with an optional consecutive-unused-nonce limit.
+    pub async fn recover_chain_with_gap(
+        &self,
+        gap_limit: Option<u64>,
+    ) -> Result<usize, TornadoVaultError> {
         let chain_id = self.provider.network_id().await?;
         let pools: Vec<Pool> = Pool::POOLS
             .iter()
             .filter(|pool| pool.chain_id == chain_id)
             .cloned()
             .collect();
-        self.recover(&pools).await?;
+        self.recover_with_gap(&pools, gap_limit).await?;
         let notes = self.pool_notes(&pools).await?;
-        Ok(notes.iter().filter(|note| !note.spent).count())
+        Ok(notes
+            .iter()
+            .filter(|note| !note.spent && note.leaf_index.is_some())
+            .count())
     }
 
     /// Returns the calls that deposit one new note into `pool`.
@@ -227,11 +296,27 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// ERC-20 deposits are preceded by an approval for the pool's denomination. The pool is
     /// tracked from then on.
     pub async fn deposit(&self, pool: &Pool) -> Result<Vec<Call>, TornadoVaultError> {
-        self.track(std::slice::from_ref(pool)).await?;
+        let deposits = self.prepare_deposits(std::slice::from_ref(pool)).await?;
+        Ok(deposits
+            .into_iter()
+            .flat_map(|deposit| deposit.calls)
+            .collect())
+    }
 
-        let mut calls: Vec<Call> = approval(pool).into_iter().collect();
-        calls.push(self.deposit_note(pool).await?);
-        Ok(calls)
+    /// Reserves nonces, records pending notes, and returns calls without checking balances or
+    /// broadcasting. Nonces are persisted before derivation and are never rolled back on error.
+    /// A partial failure consumes reservations but exposes no calldata; gaps are safe.
+    pub async fn prepare_deposits(
+        &self,
+        pools: &[Pool],
+    ) -> Result<Vec<PreparedDeposit>, TornadoVaultError> {
+        let _guard = self.operation_lock().await?;
+        self.track(pools).await?;
+        let mut deposits = Vec::with_capacity(pools.len());
+        for pool in pools {
+            deposits.push(self.deposit_note(pool).await?);
+        }
+        Ok(deposits)
     }
 
     /// Returns a list of every note derived from the vault's signer.
@@ -239,6 +324,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// Syncs the tracked pools on the current network. Returns pending, mined,
     /// and spent notes.
     pub async fn notes(&self) -> Result<Vec<TornadoNote>, TornadoVaultError> {
+        let _guard = self.operation_lock().await?;
         let chain_id = self.provider.network_id().await?;
         let pools: Vec<Pool> = self
             .db
@@ -248,7 +334,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
             .filter(|pool| pool.chain_id == chain_id)
             .collect();
 
-        self.sync(&pools).await?;
+        self.sync_unlocked(&pools).await?;
         self.pool_notes(&pools).await
     }
 
@@ -311,8 +397,9 @@ impl<S: Signer + Send + Sync> Vault for TornadoVault<S> {
     }
 
     async fn balance(&self, asset: &AssetId) -> Result<Balance, VaultError> {
+        let _guard = self.operation_lock().await?;
         let pools = self.tracked_pools(asset).await?;
-        self.sync(&pools).await?;
+        self.sync_unlocked(&pools).await?;
 
         let notes = self.pool_notes(&pools).await?;
         Ok(note_balance(&notes))
@@ -370,10 +457,8 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         let snapshot = self.syncer.sync_range(pool, start, end).await?;
         pool_db.put_snapshot(&snapshot).await?;
 
-        if let Some(tree) = self.trees_cache.lock().await.get_mut(pool) {
-            tree.splice_events(&snapshot.events)
-                .map_err(|e| TornadoVaultError::MerkleTree(e.to_string()))?;
-        }
+        // Another process may have advanced snapshots since this vault last built its tree.
+        self.trees_cache.lock().await.remove(pool);
 
         let mut notes = pool_db.notes().await?;
         apply_events(&mut notes, &snapshot.events);
@@ -400,10 +485,16 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     }
 
     /// Reserves the next nonce for a new note in `pool` and returns the call that deposits it.
-    async fn deposit_note(&self, pool: &Pool) -> Result<Call, TornadoVaultError> {
+    async fn deposit_note(&self, pool: &Pool) -> Result<PreparedDeposit, TornadoVaultError> {
         //? Reserve the nonce before deriving the note to avoid re-using a nonce.
         let nonce = self.db.next_nonce().await?;
-        self.db.put_next_nonce(nonce + 1).await?;
+        self.db
+            .put_next_nonce(
+                nonce
+                    .checked_add(1)
+                    .ok_or(TornadoVaultError::NonceExhausted)?,
+            )
+            .await?;
         let note = self.derive_note(nonce, pool).await?;
 
         let pool_db = self.pool_db(pool);
@@ -417,12 +508,20 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         });
         pool_db.put_notes(&notes).await?;
 
+        let commitment = note.commitment().into();
         let deposit = Deposit::new(pool, note);
-        Ok(Call::new(
+        let mut calls: Vec<Call> = approval(pool).into_iter().collect();
+        calls.push(Call::new(
             deposit.target(),
             deposit.input().into(),
             deposit.value(),
-        ))
+        ));
+        Ok(PreparedDeposit {
+            pool: pool.clone(),
+            nonce,
+            commitment,
+            calls,
+        })
     }
 
     async fn merkle_proof(

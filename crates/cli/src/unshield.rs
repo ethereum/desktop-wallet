@@ -34,6 +34,9 @@ pub struct UnshieldArgs {
     /// Where the selected asset is forwarded. Omitted, it stays on the fresh address.
     #[arg(long)]
     to: Option<String>,
+    /// Abort if the next fresh account differs from this address.
+    #[arg(long)]
+    expected_fresh_address: Option<Address>,
     #[arg(long)]
     profile: Option<String>,
 }
@@ -110,6 +113,7 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     let fresh = instance
         .fresh_address(&profile, &phrase, endpoint.as_ref())
         .await?;
+    verify_fresh(args.expected_fresh_address, fresh.address)?;
     let bundler_urls = instance.bundler_urls().await?;
     let bundler = first_bundler(&bundler_urls)?;
     let description = format!(
@@ -175,6 +179,17 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     .emit(global.mode())
 }
 
+fn verify_fresh(expected: Option<Address>, actual: Address) -> Result<(), anyhow::Error> {
+    if let Some(expected) = expected
+        && expected != actual
+    {
+        return Err(failure::usage(format!(
+            "expected fresh address {expected}, but the next account is {actual}; rebuild calls for this account"
+        )));
+    }
+    Ok(())
+}
+
 fn custom_calls(
     args: &UnshieldArgs,
     asset: &edw_core::vault::tornadocash::Asset,
@@ -228,4 +243,16 @@ pub fn note_lines(notes: &[edw_core::vault::tornadocash::TornadoNote]) -> Vec<No
 fn validate_tail_calls(raw: &str) -> Result<String, String> {
     parse_tail_calls(raw)?;
     Ok(raw.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn expected_address_is_optional_but_mismatch_aborts() {
+        let actual = Address::repeat_byte(0x11);
+        assert!(verify_fresh(None, actual).is_ok());
+        assert!(verify_fresh(Some(actual), actual).is_ok());
+        assert!(verify_fresh(Some(Address::repeat_byte(0x22)), actual).is_err());
+    }
 }

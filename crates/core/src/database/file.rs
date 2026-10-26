@@ -44,6 +44,18 @@ impl FileDatabase {
 //? high-traffic backend should move this off the async executor.
 #[async_trait::async_trait]
 impl Database for FileDatabase {
+    async fn lock(&self) -> Result<super::DatabaseGuard, DatabaseError> {
+        let path = self.dir.join(".operation-lock");
+        tokio::task::spawn_blocking(move || {
+            let file = create_private_file(&path)?;
+            file.lock()?;
+            Ok(Box::new(file) as super::DatabaseGuard)
+        })
+        .await
+        .map_err(|error| DatabaseError::Other(Box::new(error)))?
+        .map_err(|error: std::io::Error| FileDatabaseError::Io(error).into())
+    }
+
     async fn get(&self, key: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, DatabaseError> {
         match std::fs::read(self.key_path(key)) {
             Ok(bytes) => Ok(Some(Zeroizing::new(bytes))),
@@ -62,7 +74,11 @@ impl Database for FileDatabase {
             let file = create_private_file(&tmp)?;
             std::io::Write::write_all(&mut &file, value)?;
             file.sync_all()?;
-            std::fs::rename(&tmp, &path)
+            std::fs::rename(&tmp, &path)?;
+            // Persist the rename as well as the file contents before returning a reservation.
+            #[cfg(unix)]
+            std::fs::File::open(&self.dir)?.sync_all()?;
+            Ok(())
         };
 
         write().map_err(|e| {

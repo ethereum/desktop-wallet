@@ -355,6 +355,10 @@ impl From<EncryptedDatabaseError> for DatabaseError {
 
 #[async_trait::async_trait]
 impl Database for EncryptedDatabase {
+    async fn lock(&self) -> Result<super::DatabaseGuard, DatabaseError> {
+        self.db.lock().await
+    }
+
     async fn get(&self, key: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, DatabaseError> {
         let storage_key = self.storage_key(key)?;
         let Some(blob) = self.db.get(&storage_key).await? else {
