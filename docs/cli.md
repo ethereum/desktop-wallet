@@ -1,7 +1,27 @@
 # CLI Interface
 
 The `edw-cli` crate implements the `edw` CLI interface.
-The crate is concerned purely with inputs and outputs, not with underlying machinery.
+
+## Getting Started
+
+Create a fresh wallet by running the following commands:
+
+```bash
+# Create a new wallet
+just run unlock --network sepolia
+
+# Set your JSON-RPC endpoint
+just run network rpc-config add --use
+
+# Create a new profile
+just run profile new
+
+# Create a new address
+just run next-fresh-address
+
+# View your profile's public address and balance
+just run balance --detailed
+```
 
 ## Layout
 
