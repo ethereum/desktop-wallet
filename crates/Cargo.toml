@@ -31,6 +31,7 @@ alloy-consensus = "2.3.0"
 alloy-dyn-abi = "1.6.1"
 alloy-contract = "2.3.0"
 alloy-eips = "2.3.0"
+alloy-ens = { version = "2.5.0", default-features = false, features = ["provider"] }
 alloy-network = "2.3.0"
 alloy-node-bindings = "2.3.0"
 alloy-primitives = "1.6.1"
