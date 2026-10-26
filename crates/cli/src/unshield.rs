@@ -2,35 +2,40 @@ use std::fmt;
 
 use alloy_primitives::{Address, U256};
 use clap::{ArgGroup, Args};
-use edw_core::vault::tornadocash::{exact_notes, format_eth};
+use edw_core::vault::tornadocash::{
+    deposit_pools_for_asset, format_amount, resolve_asset, withdrawal_notes,
+};
 use serde::Serialize;
 
 use crate::{
-    GlobalArgs,
+    GlobalArgs, failure,
     report::Report,
     spend::{
-        Consent, ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster,
-        first_bundler, keep_fresh, mnemonic, note_eth, open_vault, recipient_address,
-        submit_shielded, tornado_amount,
+        ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster, first_bundler,
+        mnemonic, open_vault, parse_address, parse_tail_calls, submit_shielded, token_amount,
     },
 };
 
 #[derive(Args, Debug)]
 #[command(group = ArgGroup::new("amount").args(["amount_formatted", "amount_raw"]))]
 pub struct UnshieldArgs {
-    /// Decimal ETH to unshield, for example `1.1`. Must be a sum of this chain's Tornado denominations.
+    /// Decimal tokens to unshield, for example `1.1`. Must be a sum of this chain's Tornado denominations.
     #[arg(long)]
     amount_formatted: Option<String>,
-    /// Wei to unshield. Must be a sum of this chain's Tornado denominations.
+    /// Base units to unshield. Must be a sum of this chain's Tornado denominations.
     #[arg(long)]
     amount_raw: Option<String>,
-    /// Where the ETH is forwarded. Omitted, it stays on the fresh address.
+    /// Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC.
+    #[arg(long, default_value = "ETH")]
+    token: String,
+    /// Calls after withdrawal, from the fresh account: TARGET:CALLDATA[:WEI],...
+    #[arg(long, conflicts_with = "to", value_parser = validate_tail_calls)]
+    tail_calls: Option<String>,
+    /// Where the selected asset is forwarded. Omitted, it stays on the fresh address.
     #[arg(long)]
     to: Option<String>,
     #[arg(long)]
     profile: Option<String>,
-    #[command(flatten)]
-    consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -47,6 +52,9 @@ struct UnshieldReport {
     forward_to: Option<String>,
     forward_amount: Option<String>,
     fee: String,
+    token: String,
+    fee_token: String,
+    tail_calls: usize,
     bundler: String,
     user_operation: String,
     transaction: String,
@@ -64,9 +72,9 @@ impl fmt::Display for UnshieldReport {
             writeln!(f, "{} {}", note.role, note.amount)?;
         }
         if let (Some(to), Some(amount)) = (&self.forward_to, &self.forward_amount) {
-            writeln!(f, "forward {amount} ETH to {to}")?;
+            writeln!(f, "forward {amount} {} to {to}", self.token)?;
         }
-        writeln!(f, "fee {} ETH", self.fee)?;
+        writeln!(f, "fee {} {}", self.fee, self.fee_token)?;
         writeln!(f, "bundler {}", self.bundler)?;
         writeln!(f, "user operation {}", self.user_operation)?;
         writeln!(f, "transaction {}", self.transaction)
@@ -74,37 +82,64 @@ impl fmt::Display for UnshieldReport {
 }
 
 pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow::Error> {
-    let input = global.input();
-    args.consent.ensure_possible(input)?;
     let instance = global.open().await?;
+    let input = global.input();
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
-    let amount = tornado_amount(
+    let endpoint = instance.rpc().await?;
+    let chain_id = endpoint.network_id().await?;
+    let asset = resolve_asset(&args.token, chain_id).map_err(failure::usage)?;
+    let tails = custom_calls(args, &asset)?;
+    let amount = token_amount(
         args.amount_formatted.as_deref(),
         args.amount_raw.as_deref(),
         input,
+        &asset,
     )?;
-    let to = destination(args.to.as_deref(), input)?;
+    let to = if tails.is_empty() {
+        destination(args.to.as_deref(), input)?
+    } else {
+        None
+    };
     let phrase = mnemonic(&instance, &profile).await?;
-    let endpoint = instance.rpc().await?;
+    deposit_pools_for_asset(amount, chain_id, &asset)?;
     let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
     eprintln!("Syncing Tornado pools...");
     let held = vault.notes().await?;
-    let notes = exact_notes(amount, &held)?;
+    let notes = withdrawal_notes(amount, &held, &asset, chain_id)?;
     ensure_paymaster(&notes)?;
     let fresh = instance
         .fresh_address(&profile, &phrase, endpoint.as_ref())
         .await?;
     let bundler_urls = instance.bundler_urls().await?;
     let bundler = first_bundler(&bundler_urls)?;
-    if !confirm(
-        input,
-        &args.consent,
-        &summary(amount, &notes, fresh.index, &fresh.address, to, &bundler),
-    )? {
+    let description = format!(
+        "Unshield {} {} to fresh {} ({}).\n{}\n{} custom tail calls. Bundler {bundler}.",
+        format_amount(amount, asset.decimals()),
+        asset.symbol().to_uppercase(),
+        fresh.index,
+        fresh.address,
+        note_lines(&notes)
+            .iter()
+            .map(|n| format!("{} {}", n.role, n.amount))
+            .collect::<Vec<_>>()
+            .join(" + "),
+        tails.len()
+    );
+    let description = if let Some(to) = to {
+        format!(
+            "{description}\nForward remaining {} to {to}.",
+            asset.symbol().to_uppercase()
+        )
+    } else {
+        format!("{description}\nRemainder stays on the fresh account.")
+    };
+    for call in &tails {
+        eprintln!("tail {}:{}:{}", call.target, call.data, call.value);
+    }
+    if !confirm(input, &description)? {
         declined();
         return Ok(());
     }
-    keep_fresh(&instance, &profile, &fresh).await;
     let submitted = submit_shielded(ShieldedWithdrawal {
         phrase: &phrase,
         profile_index: profile.profile_index,
@@ -113,24 +148,52 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         fresh_index: fresh.index,
         notes: &notes,
         forward_to: to,
+        tail_calls: &tails,
+        asset: &asset,
         minimum_forward: None,
-        tail_calls: &[],
         bundler_urls: &bundler_urls,
     })
     .await?;
-    let transaction = submitted.wait().await?.transaction;
+    instance.commit_fresh_address(&profile, fresh.index).await?;
+    let transaction = submitted.wait().await?;
     UnshieldReport {
         fresh_index: fresh.index,
         fresh_address: fresh.address.to_string(),
         notes: note_lines(&notes),
         forward_to: to.map(|address| address.to_string()),
-        forward_amount: submitted.forwarded.map(format_eth),
-        fee: format_eth(submitted.fee),
+        forward_amount: submitted
+            .forwarded
+            .map(|value| format_amount(value, asset.decimals())),
+        fee: format_amount(submitted.fee, notes[0].pool.asset.decimals()),
+        token: asset.symbol().to_uppercase(),
+        fee_token: notes[0].pool.symbol().to_uppercase(),
+        tail_calls: tails.len(),
         bundler: submitted.bundler().unwrap_or(bundler),
         user_operation: submitted.hash.0.to_string(),
         transaction: transaction.to_string(),
     }
     .emit(global.mode())
+}
+
+fn custom_calls(
+    args: &UnshieldArgs,
+    asset: &edw_core::vault::tornadocash::Asset,
+) -> Result<Vec<edw_core::call::Call>, anyhow::Error> {
+    let tails = args
+        .tail_calls
+        .as_deref()
+        .map(parse_tail_calls)
+        .transpose()
+        .map_err(failure::usage)?
+        .unwrap_or_default();
+    if edw_core::vault::tornadocash::token_address(asset).is_some()
+        && tails.iter().any(|call| !call.value.is_zero())
+    {
+        return Err(failure::usage(
+            "ERC-20 tail calls cannot include ETH msg.value",
+        ));
+    }
+    Ok(tails)
 }
 
 fn destination(
@@ -143,39 +206,8 @@ fn destination(
     };
     match text.as_deref() {
         None | Some("") => Ok(None),
-        Some(value) => Ok(Some(recipient_address(value)?)),
+        Some(value) => Ok(Some(parse_address(value)?)),
     }
-}
-
-fn summary(
-    amount: U256,
-    notes: &[edw_core::vault::tornadocash::TornadoNote],
-    index: u32,
-    fresh: &Address,
-    forward_to: Option<Address>,
-    bundler: &str,
-) -> String {
-    let sponsor = notes.first().map(note_eth).unwrap_or_default();
-    let mut lines = vec![format!(
-        "Unshield {} ETH as {}.",
-        format_eth(amount),
-        notes
-            .iter()
-            .map(|note| format!("{} ETH", note_eth(note)))
-            .collect::<Vec<_>>()
-            .join(" + ")
-    )];
-    lines.push(format!(
-        "Sponsoring note {sponsor} ETH pays gas through the Tornado paymaster."
-    ));
-    lines.push(format!("Runs as fresh address {index} ({fresh})."));
-    lines.push(format!("Bundler {bundler}."));
-    if let Some(to) = forward_to {
-        lines.push(format!("Forwards the remainder, after that fee, to {to}."));
-    } else {
-        lines.push("The remainder stays on the fresh address.".to_string());
-    }
-    lines.join("\n")
 }
 
 pub fn note_lines(notes: &[edw_core::vault::tornadocash::TornadoNote]) -> Vec<NoteLine> {
@@ -184,7 +216,16 @@ pub fn note_lines(notes: &[edw_core::vault::tornadocash::TornadoNote]) -> Vec<No
         .enumerate()
         .map(|(index, note)| NoteLine {
             role: if index == 0 { "sponsor" } else { "tail" },
-            amount: format!("{} ETH", note_eth(note)),
+            amount: format!(
+                "{} {}",
+                format_amount(U256::from(note.pool.amount_wei), note.pool.asset.decimals()),
+                note.pool.symbol().to_uppercase()
+            ),
         })
         .collect()
+}
+
+fn validate_tail_calls(raw: &str) -> Result<String, String> {
+    parse_tail_calls(raw)?;
+    Ok(raw.to_owned())
 }
