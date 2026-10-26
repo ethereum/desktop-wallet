@@ -5,36 +5,6 @@ The crate is concerned purely with inputs and outputs, not with underlying machi
 
 ## Layout
 
-```sh
-edw lock/unlock # locks or unlocks the datastore
-edw config path # prints the data directory
-edw config view # the data directory, its network instances, the session, and the active RPC config; works while locked
-
-edw network view # the active RPC, the bundler URLs, and the indexer
-edw network rpc-config list # lists this network's RPC configs; the active one is marked
-edw network rpc-config add <name> --url <url> [--blockrange 500] [--interval 0ms] [--use] # adds an RPC config. Active when none is, or when --use is set. --blockrange is blocks per eth_getLogs request. --interval is the pause between calls; the seeded publicnode config uses 500ms
-edw network rpc-config use <name> # makes an RPC config the active one
-edw network bundler-config list # bundler URLs in fallback order
-edw network bundler-config add --url <url> # appends a fallback. The list always keeps at least one URL once it has one
-edw network bundler-config remove --url <url> # removes a URL. Refuses to remove the last one
-edw network indexer-config [--url <url>] [--enable | --disable] # shows the indexer, replaces its URL, or turns it on or off
-
-edw profile list # lists all configured profiles
-edw profile new # creates a new profile; on a new phrase, with an address vault for its first address, else like import
-edw profile import # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails), and scans the chain's Tornado pools (stops after 20 consecutive unused nonces)
-edw profile rescan [profile] # scans a profile's addresses again and adds an address vault for each one it is missing, and scans the chain's Tornado pools the same way
-edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only
-
-edw asset list [--profile SELECTOR] # the ERC-20s a profile tracks: the network's defaults, minus opt-outs, then its opt-ins
-edw asset opt-in <address> [--profile SELECTOR] # tracks an ERC-20, or restores a default the profile opted out of
-edw asset opt-out <address> [--profile SELECTOR] # stops tracking an ERC-20. A default is recorded as opted out; any other token is removed from its opt-ins. That hides its public balance and its Tornado notes
-edw balance [profile] [--detailed] # each asset's public, private and total holdings; the private total includes Tornado notes. --detailed lists each vault and each unspent Tornado note
-edw next-fresh-address [--peek] [--profile SELECTOR]
-edw shield [--amount-formatted <eth> | --amount-raw <wei>] [--from INDEX] [--profile SELECTOR]
-edw unshield [--amount-formatted <eth> | --amount-raw <wei>] [--to <address>] [--profile SELECTOR]
-edw transfer --from <index|address|tornado> --to <address> --amount <eth> [--profile SELECTOR]
-```
-
 A command that finds the wallet locked unlocks it with `EDW_DECRYPTION_PASSWORD`, else a terminal prompt. A prompted password keeps a session, as `edw unlock` does, until 15 minutes after its last use; `EDW_DECRYPTION_PASSWORD` serves that one command. Piped stdin never holds a command's password, only its fields; a script sets `EDW_DECRYPTION_PASSWORD`, or, where a session can be kept, pipes the password to `edw unlock` first. Without a terminal, a command cannot choose between several network instances, so with more than one, run `edw unlock --network <name or id>` first. `edw lock` ends the session.
 
 The session, password included, is a plaintext file under `$XDG_RUNTIME_DIR/edw`, which the system clears at logout. Without that variable, as on macOS, no session is kept: each command asks for the password again, or reads `EDW_DECRYPTION_PASSWORD`. A script there can only open a data directory that holds one network instance.
