@@ -8,14 +8,15 @@ use edw_core::{
     broadcast::submit_call,
     bundler::{BundlerList, Url},
     call::Call,
-    instance::Instance,
+    instance::{FreshAddress, Instance},
     mnemonic::Mnemonic,
     network::NetworkEndpoint,
     profile::ProfileRecord,
     signer::{Signer, simple::SimpleSigner},
     vault::tornadocash::{
-        PaymasterWithdrawal, PaymasterWithdrawalRequest, TornadoNote, TornadoVault, format_eth,
-        parse_eth, parse_wei, submit_paymaster_withdrawal,
+        IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest, QuotedWithdrawal,
+        TornadoNote, TornadoVault, WithdrawalCost, format_eth, parse_eth, parse_wei,
+        quote_paymaster_withdrawal,
     },
 };
 use zeroize::Zeroizing;
@@ -38,6 +39,7 @@ pub struct ShieldedWithdrawal<'a> {
     pub notes: &'a [TornadoNote],
     pub forward_to: Option<Address>,
     pub minimum_forward: Option<U256>,
+    pub tail_calls: &'a [Call],
     pub bundler_urls: &'a [Url],
 }
 
@@ -225,6 +227,12 @@ pub fn first_bundler(urls: &[Url]) -> Result<String, anyhow::Error> {
 pub async fn submit_shielded(
     withdrawal: ShieldedWithdrawal<'_>,
 ) -> Result<PaymasterWithdrawal, anyhow::Error> {
+    Ok(quote_shielded(withdrawal).await?.submit().await?)
+}
+
+pub async fn quote_shielded(
+    withdrawal: ShieldedWithdrawal<'_>,
+) -> Result<QuotedWithdrawal<'_, PrivateKeySigner>, anyhow::Error> {
     let chain_id = withdrawal.endpoint.network_id().await?;
     let provider = withdrawal
         .endpoint
@@ -236,17 +244,46 @@ pub async fn submit_shielded(
             .standard_address_key(withdrawal.fresh_index, withdrawal.profile_index)?,
     );
     let bundlers = BundlerList::from_urls(chain_id, withdrawal.bundler_urls)?;
-    Ok(submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
+    Ok(quote_paymaster_withdrawal(PaymasterWithdrawalRequest {
         vault: withdrawal.vault,
         provider,
         owner,
         notes: withdrawal.notes,
         forward_to: withdrawal.forward_to,
         minimum_forward: withdrawal.minimum_forward,
+        tail_calls: withdrawal.tail_calls,
         chain_id,
         bundlers,
     })
     .await?)
+}
+
+/// The fee and change of `included`, or a warning and `None` when they cannot be measured.
+pub async fn measured(included: &IncludedWithdrawal) -> Option<WithdrawalCost> {
+    match included.measure().await {
+        Ok(cost) => Some(cost),
+        Err(error) => {
+            eprintln!("Warning: {error}");
+            None
+        }
+    }
+}
+
+/// Stores the fresh address as used and as an address vault, so `balance` shows what it holds.
+/// Call it after consent and before submitting; a failure only warns.
+pub async fn keep_fresh(instance: &Instance, profile: &ProfileRecord, fresh: &FreshAddress) {
+    let stored = async {
+        instance.commit_fresh_address(profile, fresh.index).await?;
+        instance
+            .add_address_vault(profile, fresh.index, fresh.address)
+            .await
+    };
+    if let Err(error) = stored.await {
+        eprintln!(
+            "Warning: fresh address {} was not stored ({error}); `edw profile rescan` lists it once the operation lands.",
+            fresh.address
+        );
+    }
 }
 
 #[cfg(test)]

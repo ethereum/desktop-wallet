@@ -10,8 +10,8 @@ use crate::{
     report::Report,
     spend::{
         Consent, ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster,
-        first_bundler, mnemonic, note_eth, open_vault, recipient_address, submit_shielded,
-        tornado_amount,
+        first_bundler, keep_fresh, mnemonic, note_eth, open_vault, recipient_address,
+        submit_shielded, tornado_amount,
     },
 };
 
@@ -106,6 +106,7 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         declined();
         return Ok(());
     }
+    keep_fresh(&instance, &profile, &fresh).await;
     let submitted = submit_shielded(ShieldedWithdrawal {
         phrase: &phrase,
         profile_index: profile.profile_index,
@@ -115,11 +116,11 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         notes: &notes,
         forward_to: to,
         minimum_forward: None,
+        tail_calls: &[],
         bundler_urls: &bundler_urls,
     })
     .await?;
-    instance.commit_fresh_address(&profile, fresh.index).await?;
-    let transaction = submitted.wait().await?;
+    let transaction = submitted.wait().await?.transaction;
     UnshieldReport {
         fresh_index: fresh.index,
         fresh_address: fresh.address.to_string(),
