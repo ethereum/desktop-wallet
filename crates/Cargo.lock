@@ -3944,7 +3944,8 @@ dependencies = [
 [[package]]
 name = "kohaku-merkle-tree"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd59b8a8f63b4602ce0ecf22dfefb412f035a80356a5eec5e05d8b1b127b6bd"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -3952,7 +3953,8 @@ dependencies = [
 [[package]]
 name = "kohaku-rpc-provider"
 version = "0.0.1"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "684d7cddfc3f62eb7f8042c368c85e949dc7aa326726c9a87ab596d11f4d72ba"
 dependencies = [
  "alloy",
  "futures",
@@ -3963,7 +3965,8 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73250a4cb5536d7d4a2509cfd6a029b69f7b102805d2487638cbab660275042d"
 dependencies = [
  "alloy",
  "ark-bn254",
@@ -3984,7 +3987,8 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-circuit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df0bf40ee1473f2b4b8c93235a9d14c759895b227cd3e365e71b3985df66abe6"
 dependencies = [
  "brotli",
  "postcard",
@@ -3998,7 +4002,8 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-keychain"
 version = "0.0.1"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9debef4b71540c2efa4ceb76d53cd9d7b70060e1fba990ba82d708c0a73b0235"
 dependencies = [
  "alloy",
  "kohaku-tornadocash",
@@ -4008,7 +4013,8 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-paymaster"
 version = "0.0.1"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee9ee033fe8f0af4c49b5fd48c68662465363c4d16e302b90b66238655447b7f"
 dependencies = [
  "alloy",
  "cfg_aliases",
@@ -4023,7 +4029,8 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-relayer"
 version = "0.0.1"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b7f5bf5dcd2b350ca0548af45b170e908d894bbeedf81bad13ebf5cf7a51c19"
 dependencies = [
  "alloy",
  "cfg_aliases",
@@ -4039,7 +4046,8 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash-syncer"
 version = "0.0.1"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5827d58df99ab704416c750608387d351fa577f14955e959040dace974bbb847"
 dependencies = [
  "alloy",
  "async-trait",
@@ -4060,7 +4068,8 @@ dependencies = [
 [[package]]
 name = "kohaku-userop-kit"
 version = "0.0.1"
-source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3dc8013def0b0a0733f437b547943acd3711774653ca267ed1f1881f456e975"
 dependencies = [
  "alloy",
  "alloy-sol-types",
