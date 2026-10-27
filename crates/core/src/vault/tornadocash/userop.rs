@@ -3,9 +3,8 @@ use alloy_provider::DynProvider;
 use alloy_signer::Signer;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolValue, sol};
-use kohaku_tornadocash::{
-    Withdrawal, merkle_tree::MerkleProof, userop_provider::UserOperationPaymasterExt,
-};
+use kohaku_tornadocash::{Withdrawal, merkle_tree::MerkleProof};
+use kohaku_tornadocash_paymaster::UserOperationPaymasterExt;
 use kohaku_userop_kit::{
     builder::UserOperationBuilder,
     bundler::Bundler,
@@ -105,7 +104,7 @@ pub enum UserOpError {
     #[error(transparent)]
     Vault(#[from] TornadoVaultError),
     #[error(transparent)]
-    Paymaster(Box<kohaku_tornadocash::userop_provider::TornadoPaymasterError>),
+    Paymaster(Box<kohaku_tornadocash_paymaster::PaymasterError>),
     #[error(transparent)]
     SmartAccount(#[from] kohaku_userop_kit::smart_account::SmartAccountError),
     #[error(transparent)]
@@ -114,8 +113,8 @@ pub enum UserOpError {
     Sign(String),
 }
 
-impl From<kohaku_tornadocash::userop_provider::TornadoPaymasterError> for UserOpError {
-    fn from(error: kohaku_tornadocash::userop_provider::TornadoPaymasterError) -> Self {
+impl From<kohaku_tornadocash_paymaster::PaymasterError> for UserOpError {
+    fn from(error: kohaku_tornadocash_paymaster::PaymasterError) -> Self {
         Self::Paymaster(Box::new(error))
     }
 }

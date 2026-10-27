@@ -2752,6 +2752,8 @@ dependencies = [
  "kohaku-fork-kit",
  "kohaku-tornadocash",
  "kohaku-tornadocash-keychain",
+ "kohaku-tornadocash-paymaster",
+ "kohaku-tornadocash-syncer",
  "kohaku-userop-kit",
  "postcard",
  "rand 0.10.3",
@@ -3928,11 +3930,12 @@ dependencies = [
 [[package]]
 name = "kohaku-fork-kit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
 dependencies = [
  "alloy",
  "anyhow",
  "kohaku-tornadocash",
+ "kohaku-tornadocash-relayer",
  "kohaku-userop-kit",
  "tokio",
  "tracing",
@@ -3941,15 +3944,15 @@ dependencies = [
 [[package]]
 name = "kohaku-merkle-tree"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "kohaku-rpc-provider"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
 dependencies = [
  "alloy",
  "futures",
@@ -3960,37 +3963,28 @@ dependencies = [
 [[package]]
 name = "kohaku-tornadocash"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
 dependencies = [
  "alloy",
  "ark-bn254",
  "ark-ff 0.6.0",
- "async-trait",
  "blake-hash",
- "cfg_aliases",
- "flate2",
  "hex",
  "kohaku-merkle-tree",
- "kohaku-rpc-provider",
  "kohaku-tornadocash-circuit",
- "kohaku-userop-kit",
  "num-bigint 0.5.1",
  "rand 0.10.3",
- "reqwest 0.13.5",
  "ruint",
  "serde",
- "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
- "tracing",
  "websnark-rs",
 ]
 
 [[package]]
 name = "kohaku-tornadocash-circuit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
 dependencies = [
  "brotli",
  "postcard",
@@ -4003,19 +3997,70 @@ dependencies = [
 
 [[package]]
 name = "kohaku-tornadocash-keychain"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
 dependencies = [
  "alloy",
- "cfg_aliases",
  "kohaku-tornadocash",
  "thiserror 2.0.21",
 ]
 
 [[package]]
+name = "kohaku-tornadocash-paymaster"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+dependencies = [
+ "alloy",
+ "cfg_aliases",
+ "kohaku-tornadocash",
+ "kohaku-userop-kit",
+ "rand 0.10.3",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kohaku-tornadocash-relayer"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+dependencies = [
+ "alloy",
+ "cfg_aliases",
+ "kohaku-tornadocash",
+ "rand 0.10.3",
+ "reqwest 0.13.5",
+ "ruint",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "kohaku-tornadocash-syncer"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
+dependencies = [
+ "alloy",
+ "async-trait",
+ "cfg_aliases",
+ "flate2",
+ "hex",
+ "kohaku-rpc-provider",
+ "kohaku-tornadocash",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kohaku-userop-kit"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git#17917c6b3e6a7cd543446685e31c3577bd70ccba"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git#3010446ee14dda4b16f5c528e26b41aad3f0e6df"
 dependencies = [
  "alloy",
  "alloy-sol-types",

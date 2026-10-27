@@ -29,6 +29,8 @@ zeroize = { workspace = true }
 rand = { workspace = true }
 kohaku-tornadocash = { workspace = true }
 kohaku-tornadocash-keychain = { workspace = true }
+kohaku-tornadocash-paymaster = { workspace = true }
+kohaku-tornadocash-syncer = { workspace = true }
 kohaku-userop-kit = { workspace = true }
 
 alloy-primitives = { workspace = true, features = ["serde", "k256"] }

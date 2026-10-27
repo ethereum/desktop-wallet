@@ -158,7 +158,7 @@ pub fn format_eth(amount: U256) -> String {
 fn native_pools(chain_id: u64) -> Vec<Pool> {
     let mut pools: Vec<Pool> = Pool::POOLS
         .iter()
-        .filter(|pool| pool.chain_id == chain_id && is_native_eth(pool))
+        .filter(|pool| pool.canonical && pool.chain_id == chain_id && is_native_eth(pool))
         .cloned()
         .collect();
     pools.sort_by_key(|pool| std::cmp::Reverse(pool.amount_wei));
