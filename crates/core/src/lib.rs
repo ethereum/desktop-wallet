@@ -13,6 +13,7 @@ pub mod mnemonic;
 pub mod network;
 pub mod prelude;
 pub mod profile;
+pub mod recipient;
 pub mod signer;
 pub mod vault;
 

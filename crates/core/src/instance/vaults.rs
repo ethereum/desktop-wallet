@@ -83,6 +83,20 @@ impl Instance {
         Ok(missing)
     }
 
+    /// Adds an address vault to `profile` for its standard address `index`, unless it has one.
+    ///
+    /// # Errors
+    /// Returns an error when the profile's vault records cannot be read or written.
+    pub async fn add_address_vault(
+        &self,
+        profile: &ProfileRecord,
+        index: u32,
+        address: Address,
+    ) -> Result<(), InstanceError> {
+        let missing = self.not_yet_stored(profile, vec![(index, address)]).await?;
+        self.add_address_vaults(profile, &missing).await
+    }
+
     /// Builds each of `records` against `endpoint`, concurrently and in order. A vault that fails
     /// to build keeps its error, and does not stop the others.
     ///
@@ -393,6 +407,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(missing, [(1, address(0xa1))]);
+    }
+
+    #[tokio::test]
+    async fn an_address_registered_twice_is_one_vault() {
+        let instance = instance();
+        let address = Address::repeat_byte(0xa7);
+        for _ in 0..2 {
+            instance
+                .add_address_vault(&profile(0), 7, address)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            derived_addresses(&instance, &profile(0)).await,
+            [(7, address)]
+        );
     }
 
     #[tokio::test]

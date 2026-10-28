@@ -3,18 +3,20 @@ use std::sync::Arc;
 use alloy_primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::Context;
+use clap::Args;
 use edw_core::{
     broadcast::submit_call,
     bundler::{BundlerList, Url},
     call::Call,
-    instance::Instance,
+    instance::{FreshAddress, Instance},
     mnemonic::Mnemonic,
     network::NetworkEndpoint,
     profile::ProfileRecord,
     signer::{Signer, simple::SimpleSigner},
     vault::tornadocash::{
-        PaymasterWithdrawal, PaymasterWithdrawalRequest, TornadoNote, TornadoVault, format_eth,
-        parse_eth, parse_wei, submit_paymaster_withdrawal,
+        IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest, QuotedWithdrawal,
+        TornadoNote, TornadoVault, WithdrawalCost, format_eth, parse_eth, parse_wei,
+        quote_paymaster_withdrawal,
     },
 };
 use zeroize::Zeroizing;
@@ -37,7 +39,28 @@ pub struct ShieldedWithdrawal<'a> {
     pub notes: &'a [TornadoNote],
     pub forward_to: Option<Address>,
     pub minimum_forward: Option<U256>,
+    pub tail_calls: &'a [Call],
     pub bundler_urls: &'a [Url],
+}
+
+#[derive(Args, Debug)]
+pub struct Consent {
+    /// Broadcast without asking. Without a terminal, nothing is broadcast unless this is set.
+    #[arg(long)]
+    yes: bool,
+}
+
+impl Consent {
+    /// Fails unless consent can be given: `--yes`, or a terminal to ask at. Call it before any
+    /// network work.
+    pub fn ensure_possible(&self, input: Input) -> Result<(), anyhow::Error> {
+        if self.yes || input == Input::Terminal {
+            return Ok(());
+        }
+        Err(failure::usage(
+            "nothing was broadcast; without a terminal to confirm at, pass --yes",
+        ))
+    }
 }
 
 pub async fn choose_profile(
@@ -92,8 +115,9 @@ pub fn account_at(
 pub fn account_by_address(
     mnemonic: &Mnemonic,
     profile_index: u32,
-    address: Address,
+    address: &str,
 ) -> Result<Account, anyhow::Error> {
+    let address = parse_address(address)?;
     for index in 0..1000 {
         let account = account_at(mnemonic, profile_index, index)?;
         if account.address == address {
@@ -106,8 +130,11 @@ pub fn account_by_address(
 }
 
 pub fn parse_address(text: &str) -> Result<Address, anyhow::Error> {
-    text.parse()
-        .map_err(|error| failure::usage(format!("`{text}` is not an address: {error}")))
+    edw_core::recipient::parse_address(text).map_err(|error| failure::usage(error.to_string()))
+}
+
+pub fn recipient_address(text: &str) -> Result<Address, anyhow::Error> {
+    edw_core::recipient::recipient_address(text).map_err(|error| failure::usage(error.to_string()))
 }
 
 pub async fn open_vault(
@@ -150,19 +177,9 @@ pub fn tornado_amount(
     }
 }
 
-pub fn eth_amount(given: Option<&str>, input: Input, label: &str) -> Result<U256, anyhow::Error> {
-    let text = match given {
-        Some(amount) => amount.to_string(),
-        None => input
-            .line(label)?
-            .filter(|line| !line.is_empty())
-            .ok_or_else(|| failure::usage(format!("pass {label}")))?,
-    };
-    Ok(parse_eth(&text)?)
-}
-
-pub fn confirm(input: Input, summary: &str) -> Result<bool, anyhow::Error> {
-    if input != Input::Terminal {
+pub fn confirm(input: Input, consent: &Consent, summary: &str) -> Result<bool, anyhow::Error> {
+    consent.ensure_possible(input)?;
+    if consent.yes {
         return Ok(true);
     }
     eprintln!("{summary}");
@@ -210,6 +227,12 @@ pub fn first_bundler(urls: &[Url]) -> Result<String, anyhow::Error> {
 pub async fn submit_shielded(
     withdrawal: ShieldedWithdrawal<'_>,
 ) -> Result<PaymasterWithdrawal, anyhow::Error> {
+    Ok(quote_shielded(withdrawal).await?.submit().await?)
+}
+
+pub async fn quote_shielded(
+    withdrawal: ShieldedWithdrawal<'_>,
+) -> Result<QuotedWithdrawal<'_, PrivateKeySigner>, anyhow::Error> {
     let chain_id = withdrawal.endpoint.network_id().await?;
     let provider = withdrawal
         .endpoint
@@ -221,15 +244,57 @@ pub async fn submit_shielded(
             .standard_address_key(withdrawal.fresh_index, withdrawal.profile_index)?,
     );
     let bundlers = BundlerList::from_urls(chain_id, withdrawal.bundler_urls)?;
-    Ok(submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
+    Ok(quote_paymaster_withdrawal(PaymasterWithdrawalRequest {
         vault: withdrawal.vault,
         provider,
         owner,
         notes: withdrawal.notes,
         forward_to: withdrawal.forward_to,
         minimum_forward: withdrawal.minimum_forward,
+        tail_calls: withdrawal.tail_calls,
         chain_id,
         bundlers,
     })
     .await?)
+}
+
+/// The fee and change of `included`, or a warning and `None` when they cannot be measured.
+pub async fn measured(included: &IncludedWithdrawal) -> Option<WithdrawalCost> {
+    match included.measure().await {
+        Ok(cost) => Some(cost),
+        Err(error) => {
+            eprintln!("Warning: {error}");
+            None
+        }
+    }
+}
+
+/// Stores the fresh address as used and as an address vault, so `balance` shows what it holds.
+/// Call it after consent and before submitting; a failure only warns.
+pub async fn keep_fresh(instance: &Instance, profile: &ProfileRecord, fresh: &FreshAddress) {
+    let stored = async {
+        instance.commit_fresh_address(profile, fresh.index).await?;
+        instance
+            .add_address_vault(profile, fresh.index, fresh.address)
+            .await
+    };
+    if let Err(error) = stored.await {
+        eprintln!(
+            "Warning: fresh address {} was not stored ({error}); `edw profile rescan` lists it once the operation lands.",
+            fresh.address
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn without_a_terminal_only_yes_consents() {
+        for input in [Input::Piped, Input::Disabled] {
+            assert!(Consent { yes: false }.ensure_possible(input).is_err());
+            assert!(Consent { yes: true }.ensure_possible(input).is_ok());
+        }
+    }
 }

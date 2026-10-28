@@ -15,8 +15,8 @@ use crate::{
     GlobalArgs, failure,
     report::Report,
     spend::{
-        Account, account_at, choose_profile, confirm, declined, mnemonic, open_vault, send_one,
-        tornado_amount,
+        Account, Consent, account_at, choose_profile, confirm, declined, mnemonic, open_vault,
+        send_one, tornado_amount,
     },
 };
 
@@ -34,6 +34,8 @@ pub struct ShieldArgs {
     from: Option<u32>,
     #[arg(long)]
     profile: Option<String>,
+    #[command(flatten)]
+    consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -70,8 +72,9 @@ impl fmt::Display for ShieldReport {
 }
 
 pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::Error> {
-    let instance = global.open().await?;
     let input = global.input();
+    args.consent.ensure_possible(input)?;
+    let instance = global.open().await?;
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
     let amount = tornado_amount(
         args.amount_formatted.as_deref(),
@@ -100,7 +103,7 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
         .map(|pool| format!("{} ETH", format_eth(U256::from(pool.amount_wei))))
         .collect();
     let summary = confirmation(amount, &notes, from, payer.address, pools.len() > 1);
-    if !confirm(input, &summary)? {
+    if !confirm(input, &args.consent, &summary)? {
         declined();
         return Ok(());
     }

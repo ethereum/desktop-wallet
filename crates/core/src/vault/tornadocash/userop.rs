@@ -1,22 +1,25 @@
-use alloy_primitives::{Address, Bytes, U256};
-use alloy_provider::DynProvider;
+use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_provider::{DynProvider, Provider};
 use alloy_signer::Signer;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolValue, sol};
-use kohaku_tornadocash::{
-    Withdrawal, merkle_tree::MerkleProof, userop_provider::UserOperationPaymasterExt,
-};
+use kohaku_tornadocash::{Withdrawal, merkle_tree::MerkleProof};
+use kohaku_tornadocash_paymaster::UserOperationPaymasterExt;
 use kohaku_userop_kit::{
     builder::UserOperationBuilder,
     bundler::Bundler,
     signable_user_operation::SignableUserOperation,
-    smart_account::simple_7702_smart_account::{Call as UserOpCall, Simple7702SmartAccount},
-    user_operation::UserOperationHash,
+    smart_account::{
+        SmartAccount,
+        simple_7702_smart_account::{Call as UserOpCall, Simple7702SmartAccount},
+    },
+    user_operation::{UserOperationGasEstimate, UserOperationHash},
 };
 
 use super::{TornadoVault, TornadoVaultError, format_eth};
 use crate::{
     bundler::BundlerList,
+    call::Call,
     vault::{VaultId, tornadocash::TornadoNote},
 };
 
@@ -39,7 +42,7 @@ sol! {
     }
 }
 
-/// What [`submit_paymaster_withdrawal`] spends, and where the remainder goes.
+/// What [`quote_paymaster_withdrawal`] spends, and where the remainder goes.
 pub struct PaymasterWithdrawalRequest<'a, S: Signer + Send + Sync> {
     pub vault: &'a TornadoVault<S>,
     pub provider: DynProvider,
@@ -48,8 +51,27 @@ pub struct PaymasterWithdrawalRequest<'a, S: Signer + Send + Sync> {
     pub forward_to: Option<Address>,
     /// When set, the remainder after the sponsor fee must be at least this much.
     pub minimum_forward: Option<U256>,
+    /// Calls run after the withdrawals. The ETH they send must fit in what the notes leave after
+    /// the sponsor fee. Not combined with `forward_to`.
+    pub tail_calls: &'a [Call],
     pub chain_id: u64,
     pub bundlers: BundlerList,
+}
+
+/// A user operation quoted with placeholder proofs, so a bundler that saw the quote cannot
+/// withdraw any note. [`QuotedWithdrawal::submit`] proves the notes and sends it.
+pub struct QuotedWithdrawal<'a, S: Signer + Send + Sync> {
+    pub fee: U256,
+    pub forwarded: Option<U256>,
+    pub sum: U256,
+    vault: &'a TornadoVault<S>,
+    owner: PrivateKeySigner,
+    notes: &'a [TornadoNote],
+    after_withdrawals: Vec<UserOpCall>,
+    paid_out: Option<U256>,
+    signable: SignableUserOperation,
+    provider: DynProvider,
+    bundlers: BundlerList,
 }
 
 /// A user operation a bundler has accepted. [`PaymasterWithdrawal::wait`] reads its receipt.
@@ -57,11 +79,32 @@ pub struct PaymasterWithdrawal {
     pub hash: UserOperationHash,
     pub fee: U256,
     pub forwarded: Option<U256>,
+    paid_out: Option<U256>,
+    sum: U256,
+    fresh: Address,
+    provider: DynProvider,
     bundlers: BundlerList,
+}
+
+/// A withdrawal that was included and succeeded.
+pub struct IncludedWithdrawal {
+    pub transaction: B256,
+    block: Option<u64>,
+    paid_out: Option<U256>,
+    sum: U256,
+    fresh: Address,
+    provider: DynProvider,
+}
+
+/// What a withdrawal cost once the paymaster's refund landed.
+pub struct WithdrawalCost {
+    pub fee: U256,
+    pub change: U256,
 }
 
 struct Quoted {
     signable: SignableUserOperation,
+    calls: Vec<UserOpCall>,
     fee: U256,
     forwarded: Option<U256>,
 }
@@ -73,7 +116,7 @@ struct QuoteInput<'a> {
     tails: &'a [UserOpCall],
     sum: U256,
     forward_to: Option<Address>,
-    minimum_forward: Option<U256>,
+    required: Option<U256>,
     sponsor: &'a TornadoNote,
 }
 
@@ -84,13 +127,22 @@ pub enum UserOpError {
     #[error("sponsoring pool {0} has no paymaster")]
     MissingPaymaster(String),
     #[error(
-        "after a {fee} ETH sponsor fee the notes leave {available} ETH, which does not cover {required} ETH"
+        "after a {} ETH sponsor fee the notes leave {} ETH, which does not cover {} ETH",
+        format_eth(*.fee),
+        format_eth(*.available),
+        format_eth(*.required)
     )]
     Short {
-        fee: String,
-        available: String,
-        required: String,
+        fee: U256,
+        available: U256,
+        required: U256,
     },
+    #[error("forward_to cannot be combined with tail calls")]
+    ForwardWithTailCalls,
+    #[error(
+        "the proven operation needs more gas than the quoted fee covers, so it was not signed; the bundler estimated it with real proofs, so check `balance` before trying again"
+    )]
+    GasRose,
     #[error("the sponsor fee kept changing while the forward was quoted (last fee {fee} ETH)")]
     Unstable { fee: String },
     #[error("paymaster data has no fee")]
@@ -102,10 +154,17 @@ pub enum UserOpError {
         user_op: String,
         transaction: String,
     },
+    #[error(
+        "the fee and change of {transaction}, which succeeded, could not be measured: {message}"
+    )]
+    Unmeasured {
+        transaction: String,
+        message: String,
+    },
     #[error(transparent)]
     Vault(#[from] TornadoVaultError),
     #[error(transparent)]
-    Paymaster(Box<kohaku_tornadocash::userop_provider::TornadoPaymasterError>),
+    Paymaster(Box<kohaku_tornadocash_paymaster::PaymasterError>),
     #[error(transparent)]
     SmartAccount(#[from] kohaku_userop_kit::smart_account::SmartAccountError),
     #[error(transparent)]
@@ -114,8 +173,8 @@ pub enum UserOpError {
     Sign(String),
 }
 
-impl From<kohaku_tornadocash::userop_provider::TornadoPaymasterError> for UserOpError {
-    fn from(error: kohaku_tornadocash::userop_provider::TornadoPaymasterError) -> Self {
+impl From<kohaku_tornadocash_paymaster::PaymasterError> for UserOpError {
+    fn from(error: kohaku_tornadocash_paymaster::PaymasterError) -> Self {
         Self::Paymaster(Box::new(error))
     }
 }
@@ -131,30 +190,121 @@ impl PaymasterWithdrawal {
     ///
     /// # Errors
     /// Returns an error when the receipt times out, or the included operation reverted.
-    pub async fn wait(&self) -> Result<alloy_primitives::B256, UserOpError> {
+    pub async fn wait(&self) -> Result<IncludedWithdrawal, UserOpError> {
         let receipt = self.bundlers.wait_for_receipt(self.hash).await?;
+        let transaction = receipt.receipt.transaction_hash;
         if !receipt.success {
             return Err(UserOpError::Reverted {
                 user_op: self.hash.0.to_string(),
-                transaction: receipt.receipt.transaction_hash.to_string(),
+                transaction: transaction.to_string(),
             });
         }
-        Ok(receipt.receipt.transaction_hash)
+        Ok(IncludedWithdrawal {
+            transaction,
+            block: receipt.receipt.block_number,
+            paid_out: self.paid_out,
+            sum: self.sum,
+            fresh: self.fresh,
+            provider: self.provider.clone(),
+        })
     }
 }
 
-/// Builds one paymaster user operation from `request.notes` and sends it.
+impl IncludedWithdrawal {
+    /// Measures the fee and change from the fresh address's balance across the including block.
+    ///
+    /// Anything else paid to the fresh address in that block would count as change.
+    ///
+    /// # Errors
+    /// Returns [`UserOpError::Unmeasured`] when the balance cannot be read at that block, or
+    /// does not add up. The withdrawal itself has still succeeded.
+    pub async fn measure(&self) -> Result<WithdrawalCost, UserOpError> {
+        let unmeasured = |message: String| UserOpError::Unmeasured {
+            transaction: self.transaction.to_string(),
+            message,
+        };
+        let block = self
+            .block
+            .ok_or_else(|| unmeasured("the receipt has no block number".to_string()))?;
+        let balance_at = |number: u64| async move {
+            self.provider
+                .get_balance(self.fresh)
+                .number(number)
+                .await
+                .map_err(|error| unmeasured(error.to_string()))
+        };
+        let before = balance_at(block.saturating_sub(1)).await?;
+        let after = balance_at(block).await?;
+        let (fee, change) = settle(self.sum, self.paid_out, before, after).ok_or_else(|| {
+            unmeasured(format!(
+                "the fresh address went from {} to {} ETH, which the withdrawal does not explain",
+                format_eth(before),
+                format_eth(after)
+            ))
+        })?;
+        Ok(WithdrawalCost { fee, change })
+    }
+}
+
+impl<S: Signer + Send + Sync> QuotedWithdrawal<'_, S> {
+    /// Proves every note but the sponsor's, checks the quoted fee still covers the proven
+    /// operation, then signs and sends it.
+    ///
+    /// # Errors
+    /// [`UserOpError::GasRose`] when the quoted fee does not cover the proven operation's gas,
+    /// and an error when proving, signing, or every bundler fails.
+    pub async fn submit(self) -> Result<PaymasterWithdrawal, UserOpError> {
+        let QuotedWithdrawal {
+            fee,
+            forwarded,
+            sum,
+            vault,
+            owner,
+            notes,
+            after_withdrawals,
+            paid_out,
+            mut signable,
+            provider,
+            bundlers,
+        } = self;
+        let mut calls = proven_withdrawals(vault, notes, owner.address()).await?;
+        calls.extend(after_withdrawals);
+        signable.user_op.call_data = Simple7702SmartAccount::<DynProvider>::abi_encode_call(&calls);
+        let proven = bundlers.estimate_gas(&signable, None).await?;
+        if !fits(&mut signable, &proven, fee) {
+            return Err(UserOpError::GasRose);
+        }
+        let signed = signable
+            .sign(&owner)
+            .await
+            .map_err(|error| UserOpError::Sign(error.to_string()))?;
+        let hash = bundlers.send_user_operation(&signed).await?;
+        Ok(PaymasterWithdrawal {
+            hash,
+            fee,
+            forwarded,
+            paid_out: paid_out.or(forwarded),
+            sum,
+            fresh: owner.address(),
+            provider,
+            bundlers,
+        })
+    }
+}
+
+/// Quotes one paymaster user operation from `request.notes` without sending it.
 ///
 /// The largest note, which is first, sponsors gas. Its remainder and every other note are paid
 /// to the fresh address that signs the operation. `forward_to` adds a final call that sends
-/// whatever is left after the sponsor fee.
+/// whatever is left after the sponsor fee; `tail_calls` run after the withdrawals instead.
 ///
 /// # Errors
 /// Returns an error when the sponsoring pool has no paymaster, the notes cannot cover
-/// `minimum_forward` after the fee, or proving, estimation, or every bundler fails.
-pub async fn submit_paymaster_withdrawal<S>(
+/// `minimum_forward` or the tail calls after the fee, or proving, estimation, or every bundler
+/// fails.
+pub async fn quote_paymaster_withdrawal<S>(
     request: PaymasterWithdrawalRequest<'_, S>,
-) -> Result<PaymasterWithdrawal, UserOpError>
+) -> Result<QuotedWithdrawal<'_, S>, UserOpError>
 where
     S: Signer + Send + Sync,
 {
@@ -165,6 +315,7 @@ where
         notes,
         forward_to,
         minimum_forward,
+        tail_calls,
         chain_id,
         bundlers,
     } = request;
@@ -173,9 +324,19 @@ where
     if sponsor.pool.paymaster.is_none() {
         return Err(UserOpError::MissingPaymaster(sponsor.pool.id()));
     }
+    if forward_to.is_some() && !tail_calls.is_empty() {
+        return Err(UserOpError::ForwardWithTailCalls);
+    }
     let fresh = owner.address();
     let (withdrawal, proof) = vault.withdrawal_inputs(sponsor, fresh).await?;
-    let tails = tail_calls(vault, notes, fresh).await?;
+    let mut tails = placeholder_withdrawals(vault, notes, fresh).await?;
+    let withdrawals = tails.len();
+    tails.extend(tail_calls.iter().map(|call| UserOpCall {
+        target: call.target,
+        value: call.value,
+        data: call.data.clone(),
+    }));
+    let spend = tail_calls.iter().map(|call| call.value).sum::<U256>();
     let sum = notes
         .iter()
         .map(|note| U256::from(note.pool.amount_wei))
@@ -190,7 +351,7 @@ where
             tails: &tails,
             sum,
             forward_to,
-            minimum_forward,
+            required: minimum_forward.max((!spend.is_zero()).then_some(spend)),
             sponsor,
         },
         &mut rng,
@@ -198,18 +359,42 @@ where
         &proof,
     )
     .await?;
-    let signed = quoted
-        .signable
-        .sign(&owner)
-        .await
-        .map_err(|error| UserOpError::Sign(error.to_string()))?;
-    let hash = bundlers.send_user_operation(&signed).await?;
-    Ok(PaymasterWithdrawal {
-        hash,
+    Ok(QuotedWithdrawal {
         fee: quoted.fee,
         forwarded: quoted.forwarded,
+        sum,
+        vault,
+        owner,
+        notes,
+        after_withdrawals: quoted.calls[withdrawals..].to_vec(),
+        paid_out: (!spend.is_zero()).then_some(spend),
+        signable: quoted.signable,
+        provider,
         bundlers,
     })
+}
+
+/// Raises `op`'s gas limits to `proven` where it needs more, unless that would cost more than
+/// `fee`, which the paymaster requires to cover the operation's maximum gas cost.
+fn fits(op: &mut SignableUserOperation, proven: &UserOperationGasEstimate, fee: U256) -> bool {
+    let mut raised = op.user_op.clone();
+    raised.call_gas_limit = raised.call_gas_limit.max(proven.call_gas_limit);
+    raised.verification_gas_limit = raised
+        .verification_gas_limit
+        .max(proven.verification_gas_limit);
+    raised.pre_verification_gas = raised.pre_verification_gas.max(proven.pre_verification_gas);
+    raised.paymaster_verification_gas_limit = raised
+        .paymaster_verification_gas_limit
+        .max(proven.paymaster_verification_gas_limit);
+    raised.paymaster_post_op_gas_limit = raised
+        .paymaster_post_op_gas_limit
+        .max(proven.paymaster_post_op_gas_limit);
+    let cost = U256::from(raised.total_gas_limit()) * U256::from(raised.max_fee_per_gas);
+    if cost > fee {
+        return false;
+    }
+    op.user_op = raised;
+    true
 }
 
 async fn quote_until_settled(
@@ -219,7 +404,7 @@ async fn quote_until_settled(
     proof: &MerkleProof,
 ) -> Result<Quoted, UserOpError> {
     eprintln!(
-        "Proving the sponsoring {} ETH note. The fee is quoted, then proved again.",
+        "Quoting the fee and proving the sponsoring {} ETH note.",
         format_eth(U256::from(input.sponsor.pool.amount_wei))
     );
     let mut calls = input.tails.to_vec();
@@ -242,8 +427,8 @@ async fn quote_until_settled(
         let available = input
             .sum
             .checked_sub(fee)
-            .ok_or_else(|| short(fee, U256::ZERO, input.minimum_forward.unwrap_or(U256::ZERO)))?;
-        if let Some(required) = input.minimum_forward
+            .ok_or_else(|| short(fee, U256::ZERO, input.required.unwrap_or(U256::ZERO)))?;
+        if let Some(required) = input.required
             && available < required
         {
             return Err(short(fee, available, required));
@@ -251,6 +436,7 @@ async fn quote_until_settled(
         if input.forward_to.is_none() || pending_forward == Some(available) {
             return Ok(Quoted {
                 signable,
+                calls,
                 fee,
                 forwarded: input.forward_to.map(|_| available),
             });
@@ -284,7 +470,25 @@ fn forward_calls(
     calls
 }
 
-async fn tail_calls<S: Signer + Send + Sync>(
+async fn placeholder_withdrawals<S: Signer + Send + Sync>(
+    vault: &TornadoVault<S>,
+    notes: &[TornadoNote],
+    fresh: Address,
+) -> Result<Vec<UserOpCall>, UserOpError> {
+    let mut calls = Vec::with_capacity(notes.len().saturating_sub(1));
+    for note in notes.iter().skip(1) {
+        let (withdrawal, proof) = vault.withdrawal_inputs(note, fresh).await?;
+        let call = withdrawal.prove_dummy(&proof).call();
+        calls.push(UserOpCall {
+            target: call.target,
+            value: call.value,
+            data: call.input,
+        });
+    }
+    Ok(calls)
+}
+
+async fn proven_withdrawals<S: Signer + Send + Sync>(
     vault: &TornadoVault<S>,
     notes: &[TornadoNote],
     fresh: Address,
@@ -340,10 +544,69 @@ fn proven_fee(op: &SignableUserOperation) -> Result<U256, UserOpError> {
     Ok(inner.fee)
 }
 
+fn settle(sum: U256, paid_out: Option<U256>, before: U256, after: U256) -> Option<(U256, U256)> {
+    let change = after.checked_sub(before)?;
+    let fee = sum
+        .checked_sub(paid_out.unwrap_or_default())?
+        .checked_sub(change)?;
+    Some((fee, change))
+}
+
 fn short(fee: U256, available: U256, required: U256) -> UserOpError {
     UserOpError::Short {
-        fee: format_eth(fee),
-        available: format_eth(available),
-        required: format_eth(required),
+        fee,
+        available,
+        required,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_sol_types::Eip712Domain;
+
+    use super::*;
+
+    fn gas(pre_verification_gas: u128) -> UserOperationGasEstimate {
+        UserOperationGasEstimate {
+            pre_verification_gas,
+            verification_gas_limit: 100,
+            call_gas_limit: 100,
+            paymaster_verification_gas_limit: Some(100),
+            paymaster_post_op_gas_limit: Some(100),
+            max_fee_per_gas: 1,
+            max_priority_fee_per_gas: 1,
+        }
+    }
+
+    fn quoted() -> SignableUserOperation {
+        UserOperationBuilder::<()>::new(Address::ZERO, Address::ZERO, Eip712Domain::default())
+            .with_gas(gas(100))
+            .build()
+    }
+
+    #[test]
+    fn a_paymaster_refund_counts_as_change_not_fee() {
+        let (fee, change) = settle(
+            U256::from(200),
+            Some(U256::from(123)),
+            U256::ZERO,
+            U256::from(76),
+        )
+        .unwrap();
+        assert_eq!((fee, change), (U256::from(1), U256::from(76)));
+    }
+
+    #[test]
+    fn a_proven_limit_above_the_quote_is_adopted_while_the_fee_covers_it() {
+        let mut op = quoted();
+        assert!(fits(&mut op, &gas(110), U256::from(510)));
+        assert_eq!(op.user_op.pre_verification_gas, 110);
+    }
+
+    #[test]
+    fn a_proven_limit_the_fee_cannot_cover_is_refused() {
+        let mut op = quoted();
+        assert!(!fits(&mut op, &gas(110), U256::from(509)));
+        assert_eq!(op.user_op.pre_verification_gas, 100);
     }
 }

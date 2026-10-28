@@ -9,8 +9,9 @@ use crate::{
     GlobalArgs,
     report::Report,
     spend::{
-        ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster, first_bundler,
-        mnemonic, note_eth, open_vault, parse_address, submit_shielded, tornado_amount,
+        Consent, ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster,
+        first_bundler, keep_fresh, mnemonic, note_eth, open_vault, recipient_address,
+        submit_shielded, tornado_amount,
     },
 };
 
@@ -28,6 +29,8 @@ pub struct UnshieldArgs {
     to: Option<String>,
     #[arg(long)]
     profile: Option<String>,
+    #[command(flatten)]
+    consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -71,8 +74,9 @@ impl fmt::Display for UnshieldReport {
 }
 
 pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow::Error> {
-    let instance = global.open().await?;
     let input = global.input();
+    args.consent.ensure_possible(input)?;
+    let instance = global.open().await?;
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
     let amount = tornado_amount(
         args.amount_formatted.as_deref(),
@@ -96,11 +100,13 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     let bundler = first_bundler(&bundler_urls)?;
     if !confirm(
         input,
+        &args.consent,
         &summary(amount, &notes, fresh.index, &fresh.address, to, &bundler),
     )? {
         declined();
         return Ok(());
     }
+    keep_fresh(&instance, &profile, &fresh).await;
     let submitted = submit_shielded(ShieldedWithdrawal {
         phrase: &phrase,
         profile_index: profile.profile_index,
@@ -110,11 +116,11 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         notes: &notes,
         forward_to: to,
         minimum_forward: None,
+        tail_calls: &[],
         bundler_urls: &bundler_urls,
     })
     .await?;
-    instance.commit_fresh_address(&profile, fresh.index).await?;
-    let transaction = submitted.wait().await?;
+    let transaction = submitted.wait().await?.transaction;
     UnshieldReport {
         fresh_index: fresh.index,
         fresh_address: fresh.address.to_string(),
@@ -139,7 +145,7 @@ fn destination(
     };
     match text.as_deref() {
         None | Some("") => Ok(None),
-        Some(value) => Ok(Some(parse_address(value)?)),
+        Some(value) => Ok(Some(recipient_address(value)?)),
     }
 }
 
