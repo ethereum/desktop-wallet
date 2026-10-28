@@ -1,4 +1,4 @@
-use kohaku_tornadocash::{Field, Pool, syncer::Snapshot};
+use kohaku_tornadocash::{Field, Pool, event::Snapshot};
 use serde::{Deserialize, Serialize};
 
 use crate::database::{Database, DatabaseError};
@@ -44,7 +44,7 @@ pub trait PoolDb: Database {
     /// Writes `snapshot` as the next chunk without marking it synced. Until
     /// [`PoolDb::commit_snapshot`] runs, a re-sync overwrites the same chunk.
     async fn put_snapshot(&self, snapshot: &Snapshot) -> Result<(), TornadoVaultDbError> {
-        if snapshot.events.is_empty() {
+        if snapshot.events().is_empty() {
             return Ok(());
         }
         let chunks = self.cursor().await?.unwrap_or_default().chunks;
@@ -58,8 +58,8 @@ pub trait PoolDb: Database {
     async fn commit_snapshot(&self, snapshot: &Snapshot) -> Result<(), TornadoVaultDbError> {
         let chunks = self.cursor().await?.unwrap_or_default().chunks;
         let cursor = SyncCursor {
-            latest_block: snapshot.range.end,
-            chunks: chunks + u64::from(!snapshot.events.is_empty()),
+            latest_block: snapshot.range().end,
+            chunks: chunks + u64::from(!snapshot.events().is_empty()),
         };
         self.put(b"cursor", &postcard::to_stdvec(&cursor)?).await?;
         Ok(())

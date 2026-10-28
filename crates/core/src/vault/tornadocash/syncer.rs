@@ -3,8 +3,9 @@ use std::{ops::Range, sync::Arc, time::Duration};
 use alloy_rpc_types_eth::Filter;
 use kohaku_tornadocash::{
     Pool,
-    syncer::{Snapshot, SyncEvent, Syncer, SyncerError, saga::SagaSyncer},
+    event::{Snapshot, SyncEvent},
 };
+use kohaku_tornadocash_syncer::{Syncer, SyncerError, saga::SagaSyncer};
 use tracing::{info, warn};
 
 use crate::network::{NetworkEndpoint, NetworkEndpointError, http::outbound_http};
@@ -67,9 +68,7 @@ impl Syncer for NetworkEndpointSyncer {
         from_block: u64,
         to_block: u64,
     ) -> Result<Snapshot, SyncerError> {
-        self.sync(pool, from_block, to_block)
-            .await
-            .map_err(SyncerError::other)
+        self.sync(pool, from_block, to_block).await
     }
 }
 
@@ -79,10 +78,13 @@ impl NetworkEndpointSyncer {
         pool: &Pool,
         from_block: u64,
         to_block: u64,
-    ) -> Result<Snapshot, NetworkEndpointError> {
-        let range = self.block_range(pool, from_block, to_block).await?;
+    ) -> Result<Snapshot, SyncerError> {
+        let range = self
+            .block_range(pool, from_block, to_block)
+            .await
+            .map_err(SyncerError::other)?;
         if range.is_empty() {
-            return Ok(Snapshot::new(pool.clone(), range, Vec::new()));
+            return Snapshot::new(pool.clone(), range, Vec::new()).map_err(SyncerError::other);
         }
         info!("Syncing {pool} from {} to {}", range.start, range.end);
 
@@ -95,18 +97,18 @@ impl NetworkEndpointSyncer {
                 range.start..=range.end - 1,
                 self.provider.event_block_range(),
             )
-            .await?;
+            .await
+            .map_err(SyncerError::other)?;
 
         let mut events = Vec::with_capacity(logs.len());
         for log in logs {
-            let Some(decoded) = SyncEvent::try_from_log(&log) else {
-                warn!("Unknown event with topic {:?}", log.topic0());
-                continue;
-            };
-            events.push(decoded);
+            match SyncEvent::try_from(&log) {
+                Ok(decoded) => events.push(decoded),
+                Err(error) => warn!("Skipping event with topic {:?}: {error}", log.topic0()),
+            }
         }
 
-        Ok(Snapshot::new(pool.clone(), range, events))
+        Snapshot::new(pool.clone(), range, events).map_err(SyncerError::other)
     }
 
     /// Clamps the requested range to the blocks this syncer can serve: the pool's deployment
@@ -167,34 +169,38 @@ where
         }
     };
 
-    if saga.range.start > from_block {
+    if saga.range().start > from_block {
         info!(
             "Saga snapshot starts at {}, after the requested {from_block}; reading the range from the endpoint",
-            saga.range.start
+            saga.range().start
         );
         return fallback.sync_range(pool, from_block, to_block).await;
     }
-    if saga.range.end >= to_block {
+    if saga.range().end >= to_block {
         return Ok(saga);
     }
 
     info!(
         "Saga covers {}..{}; reading the tip from the endpoint",
-        saga.range.start, saga.range.end
+        saga.range().start,
+        saga.range().end
     );
-    let tail = fallback.sync_range(pool, saga.range.end, to_block).await?;
-    if tail.range.start != saga.range.end {
+    let tail = fallback
+        .sync_range(pool, saga.range().end, to_block)
+        .await?;
+    if tail.range().start != saga.range().end {
         info!(
             "Endpoint tail starts at {}, not {}; reading the whole range from the endpoint",
-            tail.range.start, saga.range.end
+            tail.range().start,
+            saga.range().end
         );
         return fallback.sync_range(pool, from_block, to_block).await;
     }
 
-    let mut events = saga.events;
-    events.extend(tail.events);
-    let end = tail.range.end.max(saga.range.end);
-    Ok(Snapshot::new(saga.pool, saga.range.start..end, events))
+    let mut events = saga.events().to_vec();
+    events.extend_from_slice(tail.events());
+    let end = tail.range().end.max(saga.range().end);
+    Snapshot::new(saga.pool().clone(), saga.range().start..end, events).map_err(SyncerError::other)
 }
 
 #[cfg(test)]
@@ -244,7 +250,7 @@ mod tests {
     }
 
     fn snap(start: u64, end: u64) -> Snapshot {
-        Snapshot::new(Pool::ETHEREUM_ETHER_01, start..end, Vec::new())
+        Snapshot::new(Pool::ETHEREUM_ETHER_01, start..end, Vec::new()).expect("an empty snapshot")
     }
 
     #[tokio::test]
@@ -254,7 +260,7 @@ mod tests {
         let joined = chain_range(&saga, &rpc, &Pool::ETHEREUM_ETHER_01, 10, 40)
             .await
             .expect("saga covered the range");
-        assert_eq!(joined.range, 10..40);
+        assert_eq!(joined.range(), 10..40);
         assert!(rpc.calls().is_empty());
     }
 
@@ -265,7 +271,7 @@ mod tests {
         let joined = chain_range(&saga, &rpc, &Pool::ETHEREUM_ETHER_01, 10, 40)
             .await
             .expect("endpoint covers the range");
-        assert_eq!(joined.range, 10..40);
+        assert_eq!(joined.range(), 10..40);
         assert_eq!(rpc.calls(), vec![(10, 40)]);
     }
 
@@ -276,7 +282,7 @@ mod tests {
         let joined = chain_range(&saga, &rpc, &Pool::ETHEREUM_ETHER_01, 10, 40)
             .await
             .expect("tail abuts");
-        assert_eq!(joined.range, 10..40);
+        assert_eq!(joined.range(), 10..40);
         assert_eq!(rpc.calls(), vec![(25, 40)]);
     }
 
@@ -287,7 +293,7 @@ mod tests {
         let joined = chain_range(&saga, &rpc, &Pool::ETHEREUM_ETHER_01, 10, 40)
             .await
             .expect("full read replaces the hole");
-        assert_eq!(joined.range, 10..40);
+        assert_eq!(joined.range(), 10..40);
         assert_eq!(rpc.calls(), vec![(25, 40), (10, 40)]);
     }
 
@@ -298,7 +304,7 @@ mod tests {
         let joined = chain_range(&saga, &rpc, &Pool::ETHEREUM_ETHER_01, 10, 40)
             .await
             .expect("endpoint covers the hole at the start");
-        assert_eq!(joined.range, 10..40);
+        assert_eq!(joined.range(), 10..40);
         assert_eq!(rpc.calls(), vec![(10, 40)]);
     }
 }

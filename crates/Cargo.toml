@@ -48,10 +48,12 @@ hkdf = "0.12"
 sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 rand = "0.10"
-kohaku-tornadocash = { git = "https://github.com/ethereum/kohaku-rs.git" }
-kohaku-tornadocash-keychain = { git = "https://github.com/ethereum/kohaku-rs.git" }
+kohaku-tornadocash = "0.1.0"
+kohaku-tornadocash-keychain = "0.0.1"
+kohaku-tornadocash-paymaster = "0.0.1"
+kohaku-tornadocash-syncer = { version = "0.0.1", features = ["saga-sync"] }
 kohaku-fork-kit = { git = "https://github.com/ethereum/kohaku-rs.git" }
-kohaku-userop-kit = { git = "https://github.com/ethereum/kohaku-rs.git" }
+kohaku-userop-kit = "0.0.1"
 
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
@@ -65,3 +67,9 @@ missing_errors_doc = "allow"
 cast_possible_truncation = "allow"
 arbitrary_source_item_ordering = "deny"
 redundant_pub_crate = "deny"
+
+# kohaku-fork-kit is not published; build it against the published crates edw uses.
+[patch."https://github.com/ethereum/kohaku-rs.git"]
+kohaku-tornadocash = "0.1.0"
+kohaku-tornadocash-relayer = "0.0.1"
+kohaku-userop-kit = "0.0.1"

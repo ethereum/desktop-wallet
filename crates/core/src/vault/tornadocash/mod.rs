@@ -9,10 +9,11 @@ pub use amount::{
 };
 use kohaku_tornadocash::{
     Asset, Deposit, Note, Pool, Withdrawal, WithdrawalError,
+    event::SyncEvent,
     merkle_tree::{MerkleProof, MerkleTree, MerkleTreeExt},
-    syncer::{DynSyncer, SyncEvent, Syncer},
 };
 use kohaku_tornadocash_keychain::{Keychain, KeychainError, recover};
+use kohaku_tornadocash_syncer::{DynSyncer, Syncer};
 use tokio::sync::Mutex;
 pub use userop::{
     PaymasterWithdrawal, PaymasterWithdrawalRequest, UserOpError, submit_paymaster_withdrawal,
@@ -85,7 +86,7 @@ pub enum TornadoVaultError {
     #[error("provider error: {0}")]
     Provider(#[from] crate::network::NetworkEndpointError),
     #[error("syncer error: {0}")]
-    Syncer(#[from] kohaku_tornadocash::syncer::SyncerError),
+    Syncer(#[from] kohaku_tornadocash_syncer::SyncerError),
     #[error("keychain error: {0}")]
     Keychain(#[from] KeychainError),
     #[error("withdrawal error: {0}")]
@@ -205,7 +206,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         let chain_id = self.provider.network_id().await?;
         let pools: Vec<Pool> = Pool::POOLS
             .iter()
-            .filter(|pool| pool.chain_id == chain_id)
+            .filter(|pool| pool.canonical && pool.chain_id == chain_id)
             .cloned()
             .collect();
         self.recover(&pools).await?;
@@ -257,11 +258,8 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         };
         let (withdrawal, proof) = self.withdrawal_inputs(note, *recipient).await?;
         let proven = withdrawal.prove(&proof, &mut rand::rng())?;
-        Ok(Call::new(
-            proven.target(),
-            proven.input().into(),
-            U256::ZERO,
-        ))
+        let call = proven.call();
+        Ok(Call::new(call.target, call.input, call.value))
     }
 
     /// The unproven withdrawal of `note` to `recipient`, and the merkle proof it commits to.
@@ -316,7 +314,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         let chain_id = self.provider.network_id().await?;
         let mut pools: Vec<Pool> = Pool::POOLS
             .iter()
-            .filter(|pool| pool.chain_id == chain_id && is_eq(pool, asset))
+            .filter(|pool| pool.canonical && pool.chain_id == chain_id && is_eq(pool, asset))
             .cloned()
             .collect();
 
@@ -362,12 +360,12 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         pool_db.put_snapshot(&snapshot).await?;
 
         if let Some(tree) = self.trees_cache.lock().await.get_mut(pool) {
-            tree.splice_events(&snapshot.events)
+            tree.splice_events(&snapshot)
                 .map_err(|e| TornadoVaultError::MerkleTree(e.to_string()))?;
         }
 
         let mut notes = pool_db.notes().await?;
-        apply_events(&mut notes, &snapshot.events);
+        apply_events(&mut notes, snapshot.events());
         pool_db.put_notes(&notes).await?;
 
         //? Last, so a sync interrupted before here is redone from the same block. Every step
@@ -408,12 +406,8 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         });
         pool_db.put_notes(&notes).await?;
 
-        let deposit = Deposit::new(pool, note);
-        Ok(Call::new(
-            deposit.target(),
-            deposit.input().into(),
-            deposit.value(),
-        ))
+        let call = Deposit::new(pool, note).call();
+        Ok(Call::new(call.target, call.input, call.value))
     }
 
     async fn merkle_proof(
@@ -435,7 +429,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     async fn build_tree(&self, pool: &Pool) -> Result<MerkleTree, TornadoVaultError> {
         let mut tree = MerkleTree::new();
         for snapshot in self.pool_db(pool).snapshots().await? {
-            tree.splice_events(&snapshot.events)
+            tree.splice_events(&snapshot)
                 .map_err(|e| TornadoVaultError::MerkleTree(e.to_string()))?;
         }
         Ok(tree)
