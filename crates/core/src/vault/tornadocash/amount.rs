@@ -1,10 +1,10 @@
-use alloy_primitives::{
-    U256,
-    utils::{format_units, parse_units},
-};
+use alloy_primitives::{U256, utils::format_units};
 use kohaku_tornadocash::{Asset, Pool};
 
-use crate::vault::tornadocash::TornadoNote;
+use crate::{
+    asset::{NATIVE_DECIMALS, ParseAmountError, parse_amount},
+    vault::tornadocash::TornadoNote,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AmountError {
@@ -20,6 +20,8 @@ pub enum AmountError {
     CannotCover { amount: U256 },
     #[error("invalid ETH amount `{0}`")]
     Parse(String),
+    #[error(transparent)]
+    Amount(#[from] ParseAmountError),
 }
 
 /// Splits `amount` into native ETH pool deposits, largest denomination first.
@@ -123,9 +125,7 @@ pub fn cover_notes(amount: U256, notes: &[TornadoNote]) -> Result<Vec<TornadoNot
 /// # Errors
 /// Returns an error when `amount` is not a non-negative decimal with at most 18 fractional digits.
 pub fn parse_eth(amount: &str) -> Result<U256, AmountError> {
-    let parsed =
-        parse_units(amount.trim(), 18).map_err(|_| AmountError::Parse(amount.to_string()))?;
-    Ok(From::from(parsed))
+    Ok(parse_amount(amount, NATIVE_DECIMALS)?)
 }
 
 /// Parses an integer wei amount.

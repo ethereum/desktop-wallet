@@ -30,16 +30,18 @@ edw asset opt-in <address> [--profile SELECTOR] # tracks an ERC-20, or restores 
 edw asset opt-out <address> [--profile SELECTOR] # stops tracking an ERC-20. A default is recorded as opted out; any other token is removed from its opt-ins. That hides its public balance and its Tornado notes
 edw balance [profile] [--detailed] # each asset's public, private and total holdings; the private total includes Tornado notes. --detailed lists each vault and each unspent Tornado note
 edw next-fresh-address [--peek] [--profile SELECTOR]
-edw shield [--amount-formatted <eth> | --amount-raw <wei>] [--from INDEX] [--profile SELECTOR]
-edw unshield [--amount-formatted <eth> | --amount-raw <wei>] [--to <address>] [--profile SELECTOR]
-edw transfer --from <index|address|tornado> --to <address> --amount <eth> [--profile SELECTOR]
+edw shield [--amount-formatted <eth> | --amount-raw <wei>] [--from INDEX] [--profile SELECTOR] [--yes]
+edw unshield [--amount-formatted <eth> | --amount-raw <wei>] [--to <address>] [--profile SELECTOR] [--yes]
+edw transfer --from <index|address|tornado> --to <address|ens-name> --amount <amount> [--asset <symbol|address>] [--profile SELECTOR] [--dry-run] [--yes]
 ```
 
 A command that finds the wallet locked unlocks it with `EDW_DECRYPTION_PASSWORD`, else a terminal prompt. A prompted password keeps a session, as `edw unlock` does, until 15 minutes after its last use; `EDW_DECRYPTION_PASSWORD` serves that one command. Piped stdin never holds a command's password, only its fields; a script sets `EDW_DECRYPTION_PASSWORD`, or, where a session can be kept, pipes the password to `edw unlock` first. Without a terminal, a command cannot choose between several network instances, so with more than one, run `edw unlock --network <name or id>` first. `edw lock` ends the session.
 
 The session, password included, is a plaintext file under `$XDG_RUNTIME_DIR/edw`, which the system clears at logout. Without that variable, as on macOS, no session is kept: each command asks for the password again, or reads `EDW_DECRYPTION_PASSWORD`. A script there can only open a data directory that holds one network instance.
 
-`shield`, `unshield`, and `transfer` move native ETH. At a terminal they ask for anything left off the command line, then wait for an explicit yes before broadcasting. `--non-interactive` asks for nothing: a missing required field is an error, and invoking the command is the authorization. Piped stdin supplies the missing fields and skips the confirmation.
+`shield` and `unshield` move native ETH; `transfer` moves ETH or an ERC-20. Nothing broadcasts without consent. At a terminal they ask for anything left off the command line, then wait for an explicit yes, which `--yes` skips. Without a terminal (piped stdin, or `--non-interactive`) they need `--yes`, and fail without it before touching the network. `--non-interactive` asks for nothing, so a missing required field is an error. Piped stdin supplies the missing fields.
+
+`transfer --amount` is in the asset's own units: ETH, or the tracked ERC-20 that `--asset` names by symbol or address (`edw asset list`). `--to` takes an address or an ENS name. A name is resolved on the active RPC, and the confirmation shows it with its address. Only ASCII names resolve, and a name served by an off-chain CCIP-Read gateway is refused. Before anything is signed, a transfer is rejected for a zero or negative amount, more decimals than the asset has, a mixed-case address with a wrong EIP-55 checksum, the zero address, or an account that cannot cover the amount plus the most the gas can cost; the error names the shortfall. An ERC-20 transfer is simulated first and refused if the token returns false. `--dry-run` prints the unsigned transaction and its maximum fee, then stops; it is refused with `--from tornado`, since quoting a Tornado transfer shows the bundler its withdrawal proofs. ERC-20s cannot be sent from Tornado.
 
 `shield` and `unshield` take the amount as `--amount-formatted` (decimal ETH, such as `1.1`) or `--amount-raw` (integer wei). Neither flag is required: a terminal prompts for decimal ETH, and piped stdin supplies that same line. The amount has to be an exact sum of the chain's Tornado denominations (mainnet `0.1`, `1`, `10`, `100` ETH; Sepolia `0.1`, `1`, `10` ETH). `1.15` ETH and `1` wei are rejected. Unshield also requires the profile to hold unspent notes that sum to that amount.
 

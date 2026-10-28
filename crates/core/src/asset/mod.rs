@@ -7,8 +7,8 @@
 //! Functions take `wallet`, the network scope, and `profile`, the profile's own scope.
 
 use alloy_primitives::{
-    Address, U256, address,
-    utils::{Unit, UnitsError, format_units},
+    Address, Bytes, U256, address,
+    utils::{ParseUnits, Unit, UnitsError, format_units, parse_units},
 };
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_sol_types::{SolCall, sol};
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     asset::db::{AssetDatabaseError, AssetDb},
+    call::Call,
     database::Database,
     network::{NetworkEndpoint, NetworkId, endpoint::NetworkEndpointError},
 };
@@ -50,6 +51,14 @@ pub struct Erc20Asset {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum ParseAmountError {
+    #[error("amount `{0}` is negative")]
+    Negative(String),
+    #[error("`{amount}` is not a decimal amount with at most {decimals} fractional digits")]
+    Invalid { amount: String, decimals: u8 },
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum AssetError {
     #[error("database error: {0}")]
     Database(#[from] AssetDatabaseError),
@@ -63,6 +72,8 @@ pub enum AssetError {
     Unregistered(Address),
     #[error("{0} is not a tracked asset")]
     NotTracked(Address),
+    #[error("{0} would refuse this transfer: a simulated transfer() returned false")]
+    TransferRefused(Address),
 }
 
 impl AssetId {
@@ -274,6 +285,67 @@ pub fn format_amount(amount: U256, decimals: u8) -> Result<String, UnitsError> {
         .to_string())
 }
 
+/// Parses a decimal amount such as `1.5` into base units of an asset with `decimals`.
+///
+/// # Errors
+/// [`ParseAmountError::Negative`] for a negative amount, and [`ParseAmountError::Invalid`] for
+/// one that is not a decimal or has more fractional digits than `decimals`.
+pub fn parse_amount(amount: &str, decimals: u8) -> Result<U256, ParseAmountError> {
+    let invalid = || ParseAmountError::Invalid {
+        amount: amount.to_string(),
+        decimals,
+    };
+    let text = amount.trim();
+    let unsigned = text.strip_prefix('-').unwrap_or(text);
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    let digits = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+    if whole.is_empty() && fraction.is_empty() || !digits(whole) || !digits(fraction) {
+        return Err(invalid());
+    }
+    if fraction.trim_end_matches('0').len() > usize::from(decimals) {
+        return Err(invalid());
+    }
+    match parse_units(text, decimals).map_err(|_| invalid())? {
+        ParseUnits::U256(units) => Ok(units),
+        ParseUnits::I256(_) => Err(ParseAmountError::Negative(amount.to_string())),
+    }
+}
+
+/// A call that moves `amount` base units of the ERC-20 at `token` to `to`.
+#[must_use]
+pub fn transfer_call(token: Address, to: Address, amount: U256) -> Call {
+    let data = Erc20::transferCall::new((to, amount)).abi_encode();
+    Call::new(token, Bytes::from(data), U256::ZERO)
+}
+
+/// Simulates `transfer` from `from`, and fails when the token returns false instead of
+/// reverting.
+///
+/// Empty return data counts as success, as for tokens whose `transfer` returns nothing.
+///
+/// # Errors
+/// [`AssetError::TransferRefused`] when the token returns false, and [`AssetError::Network`]
+/// when the call reverts or the endpoint fails.
+pub async fn simulate_transfer(
+    endpoint: &dyn NetworkEndpoint,
+    from: Address,
+    transfer: &Call,
+) -> Result<(), AssetError> {
+    let returned = endpoint
+        .call(
+            TransactionRequest::default()
+                .from(from)
+                .to(transfer.target)
+                .input(transfer.data.clone().into()),
+        )
+        .await?;
+    if returned.is_empty() || Erc20::transferCall::abi_decode_returns(&returned).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(AssetError::TransferRefused(transfer.target))
+    }
+}
+
 /// `owner`'s balance of the ERC-20 at `token`, in base units.
 pub async fn erc20_balance(
     endpoint: &dyn NetworkEndpoint,
@@ -325,6 +397,7 @@ async fn call<C: SolCall>(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use alloy_primitives::{B256, Bytes};
+    use alloy_sol_types::SolValue;
     use alloy_transport::mock::Asserter;
 
     use super::*;
@@ -339,6 +412,80 @@ mod tests {
 
     fn respond(asserter: &Asserter, returns: &[u8]) {
         asserter.push_success(&Bytes::copy_from_slice(returns));
+    }
+
+    #[test]
+    fn a_negative_amount_is_refused_rather_than_wrapped() {
+        for amount in ["-1", "-0.1", "-0"] {
+            assert!(
+                matches!(parse_amount(amount, 18), Err(ParseAmountError::Negative(_))),
+                "{amount} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn an_amount_is_read_in_the_asset_decimals() {
+        assert_eq!(parse_amount("1.5", 6).unwrap(), U256::from(1_500_000));
+        assert_eq!(
+            parse_amount("1.50000000", 6).unwrap(),
+            U256::from(1_500_000)
+        );
+    }
+
+    #[test]
+    fn digit_separators_are_refused_rather_than_misread() {
+        for amount in ["1.0_1", "1_000"] {
+            assert!(parse_amount(amount, 6).is_err(), "{amount} must not parse");
+        }
+    }
+
+    #[test]
+    fn digits_past_the_asset_decimals_are_refused_rather_than_truncated() {
+        assert!(parse_amount("1.0000001", 6).is_err());
+    }
+
+    fn transfer() -> Call {
+        transfer_call(usdc(), Address::repeat_byte(0x22), U256::from(1))
+    }
+
+    #[tokio::test]
+    async fn a_token_that_returns_false_is_refused() {
+        let asserter = Asserter::new();
+        respond(&asserter, &false.abi_encode());
+        let refused = simulate_transfer(
+            mocked_provider(&asserter).as_ref(),
+            Address::ZERO,
+            &transfer(),
+        )
+        .await;
+        assert!(matches!(refused, Err(AssetError::TransferRefused(_))));
+    }
+
+    #[tokio::test]
+    async fn a_token_that_returns_true_is_accepted() {
+        let asserter = Asserter::new();
+        respond(&asserter, &true.abi_encode());
+        simulate_transfer(
+            mocked_provider(&asserter).as_ref(),
+            Address::ZERO,
+            &transfer(),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_token_whose_transfer_returns_nothing_is_accepted() {
+        let asserter = Asserter::new();
+        respond(&asserter, &[]);
+        simulate_transfer(
+            mocked_provider(&asserter).as_ref(),
+            Address::ZERO,
+            &transfer(),
+        )
+        .await
+        .unwrap();
     }
 
     #[test]

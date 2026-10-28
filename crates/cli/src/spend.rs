@@ -3,6 +3,7 @@ use std::sync::Arc;
 use alloy_primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::Context;
+use clap::Args;
 use edw_core::{
     broadcast::submit_call,
     bundler::{BundlerList, Url},
@@ -38,6 +39,26 @@ pub struct ShieldedWithdrawal<'a> {
     pub forward_to: Option<Address>,
     pub minimum_forward: Option<U256>,
     pub bundler_urls: &'a [Url],
+}
+
+#[derive(Args, Debug)]
+pub struct Consent {
+    /// Broadcast without asking. Without a terminal, nothing is broadcast unless this is set.
+    #[arg(long)]
+    yes: bool,
+}
+
+impl Consent {
+    /// Fails unless consent can be given: `--yes`, or a terminal to ask at. Call it before any
+    /// network work.
+    pub fn ensure_possible(&self, input: Input) -> Result<(), anyhow::Error> {
+        if self.yes || input == Input::Terminal {
+            return Ok(());
+        }
+        Err(failure::usage(
+            "nothing was broadcast; without a terminal to confirm at, pass --yes",
+        ))
+    }
 }
 
 pub async fn choose_profile(
@@ -92,8 +113,9 @@ pub fn account_at(
 pub fn account_by_address(
     mnemonic: &Mnemonic,
     profile_index: u32,
-    address: Address,
+    address: &str,
 ) -> Result<Account, anyhow::Error> {
+    let address = parse_address(address)?;
     for index in 0..1000 {
         let account = account_at(mnemonic, profile_index, index)?;
         if account.address == address {
@@ -106,8 +128,11 @@ pub fn account_by_address(
 }
 
 pub fn parse_address(text: &str) -> Result<Address, anyhow::Error> {
-    text.parse()
-        .map_err(|error| failure::usage(format!("`{text}` is not an address: {error}")))
+    edw_core::recipient::parse_address(text).map_err(|error| failure::usage(error.to_string()))
+}
+
+pub fn recipient_address(text: &str) -> Result<Address, anyhow::Error> {
+    edw_core::recipient::recipient_address(text).map_err(|error| failure::usage(error.to_string()))
 }
 
 pub async fn open_vault(
@@ -150,19 +175,9 @@ pub fn tornado_amount(
     }
 }
 
-pub fn eth_amount(given: Option<&str>, input: Input, label: &str) -> Result<U256, anyhow::Error> {
-    let text = match given {
-        Some(amount) => amount.to_string(),
-        None => input
-            .line(label)?
-            .filter(|line| !line.is_empty())
-            .ok_or_else(|| failure::usage(format!("pass {label}")))?,
-    };
-    Ok(parse_eth(&text)?)
-}
-
-pub fn confirm(input: Input, summary: &str) -> Result<bool, anyhow::Error> {
-    if input != Input::Terminal {
+pub fn confirm(input: Input, consent: &Consent, summary: &str) -> Result<bool, anyhow::Error> {
+    consent.ensure_possible(input)?;
+    if consent.yes {
         return Ok(true);
     }
     eprintln!("{summary}");
@@ -232,4 +247,17 @@ pub async fn submit_shielded(
         bundlers,
     })
     .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn without_a_terminal_only_yes_consents() {
+        for input in [Input::Piped, Input::Disabled] {
+            assert!(Consent { yes: false }.ensure_possible(input).is_err());
+            assert!(Consent { yes: true }.ensure_possible(input).is_ok());
+        }
+    }
 }

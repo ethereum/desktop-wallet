@@ -66,7 +66,7 @@ enum Command {
     Shield(shield::ShieldArgs),
     /// Withdraws native ETH from Tornado Cash.
     Unshield(unshield::UnshieldArgs),
-    /// Sends native ETH from an account, or from Tornado Cash.
+    /// Sends ETH or a tracked ERC-20 from an account, or ETH from Tornado Cash.
     Transfer(transfer::TransferArgs),
 }
 
