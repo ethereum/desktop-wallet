@@ -14,7 +14,7 @@ use edw_core::{
     network::NetworkEndpoint,
     profile::ProfileRecord,
     recipient::{Recipient, RecipientError, ResolvedRecipient},
-    vault::tornadocash::{cover_notes, format_eth},
+    vault::tornadocash::{TornadoNote, UserOpError, cover_notes, format_eth},
 };
 use serde::Serialize;
 
@@ -24,11 +24,13 @@ use crate::{
     report::Report,
     spend::{
         Account, Consent, ShieldedWithdrawal, account_at, account_by_address, choose_profile,
-        confirm, declined, ensure_paymaster, first_bundler, mnemonic, note_eth, open_vault,
-        parse_address, submit_shielded,
+        confirm, declined, ensure_paymaster, first_bundler, keep_fresh, measured, mnemonic,
+        note_eth, open_vault, parse_address, quote_shielded,
     },
     unshield::{NoteLine, note_lines},
 };
+
+const NOTE_ATTEMPTS: usize = 3;
 
 #[derive(Args, Debug)]
 pub struct TransferArgs {
@@ -65,9 +67,10 @@ struct TransferReport {
     token: Option<String>,
     unsigned: Option<UnsignedLines>,
     fresh_index: Option<u32>,
+    fresh_address: Option<String>,
     notes: Vec<NoteLine>,
-    forwarded: Option<String>,
     fee: Option<String>,
+    change: Option<String>,
     max_fee: Option<String>,
     bundler: Option<String>,
     user_operation: Option<String>,
@@ -105,7 +108,7 @@ struct Plan<'a> {
 
 impl Report for TransferReport {
     const KIND: &'static str = "edw/transfer";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
 }
 
 impl fmt::Display for TransferReport {
@@ -138,19 +141,20 @@ impl fmt::Display for TransferReport {
                 unsigned.max_priority_fee_per_gas_gwei
             )?;
         }
-        if let Some(index) = self.fresh_index {
-            writeln!(f, "fresh {index}")?;
+        if let (Some(index), Some(address)) = (self.fresh_index, &self.fresh_address) {
+            writeln!(f, "fresh {index} {address}")?;
         }
         for note in &self.notes {
             writeln!(f, "{} {}", note.role, note.amount)?;
-        }
-        if let Some(forwarded) = &self.forwarded {
-            writeln!(f, "forwarded {forwarded} ETH")?;
         }
         if let Some(fee) = &self.fee {
             writeln!(f, "fee {fee} ETH")?;
         } else if let Some(max_fee) = &self.max_fee {
             writeln!(f, "max fee {max_fee} ETH")?;
+        }
+        if let Some(change) = &self.change {
+            let bound = if self.fee.is_none() { " at least" } else { "" };
+            writeln!(f, "change{bound} {change} ETH")?;
         }
         if let Some(bundler) = &self.bundler {
             writeln!(f, "bundler {bundler}")?;
@@ -201,9 +205,10 @@ impl Plan<'_> {
             },
             unsigned: None,
             fresh_index: None,
+            fresh_address: None,
             notes: Vec::new(),
-            forwarded: None,
             fee: None,
+            change: None,
             max_fee: None,
             bundler: None,
             user_operation: None,
@@ -241,11 +246,6 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     if tornado && matches!(asset, Asset::Erc20(_)) {
         return Err(failure::usage(
             "Tornado holds only ETH; send an ERC-20 from an account index or address",
-        ));
-    }
-    if tornado && args.dry_run {
-        return Err(failure::usage(
-            "--dry-run is for transfers from an account: quoting a Tornado transfer shows the bundler its withdrawal proofs",
         ));
     }
     let phrase = mnemonic(&instance, &profile).await?;
@@ -400,58 +400,86 @@ async fn from_tornado(plan: &Plan<'_>) -> Result<(), anyhow::Error> {
     .await?;
     eprintln!("Syncing Tornado pools...");
     let held = vault.notes().await?;
-    let notes = cover_notes(plan.amount, &held)?;
-    ensure_paymaster(&notes)?;
     let fresh = plan
         .instance
         .fresh_address(plan.profile, plan.phrase, plan.endpoint.as_ref())
         .await?;
     let bundler_urls = plan.instance.bundler_urls().await?;
     let bundler = first_bundler(&bundler_urls)?;
-    let sponsor = notes.first().map(note_eth).unwrap_or_default();
+    let send = [Call::new(plan.to.address, Bytes::new(), plan.amount)];
+    let mut notes = cover_notes(plan.amount, &held)?;
+    let mut attempts = 0;
+    let quoted = loop {
+        ensure_paymaster(&notes)?;
+        let quoted = quote_shielded(ShieldedWithdrawal {
+            phrase: plan.phrase,
+            profile_index: plan.profile.profile_index,
+            endpoint: plan.endpoint.as_ref(),
+            vault: &vault,
+            fresh_index: fresh.index,
+            notes: &notes,
+            forward_to: None,
+            minimum_forward: None,
+            tail_calls: &send,
+            bundler_urls: &bundler_urls,
+        })
+        .await;
+        attempts += 1;
+        match quoted.map_err(anyhow::Error::downcast::<UserOpError>) {
+            Ok(quoted) => break quoted,
+            Err(Ok(UserOpError::Short { fee, .. })) if attempts < NOTE_ATTEMPTS => {
+                eprintln!("The fee leaves the notes short; adding a note.");
+                notes = cover_notes(plan.amount + fee, &held)?;
+            }
+            Err(Ok(error)) => return Err(error.into()),
+            Err(Err(error)) => return Err(error),
+        }
+    };
+    let change = quoted.sum - quoted.fee - plan.amount;
+    let mut report = plan.report("tornado".to_string(), None);
+    report.fresh_index = Some(fresh.index);
+    report.fresh_address = Some(fresh.address.to_string());
+    report.notes = note_lines(&notes);
+    report.max_fee = Some(format_eth(quoted.fee));
+    report.change = Some(format_eth(change));
+    if plan.args.dry_run {
+        return report.emit(plan.global.mode());
+    }
     let summary = format!(
-        "Transfer {} ETH from tornado to {}.\nUnshields {}.\nSponsoring note {sponsor} ETH pays gas through the Tornado paymaster.\nRuns as fresh address {} ({}).\nBundler {bundler}.\nForwards the remainder after that fee to {}. The remainder has to cover {} ETH.",
+        "Transfer {} ETH from tornado to {}.\nWithdraws {} to fresh address {} ({}).\nThe sponsoring {} ETH note pays a fee of up to {} ETH through the Tornado paymaster.\nAt least {} ETH of change stays on the fresh address.\nBundler {}.",
         format_eth(plan.amount),
         plan.to,
-        notes
-            .iter()
-            .map(|note| format!("{} ETH", note_eth(note)))
-            .collect::<Vec<_>>()
-            .join(" + "),
+        note_amounts(&notes),
         fresh.index,
         fresh.address,
-        plan.to.address,
-        format_eth(plan.amount)
+        notes.first().map(note_eth).unwrap_or_default(),
+        format_eth(quoted.fee),
+        format_eth(change),
+        bundler,
     );
     if !confirm(plan.input, &plan.args.consent, &summary)? {
         declined();
         return Ok(());
     }
-    let submitted = submit_shielded(ShieldedWithdrawal {
-        phrase: plan.phrase,
-        profile_index: plan.profile.profile_index,
-        endpoint: plan.endpoint.as_ref(),
-        vault: &vault,
-        fresh_index: fresh.index,
-        notes: &notes,
-        forward_to: Some(plan.to.address),
-        minimum_forward: Some(plan.amount),
-        bundler_urls: &bundler_urls,
-    })
-    .await?;
-    plan.instance
-        .commit_fresh_address(plan.profile, fresh.index)
-        .await?;
-    let transaction = submitted.wait().await?;
-    let mut report = plan.report("tornado".to_string(), None);
-    report.fresh_index = Some(fresh.index);
-    report.notes = note_lines(&notes);
-    report.forwarded = submitted.forwarded.map(format_eth);
-    report.fee = Some(format_eth(submitted.fee));
+    keep_fresh(plan.instance, plan.profile, &fresh).await;
+    let submitted = quoted.submit().await?;
+    let included = submitted.wait().await?;
+    if let Some(cost) = measured(&included).await {
+        report.fee = Some(format_eth(cost.fee));
+        report.change = Some(format_eth(cost.change));
+    }
     report.bundler = submitted.bundler().or(Some(bundler));
     report.user_operation = Some(submitted.hash.0.to_string());
-    report.transaction = Some(transaction.to_string());
+    report.transaction = Some(included.transaction.to_string());
     report.emit(plan.global.mode())
+}
+
+fn note_amounts(notes: &[TornadoNote]) -> String {
+    notes
+        .iter()
+        .map(|note| format!("{} ETH", note_eth(note)))
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 fn unsigned(call: &Call, prepared: &PreparedTransaction) -> UnsignedLines {

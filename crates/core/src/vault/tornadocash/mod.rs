@@ -16,7 +16,8 @@ use kohaku_tornadocash_keychain::{Keychain, KeychainError, recover};
 use kohaku_tornadocash_syncer::{DynSyncer, Syncer};
 use tokio::sync::Mutex;
 pub use userop::{
-    PaymasterWithdrawal, PaymasterWithdrawalRequest, UserOpError, submit_paymaster_withdrawal,
+    IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest, QuotedWithdrawal,
+    UserOpError, WithdrawalCost, quote_paymaster_withdrawal,
 };
 
 use crate::{
