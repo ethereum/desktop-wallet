@@ -6,18 +6,16 @@
 
 ## Development
 
-To setup dev environment:
+EDW primarily uses [nix flakes](https://wiki.nixos.org/wiki/Flakes) for development. See the [flake.nix](./flake.nix) file for details on required dependencies. To enter the dev shell, run:
 
-```sh
-nix develop
+```bash
+nix develop --extra-experimental-features "nix-command flakes"
 ```
 
-To run commands
+## Common commands
 
-```sh
-just run help
-# or you can
-just build
-alias edw=./crates/target/release/edw
-edw help
+EDW provides a [justfile](./justfile) for common commands. For information on the CLI, see [docs/cli](./docs/cli). To see a list of available development commands, run:
+
+```bash
+just --list
 ```

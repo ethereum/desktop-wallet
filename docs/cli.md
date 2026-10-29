@@ -1,39 +1,29 @@
 # CLI Interface
 
 The `edw-cli` crate implements the `edw` CLI interface.
-The crate is concerned purely with inputs and outputs, not with underlying machinery.
+
+## Getting Started
+
+Create a fresh wallet by running the following commands:
+
+```bash
+# Create a new wallet
+just run unlock --network sepolia
+
+# Set your JSON-RPC endpoint
+just run network rpc-config add --use
+
+# Create a new profile
+just run profile new
+
+# Create a new address
+just run next-fresh-address
+
+# View your profile's public address and balance
+just run balance --detailed
+```
 
 ## Layout
-
-```sh
-edw lock/unlock # locks or unlocks the datastore
-edw config path # prints the data directory
-edw config view # the data directory, its network instances, the session, and the active RPC config; works while locked
-
-edw network view # the active RPC, the bundler URLs, and the indexer
-edw network rpc-config list # lists this network's RPC configs; the active one is marked
-edw network rpc-config add <name> --url <url> [--blockrange 500] [--interval 0ms] [--use] # adds an RPC config. Active when none is, or when --use is set. --blockrange is blocks per eth_getLogs request. --interval is the pause between calls; the seeded publicnode config uses 500ms
-edw network rpc-config use <name> # makes an RPC config the active one
-edw network bundler-config list # bundler URLs in fallback order
-edw network bundler-config add --url <url> # appends a fallback. The list always keeps at least one URL once it has one
-edw network bundler-config remove --url <url> # removes a URL. Refuses to remove the last one
-edw network indexer-config [--url <url>] [--enable | --disable] # shows the indexer, replaces its URL, or turns it on or off
-
-edw profile list # lists all configured profiles
-edw profile new # creates a new profile; on a new phrase, with an address vault for its first address, else like import
-edw profile import # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails), and scans the chain's Tornado pools (stops after 20 consecutive unused nonces)
-edw profile rescan [profile] # scans a profile's addresses again and adds an address vault for each one it is missing, and scans the chain's Tornado pools the same way
-edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only
-
-edw asset list [--profile SELECTOR] # the ERC-20s a profile tracks: the network's defaults, minus opt-outs, then its opt-ins
-edw asset opt-in <address> [--profile SELECTOR] # tracks an ERC-20, or restores a default the profile opted out of
-edw asset opt-out <address> [--profile SELECTOR] # stops tracking an ERC-20. A default is recorded as opted out; any other token is removed from its opt-ins. That hides its public balance and its Tornado notes
-edw balance [profile] [--detailed] # each asset's public, private and total holdings; the private total includes Tornado notes. --detailed lists each vault and each unspent Tornado note
-edw next-fresh-address [--peek] [--profile SELECTOR]
-edw shield [--amount-formatted <eth> | --amount-raw <wei>] [--from INDEX] [--profile SELECTOR] [--yes]
-edw unshield [--amount-formatted <eth> | --amount-raw <wei>] [--to <address>] [--profile SELECTOR] [--yes]
-edw transfer --from <index|address|tornado> --to <address|ens-name> --amount <amount> [--asset <symbol|address>] [--profile SELECTOR] [--dry-run] [--yes]
-```
 
 A command that finds the wallet locked unlocks it with `EDW_DECRYPTION_PASSWORD`, else a terminal prompt. A prompted password keeps a session, as `edw unlock` does, until 15 minutes after its last use; `EDW_DECRYPTION_PASSWORD` serves that one command. Piped stdin never holds a command's password, only its fields; a script sets `EDW_DECRYPTION_PASSWORD`, or, where a session can be kept, pipes the password to `edw unlock` first. Without a terminal, a command cannot choose between several network instances, so with more than one, run `edw unlock --network <name or id>` first. `edw lock` ends the session.
 
@@ -66,12 +56,12 @@ Logs go to stderr at `warn` by default. `RUST_LOG`, when set, takes precedence o
 
 ### Exit Codes
 
-| Code | Class | When |
-|---|---|---|
-| 0 | | the command succeeded, or a confirmation was declined |
-| 1 | `other` | any failure not listed below, including a value the wallet core rejects, such as an unknown profile name or an amount that is not a sum of pool denominations, an unreachable RPC endpoint or bundler, or a reverted transaction |
-| 2 | `usage` | an argument the CLI rejects itself, such as a missing flag, a malformed address, or an unusable phrase file |
-| 3 | `locked` | no session or password to open the wallet with, or a wrong password |
+| Code | Class    | When                                                                                                                                                                                                                             |
+| ---- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    |          | the command succeeded, or a confirmation was declined                                                                                                                                                                            |
+| 1    | `other`  | any failure not listed below, including a value the wallet core rejects, such as an unknown profile name or an amount that is not a sum of pool denominations, an unreachable RPC endpoint or bundler, or a reverted transaction |
+| 2    | `usage`  | an argument the CLI rejects itself, such as a missing flag, a malformed address, or an unusable phrase file                                                                                                                      |
+| 3    | `locked` | no session or password to open the wallet with, or a wrong password                                                                                                                                                              |
 
 With `--non-interactive`, a failure prints one `edw/error` document on stdout instead of text on stderr. Argument errors that clap reports while parsing are always text, with code 2.
 

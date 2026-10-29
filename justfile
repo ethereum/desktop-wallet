@@ -25,4 +25,4 @@ clean:
     cd crates && cargo clean
 
 run *ARGS:
-    cargo run --manifest-path crates/bin/Cargo.toml -- {{ARGS}}
+    cargo run --release --manifest-path crates/bin/Cargo.toml -- {{ARGS}}
