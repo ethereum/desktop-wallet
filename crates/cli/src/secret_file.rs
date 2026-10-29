@@ -8,36 +8,55 @@ use std::{
 use anyhow::Context;
 use zeroize::Zeroizing;
 
+use crate::failure;
+
 /// Reads `path`, refusing anything but a regular file owned by the current user with mode 0400
 /// or 0600.
 ///
 /// The contents are returned as is, trailing newline included.
 pub fn read(path: &Path, label: &str, max_bytes: u64) -> Result<Zeroizing<String>, anyhow::Error> {
-    let linked = fs::symlink_metadata(path)
-        .with_context(|| format!("error reading the {label} file {}", path.display()))?;
+    let linked = fs::symlink_metadata(path).map_err(|error| {
+        failure::usage(format!(
+            "error reading the {label} file {}: {error}",
+            path.display()
+        ))
+    })?;
     if linked.file_type().is_symlink() {
-        anyhow::bail!("the {label} file cannot be a symbolic link");
+        return Err(failure::usage(format!(
+            "the {label} file cannot be a symbolic link"
+        )));
     }
     if !linked.is_file() {
-        anyhow::bail!("the {label} file must be a regular file");
+        return Err(failure::usage(format!(
+            "the {label} file must be a regular file"
+        )));
     }
 
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-        .with_context(|| format!("error opening the {label} file {}", path.display()))?;
+        .map_err(|error| {
+            failure::usage(format!(
+                "error opening the {label} file {}: {error}",
+                path.display()
+            ))
+        })?;
     let opened = file.metadata()?;
     if (opened.dev(), opened.ino()) != (linked.dev(), linked.ino()) {
         anyhow::bail!("the {label} file changed while it was being opened");
     }
     // SAFETY: geteuid has no preconditions and cannot fail.
     if opened.uid() != unsafe { libc::geteuid() } {
-        anyhow::bail!("the {label} file must be owned by the current user");
+        return Err(failure::usage(format!(
+            "the {label} file must be owned by the current user"
+        )));
     }
     let permissions = opened.mode() & 0o777;
     if permissions != 0o400 && permissions != 0o600 {
-        anyhow::bail!("the {label} file permissions must be 0400 or 0600; run chmod 600 on it");
+        return Err(failure::usage(format!(
+            "the {label} file permissions must be 0400 or 0600; run chmod 600 on it"
+        )));
     }
 
     let mut contents = Zeroizing::new(String::new());
@@ -46,7 +65,9 @@ pub fn read(path: &Path, label: &str, max_bytes: u64) -> Result<Zeroizing<String
         .read_to_string(&mut contents)
         .with_context(|| format!("error reading the {label} file {}", path.display()))?;
     if contents.len() as u64 > max_bytes {
-        anyhow::bail!("the {label} file is too large (maximum {max_bytes} bytes)");
+        return Err(failure::usage(format!(
+            "the {label} file is too large (maximum {max_bytes} bytes)"
+        )));
     }
     Ok(contents)
 }

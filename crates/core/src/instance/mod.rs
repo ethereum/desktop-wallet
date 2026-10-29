@@ -28,6 +28,7 @@ mod address;
 mod data_dir;
 mod networks;
 mod profiles;
+mod services;
 mod vaults;
 
 /// Scope holding the [`Network`] record and its RPC configs.
@@ -69,6 +70,14 @@ pub enum InstanceError {
     UnknownRpcConfig(String),
     #[error("no RPC config; add one with `edw network rpc-config add <name> --url <url>`")]
     NoRpcConfigs,
+    #[error("bundler URL `{0}` is already configured")]
+    DuplicateBundlerUrl(String),
+    #[error("no bundler URL `{0}`")]
+    UnknownBundlerUrl(String),
+    #[error("the last bundler URL cannot be removed; add another first")]
+    LastBundlerUrl,
+    #[error("the indexer needs a URL before it can be turned on")]
+    IndexerUrlRequired,
     #[error("RPC config `{name}` cannot be used for {network_id}")]
     UnusableRpcConfig {
         name: String,
@@ -110,7 +119,7 @@ impl Instance {
     /// Opens the instance for `network_id`, and creates one on first use.
     ///
     /// Records the network on first use. Mainnet and Sepolia also start with an active public
-    /// RPC config.
+    /// RPC config, the public bundler, and the Saga indexer.
     pub async fn open_or_create(
         data_dir: &DataDir,
         network_id: NetworkId,
@@ -129,6 +138,8 @@ impl Instance {
         let instance = Self { network, store };
         if !exists {
             instance.install_default_rpc_config().await?;
+            instance.install_default_bundler_config().await?;
+            instance.install_default_indexer_config().await?;
         }
         Ok(instance)
     }

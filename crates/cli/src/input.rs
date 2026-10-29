@@ -3,6 +3,8 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use anyhow::Context;
 use zeroize::Zeroizing;
 
+use crate::failure;
+
 /// Where a command may read input it was not given as an argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Input {
@@ -84,6 +86,6 @@ impl Input {
             .ok()
             .filter(|number| (1..=options.len()).contains(number))
             .map(|number| Some(number - 1))
-            .with_context(|| format!("`{choice}` is not one of the choices"))
+            .ok_or_else(|| failure::usage(format!("`{choice}` is not one of the choices")))
     }
 }

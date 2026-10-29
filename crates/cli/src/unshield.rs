@@ -2,15 +2,16 @@ use std::fmt;
 
 use alloy_primitives::{Address, U256};
 use clap::{ArgGroup, Args};
-use edw_core::vault::tornadocash::format_eth;
+use edw_core::vault::tornadocash::{exact_notes, format_eth};
 use serde::Serialize;
 
 use crate::{
     GlobalArgs,
     report::Report,
     spend::{
-        ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster, first_bundler,
-        mnemonic, note_eth, open_vault, submit_shielded, tornado_amount,
+        Consent, ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster,
+        first_bundler, keep_fresh, mnemonic, note_eth, open_vault, recipient_address,
+        submit_shielded, tornado_amount,
     },
 };
 
@@ -28,9 +29,8 @@ pub struct UnshieldArgs {
     to: Option<String>,
     #[arg(long)]
     profile: Option<String>,
-    /// Pay gas with this standard-address index, allowing pools without a paymaster.
-    #[arg(long)]
-    gas_payer: Option<u32>,
+    #[command(flatten)]
+    consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -49,14 +49,6 @@ struct UnshieldReport {
     fee: String,
     bundler: String,
     user_operation: String,
-    transaction: String,
-}
-
-#[derive(Serialize)]
-struct PaidUnshieldReport {
-    gas_payer: String,
-    recipient: String,
-    notes: Vec<String>,
     transaction: String,
 }
 
@@ -81,25 +73,10 @@ impl fmt::Display for UnshieldReport {
     }
 }
 
-impl Report for PaidUnshieldReport {
-    const KIND: &'static str = "edw/unshield";
-    const VERSION: u32 = 3;
-}
-
-impl fmt::Display for PaidUnshieldReport {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "gas payer {}", self.gas_payer)?;
-        writeln!(f, "recipient {}", self.recipient)?;
-        for note in &self.notes {
-            writeln!(f, "note {note} ETH")?;
-        }
-        writeln!(f, "transaction {}", self.transaction)
-    }
-}
-
 pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow::Error> {
-    let instance = global.open().await?;
     let input = global.input();
+    args.consent.ensure_possible(input)?;
+    let instance = global.open().await?;
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
     let amount = tornado_amount(
         args.amount_formatted.as_deref(),
@@ -109,28 +86,25 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     let to = destination(args.to.as_deref(), input)?;
     let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
-    let chain_id = endpoint.network_id().await?;
     let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
     eprintln!("Syncing Tornado pools...");
-    let mut notes = vault.exact_notes(amount).await?;
-    if let Some(index) = args.gas_payer {
-        return paid_withdrawal(
-            global, &instance, &profile, &phrase, endpoint, &vault, &notes, to, index,
-        )
-        .await;
-    }
-    ensure_paymaster(&mut notes)?;
+    let held = vault.notes().await?;
+    let notes = exact_notes(amount, &held)?;
+    ensure_paymaster(&notes)?;
     let fresh = instance
         .fresh_address(&profile, &phrase, endpoint.as_ref())
         .await?;
-    let bundler = first_bundler(chain_id)?;
+    let bundler_urls = instance.bundler_urls().await?;
+    let bundler = first_bundler(&bundler_urls)?;
     if !confirm(
         input,
+        &args.consent,
         &summary(amount, &notes, fresh.index, &fresh.address, to, &bundler),
     )? {
         declined();
         return Ok(());
     }
+    keep_fresh(&instance, &profile, &fresh).await;
     let submitted = submit_shielded(ShieldedWithdrawal {
         phrase: &phrase,
         profile_index: profile.profile_index,
@@ -140,10 +114,11 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         notes: &notes,
         forward_to: to,
         minimum_forward: None,
+        tail_calls: &[],
+        bundler_urls: &bundler_urls,
     })
     .await?;
-    instance.commit_fresh_address(&profile, fresh.index).await?;
-    let transaction = submitted.wait().await?;
+    let transaction = submitted.wait().await?.transaction;
     UnshieldReport {
         fresh_index: fresh.index,
         fresh_address: fresh.address.to_string(),
@@ -158,68 +133,6 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     .emit(global.mode())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn paid_withdrawal(
-    global: &GlobalArgs,
-    instance: &edw_core::instance::Instance,
-    profile: &edw_core::profile::ProfileRecord,
-    phrase: &edw_core::mnemonic::Mnemonic,
-    endpoint: std::sync::Arc<dyn edw_core::network::NetworkEndpoint>,
-    vault: &edw_core::vault::tornadocash::TornadoVault<alloy_signer_local::PrivateKeySigner>,
-    notes: &[edw_core::vault::tornadocash::TornadoNote],
-    to: Option<Address>,
-    index: u32,
-) -> anyhow::Result<()> {
-    let payer = crate::spend::account_at(phrase, profile.profile_index, index)?;
-    let fresh = if to.is_none() {
-        Some(
-            instance
-                .fresh_address(profile, phrase, endpoint.as_ref())
-                .await?,
-        )
-    } else {
-        None
-    };
-    let recipient = to
-        .or_else(|| fresh.as_ref().map(|fresh| fresh.address))
-        .ok_or_else(|| anyhow::anyhow!("missing withdrawal recipient"))?;
-    let amounts: Vec<String> = notes.iter().map(note_eth).collect();
-    let summary = format!(
-        "Unshield {} ETH to {recipient}. Standard account {index} ({}) pays gas; its transaction publicly links that account to these withdrawals.",
-        amounts.join(" + "),
-        payer.address
-    );
-    if !confirm(global.input(), &summary)? {
-        declined();
-        return Ok(());
-    }
-    let mut calls = Vec::new();
-    for note in notes {
-        calls.push(
-            vault
-                .withdraw(note, &edw_core::vault::VaultId::Address(recipient))
-                .await?,
-        );
-    }
-    if let Some(fresh) = fresh {
-        instance.commit_fresh_address(profile, fresh.index).await?;
-    }
-    let transaction = if calls.len() == 1 {
-        crate::spend::send_one(endpoint.as_ref(), payer.signer, &calls[0]).await?
-    } else {
-        edw_core::broadcast::submit_user_operation(endpoint.as_ref(), &payer.key, &calls)
-            .await?
-            .transaction
-    };
-    PaidUnshieldReport {
-        gas_payer: payer.address.to_string(),
-        recipient: recipient.to_string(),
-        notes: amounts,
-        transaction,
-    }
-    .emit(global.mode())
-}
-
 fn destination(
     given: Option<&str>,
     input: crate::input::Input,
@@ -230,7 +143,7 @@ fn destination(
     };
     match text.as_deref() {
         None | Some("") => Ok(None),
-        Some(value) => Ok(Some(value.parse()?)),
+        Some(value) => Ok(Some(recipient_address(value)?)),
     }
 }
 

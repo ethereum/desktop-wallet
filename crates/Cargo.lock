@@ -2122,6 +2122,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap-verbosity-flag"
+version = "3.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d92b1fab272fe943881b77cc6e920d6543e5b1bfadbd5ed81c7c5a755742394"
+dependencies = [
+ "clap",
+ "tracing-core",
+]
+
+[[package]]
 name = "clap_builder"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2410,9 +2420,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12218662ccac37d9714f2191252553d67585b97df8c839cbe49e0bde278dc865"
+checksum = "38d28fb6aa7dd680b3ffd1a3e64e115c177bdba63c0ae7f9cd48129ff05c4fa0"
 dependencies = [
  "cmov",
 ]
@@ -2700,6 +2710,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "clap-verbosity-flag",
  "edw-core",
  "futures",
  "inventory",
@@ -2721,6 +2732,7 @@ dependencies = [
  "alloy-contract",
  "alloy-dyn-abi",
  "alloy-eips",
+ "alloy-ens",
  "alloy-network",
  "alloy-node-bindings",
  "alloy-primitives",
@@ -2741,6 +2753,8 @@ dependencies = [
  "kohaku-fork-kit",
  "kohaku-tornadocash",
  "kohaku-tornadocash-keychain",
+ "kohaku-tornadocash-paymaster",
+ "kohaku-tornadocash-syncer",
  "kohaku-userop-kit",
  "postcard",
  "rand 0.10.3",
@@ -3917,11 +3931,12 @@ dependencies = [
 [[package]]
 name = "kohaku-fork-kit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
 dependencies = [
  "alloy",
  "anyhow",
  "kohaku-tornadocash",
+ "kohaku-tornadocash-relayer",
  "kohaku-userop-kit",
  "tokio",
  "tracing",
@@ -3930,15 +3945,15 @@ dependencies = [
 [[package]]
 name = "kohaku-merkle-tree"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "kohaku-rpc-provider"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
 dependencies = [
  "alloy",
  "futures",
@@ -3948,38 +3963,29 @@ dependencies = [
 
 [[package]]
 name = "kohaku-tornadocash"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
+version = "0.2.0"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
 dependencies = [
  "alloy",
  "ark-bn254",
  "ark-ff 0.6.0",
- "async-trait",
  "blake-hash",
- "cfg_aliases",
- "flate2",
  "hex",
  "kohaku-merkle-tree",
- "kohaku-rpc-provider",
  "kohaku-tornadocash-circuit",
- "kohaku-userop-kit",
  "num-bigint 0.5.1",
  "rand 0.10.3",
- "reqwest 0.13.5",
  "ruint",
  "serde",
- "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
- "tracing",
  "websnark-rs",
 ]
 
 [[package]]
 name = "kohaku-tornadocash-circuit"
 version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
 dependencies = [
  "brotli",
  "postcard",
@@ -3992,19 +3998,70 @@ dependencies = [
 
 [[package]]
 name = "kohaku-tornadocash-keychain"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
 dependencies = [
  "alloy",
- "cfg_aliases",
  "kohaku-tornadocash",
  "thiserror 2.0.21",
 ]
 
 [[package]]
+name = "kohaku-tornadocash-paymaster"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
+dependencies = [
+ "alloy",
+ "cfg_aliases",
+ "kohaku-tornadocash",
+ "kohaku-userop-kit",
+ "rand 0.10.3",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kohaku-tornadocash-relayer"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
+dependencies = [
+ "alloy",
+ "cfg_aliases",
+ "kohaku-tornadocash",
+ "rand 0.10.3",
+ "reqwest 0.13.5",
+ "ruint",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "kohaku-tornadocash-syncer"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
+dependencies = [
+ "alloy",
+ "async-trait",
+ "cfg_aliases",
+ "flate2",
+ "hex",
+ "kohaku-rpc-provider",
+ "kohaku-tornadocash",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kohaku-userop-kit"
-version = "0.1.0"
-source = "git+https://github.com/ethereum/kohaku-rs.git?rev=9c5f11bf1f8ec90af9390682b8c91a466b7d1184#9c5f11bf1f8ec90af9390682b8c91a466b7d1184"
+version = "0.0.1"
+source = "git+https://github.com/ethereum/kohaku-rs.git?rev=289051fdfd9b6f5d80e74bb4510365c644329f28#289051fdfd9b6f5d80e74bb4510365c644329f28"
 dependencies = [
  "alloy",
  "alloy-sol-types",
@@ -5996,7 +6053,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

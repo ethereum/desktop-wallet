@@ -17,7 +17,9 @@ docs/       # this specification
 ```sh
 Instance              # one unlocked network: its encrypted store, opened with the decryption password
 Network               # a chain by network id; owns its native asset. One instance per network
-RpcConfig             # a stored, named way to reach the network (one http URL today; several URLs, ipc, or light clients later). One is active
+RpcConfig             # a stored, named way to reach the network (one http URL today; several URLs, ipc, or light clients later), plus its log span and call interval. One is active
+BundlerConfig         # ordered bundler URLs for this network; later URLs are fallbacks
+IndexerConfig         # the pool indexer URL and whether it is on
 NetworkEndpoint       # what an RPC config resolves into at runtime; must serve the network id before use
 Profile               # a user-named group of signers, executors and vaults at one index of a recovery phrase
 Signer                # signs for one address: seed-derived, hardware, remote

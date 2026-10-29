@@ -1,12 +1,13 @@
 use std::{
+    ffi::OsString,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
 use edw_core::{
-    database::{Database, file::FileDatabase},
-    instance::DataDir,
+    database::{Database, encrypted::EncryptedDatabaseError, file::FileDatabase},
+    instance::{DataDir, Instance, InstanceError},
     network::NetworkId,
 };
 use zeroize::Zeroizing;
@@ -15,6 +16,8 @@ const TTL: Duration = Duration::from_mins(15);
 
 const RECORD: &[u8] = b"session";
 
+const NO_RUNTIME_DIR: &str = "XDG_RUNTIME_DIR is not set, so no session can be held";
+
 /// The unlocked network and its password, kept between commands for [`TTL`] after last use.
 pub struct Session {
     pub data_dir: PathBuf,
@@ -22,21 +25,33 @@ pub struct Session {
     pub password: Zeroizing<String>,
 }
 
-/// Where the session is kept: a private store under `$XDG_RUNTIME_DIR/edw`. Without a
-/// runtime dir nothing can be kept, so every command finds the wallet locked.
-pub struct SessionFile(Option<FileDatabase>);
+/// The session store under [`runtime_dir`]: `None` without one, or why it cannot be opened.
+pub struct SessionFile(Option<Result<FileDatabase, String>>);
 
 impl SessionFile {
     pub fn runtime() -> Self {
-        Self(
-            std::env::var_os("XDG_RUNTIME_DIR")
-                .and_then(|dir| FileDatabase::open(PathBuf::from(dir).join("edw")).ok()),
-        )
+        let Some(dir) = runtime_dir(std::env::var_os("XDG_RUNTIME_DIR")) else {
+            return Self(None);
+        };
+        Self(Some(FileDatabase::open(&dir).map_err(|error| {
+            format!(
+                "the session store at {} cannot be opened: {error}",
+                dir.display()
+            )
+        })))
+    }
+
+    fn opened(&self) -> Result<Option<&FileDatabase>, anyhow::Error> {
+        match &self.0 {
+            None => Ok(None),
+            Some(Ok(store)) => Ok(Some(store)),
+            Some(Err(reason)) => Err(anyhow::anyhow!("{reason}")),
+        }
     }
 
     /// The live session, renewed for another [`TTL`]. An expired one is removed.
     pub async fn load(&self) -> Option<Session> {
-        let store = self.0.as_ref()?;
+        let store = self.opened().ok()??;
         let raw = store.get(RECORD).await.ok()??;
         let mut parts = std::str::from_utf8(&raw).ok()?.splitn(4, '\n');
         let deadline = UNIX_EPOCH.checked_add(Duration::from_secs(parts.next()?.parse().ok()?))?;
@@ -70,11 +85,34 @@ impl SessionFile {
         None
     }
 
+    /// Opens `session`'s instance. A session whose password no longer opens it is removed, and
+    /// `None` returned, so the wallet counts as locked.
+    pub async fn open(&self, session: &Session) -> Result<Option<Instance>, anyhow::Error> {
+        let data_dir = DataDir::new(&session.data_dir);
+        match Instance::open(&data_dir, session.network, session.password.as_bytes()).await {
+            Ok(instance) => Ok(Some(instance)),
+            Err(InstanceError::Unlock(EncryptedDatabaseError::InvalidPassword)) => {
+                self.clear().await?;
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Fails when there is a session store but its record cannot be read, which [`Self::load`]
+    /// reports as no session.
+    pub async fn check_readable(&self) -> Result<(), anyhow::Error> {
+        if let Some(store) = self.opened()? {
+            store
+                .get(RECORD)
+                .await
+                .map_err(|error| anyhow::anyhow!("the session store cannot be read: {error}"))?;
+        }
+        Ok(())
+    }
+
     pub async fn store(&self, session: &Session) -> Result<(), anyhow::Error> {
-        let store = self
-            .0
-            .as_ref()
-            .context("XDG_RUNTIME_DIR is not set, so no session can be held")?;
+        let store = self.opened()?.context(NO_RUNTIME_DIR)?;
         let deadline = SystemTime::now()
             .checked_add(TTL)
             .and_then(|deadline| deadline.duration_since(UNIX_EPOCH).ok())
@@ -92,13 +130,24 @@ impl SessionFile {
 
     /// Whether there was a session to remove.
     pub async fn clear(&self) -> Result<bool, anyhow::Error> {
-        let Some(store) = &self.0 else {
+        let Some(store) = self.opened()? else {
             return Ok(false);
         };
         let existed = store.get(RECORD).await?.is_some();
         store.delete(RECORD).await?;
         Ok(existed)
     }
+}
+
+/// Whether this system has a place for a session, even one that cannot be opened.
+pub fn can_hold() -> bool {
+    runtime_dir(std::env::var_os("XDG_RUNTIME_DIR")).is_some()
+}
+
+fn runtime_dir(xdg_runtime_dir: Option<OsString>) -> Option<PathBuf> {
+    xdg_runtime_dir
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| PathBuf::from(dir).join("edw"))
 }
 
 #[cfg(test)]
@@ -115,7 +164,10 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        (SessionFile(Some(FileDatabase::open(&dir).unwrap())), dir)
+        (
+            SessionFile(Some(Ok(FileDatabase::open(&dir).unwrap()))),
+            dir,
+        )
     }
 
     fn sample(network: NetworkId) -> Session {
@@ -148,6 +200,65 @@ mod tests {
             .unwrap();
         sessions.store(&sample(NetworkId(1337))).await.unwrap();
         assert_eq!(sessions.load().await.unwrap().network, NetworkId(1337));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn runtime_dir_is_under_xdg_runtime_dir() {
+        assert_eq!(
+            runtime_dir(Some("/run/user/501".into())),
+            Some(PathBuf::from("/run/user/501/edw"))
+        );
+    }
+
+    #[test]
+    fn runtime_dir_is_none_without_xdg_runtime_dir() {
+        assert_eq!(runtime_dir(None), None);
+    }
+
+    #[test]
+    fn runtime_dir_treats_an_empty_variable_as_unset() {
+        assert_eq!(runtime_dir(Some("".into())), None);
+    }
+
+    #[tokio::test]
+    async fn clear_reports_a_store_that_cannot_be_opened() {
+        let sessions = SessionFile(Some(Err("the session store cannot be opened".into())));
+        assert!(sessions.clear().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn open_removes_a_session_whose_password_no_longer_opens_its_instance() {
+        let (sessions, dir) = isolated();
+        let data_dir = DataDir::new(&dir.join("data"));
+        Instance::open_or_create(&data_dir, NetworkId(31_337), b"current")
+            .await
+            .unwrap();
+        let stale = Session {
+            data_dir: data_dir.path().to_path_buf(),
+            network: NetworkId(31_337),
+            password: Zeroizing::new("previous".into()),
+        };
+        sessions.store(&stale).await.unwrap();
+        assert!(sessions.open(&stale).await.unwrap().is_none());
+        assert!(sessions.load().await.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn check_readable_reports_a_record_that_cannot_be_read() {
+        let (sessions, dir) = isolated();
+        sessions.store(&sample(NetworkId(1))).await.unwrap();
+        let record = std::fs::read_dir(&dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::remove_file(&record).unwrap();
+        std::fs::create_dir(&record).unwrap();
+
+        assert!(sessions.check_readable().await.is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 

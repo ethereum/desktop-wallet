@@ -1,10 +1,18 @@
-use alloy_primitives::{
-    U256,
-    utils::{format_units, parse_units},
-};
-use kohaku_tornadocash::{Asset, Pool, PoolPackingError, PoolSelection, PoolSet};
+use alloy_primitives::{U256, utils::format_units};
+use kohaku_tornadocash::{Asset, Pool};
 
-use crate::vault::tornadocash::TornadoNote;
+use crate::{
+    asset::{NATIVE_DECIMALS, ParseAmountError, parse_amount},
+    vault::tornadocash::TornadoNote,
+};
+
+/// Which known Tornado pools a profile may use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PoolSelection {
+    Classic,
+    #[default]
+    IncludeExtended,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AmountError {
@@ -14,23 +22,26 @@ pub enum AmountError {
     NoNativePools { chain_id: u64 },
     #[error("amount {amount} is not a sum of the native pool denominations on chain {chain_id}")]
     NotADenominationSum { amount: U256, chain_id: u64 },
+    #[error(
+        "shield would create {count} notes; a single shield supports at most 5 notes. Choose larger denominations or split it into multiple shields"
+    )]
+    TooManyNotes { count: U256 },
+    #[error("{amount} ETH-wei is not an enabled pool denomination on chain {chain_id}")]
+    UnsupportedDenomination { amount: U256, chain_id: u64 },
     #[error("held notes cannot make {amount} wei exactly")]
     CannotMake { amount: U256 },
     #[error("held notes cannot cover {amount} wei")]
     CannotCover { amount: U256 },
     #[error("invalid ETH amount `{0}`")]
     Parse(String),
+    #[error(transparent)]
+    Amount(#[from] ParseAmountError),
 }
 
-impl From<PoolPackingError> for AmountError {
-    fn from(error: PoolPackingError) -> Self {
-        match error {
-            PoolPackingError::Zero => Self::Zero,
-            PoolPackingError::NoNativePools { chain_id } => Self::NoNativePools { chain_id },
-            PoolPackingError::NotADenominationSum { amount, chain_id } => {
-                Self::NotADenominationSum { amount, chain_id }
-            }
-        }
+impl PoolSelection {
+    #[must_use]
+    pub fn includes(self, pool: &Pool) -> bool {
+        self == Self::IncludeExtended || pool.canonical
     }
 }
 
@@ -50,10 +61,71 @@ pub fn deposit_pools_with_selection(
     chain_id: u64,
     selection: PoolSelection,
 ) -> Result<Vec<Pool>, AmountError> {
-    PoolSet::new(chain_id)
-        .with_selection(selection)
-        .deposit_pools(amount)
-        .map_err(Into::into)
+    if amount.is_zero() {
+        return Err(AmountError::Zero);
+    }
+    let pools = native_pools(chain_id, selection);
+    if pools.is_empty() {
+        return Err(AmountError::NoNativePools { chain_id });
+    }
+    let mut remaining = amount;
+    let mut note_count = U256::ZERO;
+    for pool in &pools {
+        let denomination = U256::from(pool.amount_wei);
+        let count = remaining / denomination;
+        note_count += count;
+        remaining -= denomination * count;
+    }
+    if !remaining.is_zero() {
+        return Err(AmountError::NotADenominationSum { amount, chain_id });
+    }
+    if note_count > U256::from(5) {
+        return Err(AmountError::TooManyNotes { count: note_count });
+    }
+    remaining = amount;
+    let mut chosen = Vec::new();
+    for pool in &pools {
+        let denomination = U256::from(pool.amount_wei);
+        let count = u64_from(remaining / denomination);
+        for _ in 0..count {
+            chosen.push(pool.clone());
+        }
+        remaining -= denomination * U256::from(count);
+    }
+    Ok(chosen)
+}
+
+/// Uses an explicit ordered list of pool denominations for a shield.
+pub fn deposit_pools_for_denominations(
+    denominations: &[U256],
+    chain_id: u64,
+    selection: PoolSelection,
+) -> Result<Vec<Pool>, AmountError> {
+    if denominations.is_empty() {
+        return Err(AmountError::Zero);
+    }
+    if denominations.len() > 5 {
+        return Err(AmountError::TooManyNotes {
+            count: U256::from(denominations.len()),
+        });
+    }
+    let available = native_pools(chain_id, selection);
+    if available.is_empty() {
+        return Err(AmountError::NoNativePools { chain_id });
+    }
+    denominations
+        .iter()
+        .map(|amount| {
+            available
+                .iter()
+                .find(|pool| U256::from(pool.amount_wei) == *amount)
+                .cloned()
+                .ok_or(AmountError::UnsupportedDenomination {
+                    amount: *amount,
+                    chain_id,
+                })
+        })
+        .collect()
 }
 
 /// Notes whose denominations sum to `amount`, largest first.
@@ -92,9 +164,7 @@ pub fn cover_notes(amount: U256, notes: &[TornadoNote]) -> Result<Vec<TornadoNot
 /// # Errors
 /// Returns an error when `amount` is not a non-negative decimal with at most 18 fractional digits.
 pub fn parse_eth(amount: &str) -> Result<U256, AmountError> {
-    let parsed =
-        parse_units(amount.trim(), 18).map_err(|_| AmountError::Parse(amount.to_string()))?;
-    Ok(From::from(parsed))
+    Ok(parse_amount(amount, NATIVE_DECIMALS)?)
 }
 
 /// Parses an integer wei amount.
@@ -124,7 +194,6 @@ pub fn format_eth(amount: U256) -> String {
     }
 }
 
-#[cfg(test)]
 fn native_pools(chain_id: u64, selection: PoolSelection) -> Vec<Pool> {
     let mut pools: Vec<Pool> = Pool::POOLS
         .iter()
@@ -243,9 +312,48 @@ mod tests {
                 pools.iter().map(Pool::amount).collect::<Vec<_>>(),
                 ["30", "3", "0.3", "0.03", "0.01"]
             );
-            assert!(pools.iter().all(Pool::is_extended));
+            assert!(pools.iter().all(|pool| !pool.canonical));
             assert!(deposit_pools(amount + U256::from(1), chain).is_err());
         }
+    }
+
+    #[test]
+    fn shield_limit_accepts_five_and_rejects_six_notes() {
+        for chain in [1, 11_155_111] {
+            let five =
+                deposit_pools(parse_eth("0.27").expect("amount"), chain).expect("five notes");
+            assert_eq!(five.len(), 5);
+            assert!(matches!(
+                deposit_pools(parse_eth("0.28").expect("amount"), chain),
+                Err(AmountError::TooManyNotes { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn explicit_denominations_respect_profile_policy_and_limit() {
+        let amounts = [
+            parse_eth("0.03").expect("amount"),
+            parse_eth("0.01").expect("amount"),
+        ];
+        let pools = deposit_pools_for_denominations(&amounts, 1, PoolSelection::IncludeExtended)
+            .expect("extended pools");
+        assert_eq!(
+            pools.iter().map(Pool::amount).collect::<Vec<_>>(),
+            ["0.03", "0.01"]
+        );
+        assert!(matches!(
+            deposit_pools_for_denominations(&amounts, 1, PoolSelection::Classic),
+            Err(AmountError::UnsupportedDenomination { .. })
+        ));
+        assert!(matches!(
+            deposit_pools_for_denominations(
+                &[U256::from(10_u128.pow(16)); 6],
+                1,
+                PoolSelection::IncludeExtended
+            ),
+            Err(AmountError::TooManyNotes { .. })
+        ));
     }
 
     #[test]
@@ -271,7 +379,7 @@ mod tests {
                         chain,
                         selection,
                     );
-                    if minimum[amount] == usize::MAX {
+                    if minimum[amount] == usize::MAX || minimum[amount] > 5 {
                         assert!(packed.is_err());
                     } else {
                         assert_eq!(packed.expect("pack").len(), minimum[amount]);

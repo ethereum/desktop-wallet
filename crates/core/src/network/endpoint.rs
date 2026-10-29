@@ -64,8 +64,16 @@ pub trait NetworkEndpoint: Send + Sync {
             .with_chain_id(network_id)
             .with_max_fee_per_gas(fees.max_fee_per_gas)
             .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas);
-        let gas_limit = self.estimate_gas(tx.clone()).await?;
+        let gas_limit = match self.estimate_gas(tx.clone()).await {
+            Ok(gas_limit) => gas_limit,
+            Err(refused) => unpriced_gas(self, tx.clone(), from, refused).await?,
+        };
         Ok(tx.with_gas_limit(gas_limit))
+    }
+
+    /// How many blocks one `eth_getLogs` request from this endpoint may cover.
+    fn event_block_range(&self) -> NonZeroU64 {
+        super::DEFAULT_EVENT_BLOCK_RANGE
     }
 
     /// Reads `filter` over `blocks` in spans of at most `span`, in ascending block order.
@@ -150,12 +158,36 @@ pub enum NetworkEndpointError {
     /// The inner error type is not part of this API.
     #[error(transparent)]
     Backend(Box<dyn std::error::Error + Send + Sync>),
-    #[error("RPC URL `{0}` must be an http or https URL")]
+    #[error("URL `{0}` must be an http or https URL")]
     InvalidUrl(String),
     #[error(
         "endpoint serves network id {found}, but the network is configured as network id {expected}"
     )]
     NetworkMismatch { expected: u64, found: u64 },
+}
+
+// A node may refuse to estimate a priced transaction for a sender short of gas money. Estimated
+// without fees, the caller can still report that shortfall; when the sender can pay,
+// `refused` was about something else and is returned.
+async fn unpriced_gas<E: NetworkEndpoint + ?Sized>(
+    endpoint: &E,
+    tx: TransactionRequest,
+    from: Address,
+    refused: NetworkEndpointError,
+) -> Result<u64, NetworkEndpointError> {
+    let max_fee_per_gas = tx.max_fee_per_gas.unwrap_or_default();
+    let value = tx.value.unwrap_or_default();
+    let mut unpriced = tx;
+    unpriced.max_fee_per_gas = None;
+    unpriced.max_priority_fee_per_gas = None;
+    let Ok(gas_limit) = endpoint.estimate_gas(unpriced).await else {
+        return Err(refused);
+    };
+    let cost = value + U256::from(gas_limit) * U256::from(max_fee_per_gas);
+    if endpoint.balance(from).await? >= cost {
+        return Err(refused);
+    }
+    Ok(gas_limit)
 }
 
 #[cfg(test)]

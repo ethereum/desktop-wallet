@@ -1,4 +1,4 @@
-use std::{fmt, num::NonZeroU64};
+use std::{fmt, num::NonZeroU64, time::Duration};
 
 use clap::{Args, Subcommand};
 use edw_core::network::{DEFAULT_EVENT_BLOCK_RANGE, RpcConfig, RpcConfigKind};
@@ -25,9 +25,12 @@ pub struct RpcConfigAddArgs {
     /// http or https JSON-RPC URL.
     #[arg(long)]
     url: String,
-    /// The widest block span one log request may ask this RPC for.
+    /// How many blocks one `eth_getLogs` request may cover.
     #[arg(long, default_value_t = DEFAULT_EVENT_BLOCK_RANGE)]
-    event_block_range: NonZeroU64,
+    blockrange: NonZeroU64,
+    /// How long to wait after one call to this RPC before the next. `0ms` waits nothing.
+    #[arg(long, default_value = "0ms", value_parser = parse_interval)]
+    interval: Duration,
     /// Make this the active RPC config.
     #[arg(long)]
     r#use: bool,
@@ -43,6 +46,8 @@ struct RpcConfigSummary {
     name: String,
     kind: &'static str,
     url: String,
+    block_range: u64,
+    interval_ms: u64,
     active: bool,
 }
 
@@ -70,6 +75,8 @@ impl RpcConfigSummary {
             name: config.name,
             kind,
             url,
+            block_range: config.event_block_range.get(),
+            interval_ms: config.call_interval_ms,
             active,
         }
     }
@@ -77,13 +84,21 @@ impl RpcConfigSummary {
 
 impl fmt::Display for RpcConfigSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {} {}", self.name, self.kind, self.url)
+        write!(
+            f,
+            "{} {} {} blockrange {} interval {}",
+            self.name,
+            self.kind,
+            self.url,
+            self.block_range,
+            interval_label(self.interval_ms)
+        )
     }
 }
 
 impl Report for RpcConfigListReport {
     const KIND: &'static str = "edw/network-rpc-config-list";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for RpcConfigListReport {
@@ -108,7 +123,7 @@ impl fmt::Display for RpcConfigListReport {
 
 impl Report for RpcConfigAddReport {
     const KIND: &'static str = "edw/network-rpc-config-add";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl fmt::Display for RpcConfigAddReport {
@@ -158,7 +173,12 @@ impl RpcConfigListArgs {
 impl RpcConfigAddArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
-        let config = RpcConfig::http(self.name.clone(), &self.url, self.event_block_range)?;
+        let config = RpcConfig::with_call_interval(
+            self.name.clone(),
+            &self.url,
+            self.blockrange,
+            self.interval,
+        )?;
         instance.add_rpc_config(config.clone()).await?;
         if self.r#use {
             instance.use_rpc_config(&self.name).await?;
@@ -179,5 +199,34 @@ impl RpcConfigUseArgs {
             name: self.name.clone(),
         }
         .emit(global.mode())
+    }
+}
+
+fn parse_interval(raw: &str) -> Result<Duration, String> {
+    let raw = raw.trim();
+    if let Some(millis) = raw.strip_suffix("ms") {
+        let millis = millis
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| format!("invalid interval `{raw}`"))?;
+        return Ok(Duration::from_millis(millis));
+    }
+    if let Some(seconds) = raw.strip_suffix('s') {
+        let seconds = seconds
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| format!("invalid interval `{raw}`"))?;
+        return Ok(Duration::from_secs(seconds));
+    }
+    Err(format!(
+        "invalid interval `{raw}`; use a duration such as 0ms, 500ms, or 1s"
+    ))
+}
+
+pub fn interval_label(millis: u64) -> String {
+    if millis > 0 && millis.is_multiple_of(1000) {
+        format!("{}s", millis / 1000)
+    } else {
+        format!("{millis}ms")
     }
 }

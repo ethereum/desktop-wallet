@@ -23,7 +23,13 @@ impl Instance {
         InstanceError,
     > {
         use crate::vault::tornadocash::{PoolSelection, TornadoVault};
-        let vault = TornadoVault::open(key, self.tornado_database(profile), endpoint).await?;
+        let indexer = self.indexer_config().await?;
+        let vault = TornadoVault::open(
+            key,
+            self.tornado_database(profile),
+            endpoint,
+            indexer.effective_url(),
+        )?;
         if self.profile_use_extended_pools(profile).await? {
             Ok(vault)
         } else {

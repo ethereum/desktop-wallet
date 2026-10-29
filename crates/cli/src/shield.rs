@@ -3,17 +3,20 @@ use std::fmt;
 use alloy_primitives::{Address, U256};
 use clap::{ArgGroup, Args};
 use edw_core::{
-    broadcast::submit_user_operation, call::Call, network::NetworkEndpoint,
-    vault::tornadocash::format_eth,
+    broadcast::submit_user_operation,
+    bundler::Url,
+    call::Call,
+    network::NetworkEndpoint,
+    vault::tornadocash::{format_eth, parse_eth},
 };
 use serde::Serialize;
 
 use crate::{
-    GlobalArgs,
+    GlobalArgs, failure,
     report::Report,
     spend::{
-        Account, account_at, choose_profile, confirm, declined, mnemonic, open_vault, send_one,
-        tornado_amount,
+        Account, Consent, account_at, choose_profile, confirm, declined, mnemonic, open_vault,
+        send_one, tornado_amount,
     },
 };
 
@@ -26,11 +29,16 @@ pub struct ShieldArgs {
     /// Wei to shield. Must be a sum of this chain's Tornado denominations.
     #[arg(long)]
     amount_raw: Option<String>,
+    /// Exact pool sizes in ETH, separated by commas, for example `1,0.1,0.1`.
+    #[arg(long)]
+    denominations: Option<String>,
     /// Standard-address index that pays. Defaults to 0.
     #[arg(long)]
     from: Option<u32>,
     #[arg(long)]
     profile: Option<String>,
+    #[command(flatten)]
+    consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -67,20 +75,36 @@ impl fmt::Display for ShieldReport {
 }
 
 pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::Error> {
-    let instance = global.open().await?;
     let input = global.input();
+    args.consent.ensure_possible(input)?;
+    let instance = global.open().await?;
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
-    let amount = tornado_amount(
-        args.amount_formatted.as_deref(),
-        args.amount_raw.as_deref(),
-        input,
-    )?;
+    let requested_denominations = args
+        .denominations
+        .as_deref()
+        .map(parse_denominations)
+        .transpose()?;
+    let requested_amount = if requested_denominations.is_none()
+        || args.amount_formatted.is_some()
+        || args.amount_raw.is_some()
+    {
+        Some(tornado_amount(
+            args.amount_formatted.as_deref(),
+            args.amount_raw.as_deref(),
+            input,
+        )?)
+    } else {
+        None
+    };
     let from = match args.from {
         Some(index) => index,
         None => input
             .line("Pay from address index [0]: ")?
             .filter(|line| !line.is_empty())
-            .map(|line| line.parse::<u32>())
+            .map(|line| {
+                line.parse::<u32>()
+                    .map_err(|_| failure::usage(format!("`{line}` is not an address index")))
+            })
             .transpose()?
             .unwrap_or(0),
     };
@@ -88,23 +112,29 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     let payer = account_at(&phrase, profile.profile_index, from)?;
     let endpoint = instance.rpc().await?;
     let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
-    let pools = vault.deposit_pools(amount).await?;
+    let pools = if let Some(denominations) = &requested_denominations {
+        vault.deposit_pools_for_denominations(denominations).await?
+    } else {
+        vault
+            .deposit_pools(
+                requested_amount.ok_or_else(|| anyhow::anyhow!("shield amount is required"))?,
+            )
+            .await?
+    };
+    let amount: U256 = pools.iter().map(|pool| U256::from(pool.amount_wei)).sum();
+    verify_requested_amount(amount, requested_amount)?;
     let notes: Vec<String> = pools
         .iter()
         .map(|pool| {
             format!(
                 "{} ETH{}",
                 format_eth(U256::from(pool.amount_wei)),
-                if pool.is_extended() {
-                    " (extended)"
-                } else {
-                    ""
-                }
+                if pool.canonical { "" } else { " (extended)" }
             )
         })
         .collect();
     let summary = confirmation(amount, &notes, from, payer.address, pools.len() > 1);
-    if !confirm(input, &summary)? {
+    if !confirm(input, &args.consent, &summary)? {
         declined();
         return Ok(());
     }
@@ -122,8 +152,13 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     for pool in &pools {
         calls.extend(vault.deposit(pool).await?);
     }
+    let bundler_urls = if calls.len() > 1 {
+        instance.bundler_urls().await?
+    } else {
+        Vec::new()
+    };
     let (transactions, user_operation, bundler) =
-        broadcast(endpoint.as_ref(), &payer, &notes, &calls).await?;
+        broadcast(endpoint.as_ref(), &payer, &notes, &calls, &bundler_urls).await?;
     ShieldReport {
         from: payer.address.to_string(),
         notes,
@@ -146,13 +181,46 @@ fn confirmation(
         format_eth(amount),
         notes.join(" + ")
     );
+    let guidance = if notes.iter().any(|note| note.contains("(extended)")) {
+        " Extended pools are newer and may have smaller anonymity sets. Use --denominations to choose exact pool sizes."
+    } else {
+        " Use --denominations to choose exact pool sizes."
+    };
     if batched {
         format!(
-            "{movement}\nOne user operation from that account. It installs the 7702 delegation when the account does not already have it. Gas is paid by that same account."
+            "{movement}{guidance}\nOne user operation from that account. It installs the 7702 delegation when the account does not already have it. Gas is paid by that same account."
         )
     } else {
-        format!("{movement}\nGas is paid by that same account.")
+        format!("{movement}{guidance}\nGas is paid by that same account.")
     }
+}
+
+fn parse_denominations(value: &str) -> Result<Vec<U256>, anyhow::Error> {
+    if value.is_empty() {
+        anyhow::bail!("--denominations needs one to five comma-separated ETH pool sizes");
+    }
+    value
+        .split(',')
+        .map(|part| {
+            if part.trim().is_empty() {
+                anyhow::bail!("--denominations contains an empty pool size");
+            }
+            Ok(parse_eth(part.trim())?)
+        })
+        .collect()
+}
+
+fn verify_requested_amount(actual: U256, requested: Option<U256>) -> Result<(), anyhow::Error> {
+    if let Some(requested) = requested
+        && actual != requested
+    {
+        anyhow::bail!(
+            "--denominations sum to {} ETH, but the requested shield amount is {} ETH",
+            format_eth(actual),
+            format_eth(requested)
+        );
+    }
+    Ok(())
 }
 
 async fn broadcast(
@@ -160,12 +228,13 @@ async fn broadcast(
     payer: &Account,
     notes: &[String],
     calls: &[Call],
+    bundler_urls: &[Url],
 ) -> Result<(Vec<String>, Option<String>, Option<String>), anyhow::Error> {
     if calls.is_empty() {
         anyhow::bail!("shield produced no calls");
     }
     if calls.len() > 1 {
-        return match submit_user_operation(endpoint, &payer.key, calls).await {
+        return match submit_user_operation(endpoint, &payer.key, calls, bundler_urls).await {
             Ok(submitted) => {
                 eprintln!(
                     "Submitted {} as one user operation {}",
@@ -203,4 +272,26 @@ async fn broadcast(
         }
     }
     Ok((transactions, None, None))
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn explicit_denominations_parse_and_check_total() {
+        let parsed = parse_denominations("1, 0.1,0.1").expect("denominations");
+        let total: U256 = parsed.iter().copied().sum();
+        assert_eq!(format_eth(total), "1.2");
+        assert!(verify_requested_amount(total, Some(parse_eth("1.2").expect("amount"))).is_ok());
+        assert!(verify_requested_amount(total, Some(parse_eth("1.1").expect("amount"))).is_err());
+        assert!(parse_denominations("1,,0.1").is_err());
+        assert!(
+            crate::Cli::try_parse_from(["edw", "shield", "--denominations", "1,0.1", "--yes"])
+                .is_ok()
+        );
+    }
 }

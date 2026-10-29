@@ -5,12 +5,11 @@ use kohaku_userop_kit::{
     signed_user_operation::SignedUserOperation,
     user_operation::{UserOperationGasEstimate, UserOperationHash, UserOperationReceipt},
 };
-use reqwest::Url;
+pub use reqwest::Url;
 
 use crate::network::http::outbound_http;
 
 const BUNDLER_TIMEOUT: Duration = Duration::from_mins(3);
-const PIMLICO_RPC: &str = "https://public.pimlico.io/v2";
 
 /// Bundlers tried in order. A receipt stays on the one that accepted the send.
 pub struct BundlerList {
@@ -26,12 +25,10 @@ struct Endpoint {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BundlerListError {
-    #[error("EDW_BUNDLER_URLS is empty")]
+    #[error("no bundler URL")]
     Empty,
     #[error("invalid bundler url `{url}`: {message}")]
     Url { url: String, message: String },
-    #[error("no bundler for chain {chain_id}; set EDW_BUNDLER_URLS")]
-    Unset { chain_id: u64 },
     #[error("bundler http client: {0}")]
     Client(String),
 }
@@ -163,45 +160,6 @@ impl Bundler for BundlerList {
         };
         endpoint.bundler.wait_for_receipt(hash).await
     }
-}
-
-/// URLs for `chain_id`. `EDW_BUNDLER_URLS` replaces the Pimlico default.
-///
-/// # Errors
-/// Returns an error when the override is empty or not a URL, or when the chain has no default.
-pub fn bundler_urls(chain_id: u64) -> Result<Vec<Url>, BundlerListError> {
-    if let Ok(raw) = std::env::var("EDW_BUNDLER_URLS") {
-        return parse_urls(&raw);
-    }
-    match chain_id {
-        1 | 11_155_111 => {
-            let url = format!("{PIMLICO_RPC}/{chain_id}/rpc");
-            Ok(vec![parse_url(&url)?])
-        }
-        _ => Err(BundlerListError::Unset { chain_id }),
-    }
-}
-
-fn parse_urls(raw: &str) -> Result<Vec<Url>, BundlerListError> {
-    let mut urls = Vec::new();
-    for part in raw.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        urls.push(parse_url(part)?);
-    }
-    if urls.is_empty() {
-        return Err(BundlerListError::Empty);
-    }
-    Ok(urls)
-}
-
-fn parse_url(url: &str) -> Result<Url, BundlerListError> {
-    Url::parse(url).map_err(|error| BundlerListError::Url {
-        url: url.to_string(),
-        message: error.to_string(),
-    })
 }
 
 fn already_known(error: &BundlerError) -> bool {

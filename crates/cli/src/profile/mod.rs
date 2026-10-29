@@ -10,7 +10,9 @@ use edw_core::{instance::Instance, mnemonic::scan::EoaScan, profile::ProfileReco
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use crate::{GlobalArgs, input::Input, report::Report, secret_file, session::SessionFile, unlock};
+use crate::{
+    GlobalArgs, failure, input::Input, report::Report, secret_file, session::SessionFile, unlock,
+};
 
 const PHRASE_MAX_BYTES: u64 = 4096;
 
@@ -291,7 +293,9 @@ impl NewArgs {
             choose_phrase(&instance.profiles().await?, input)?
         };
         if self.long_phrase && shared.is_some() {
-            anyhow::bail!("--long-phrase only applies to a new recovery phrase");
+            return Err(failure::usage(
+                "--long-phrase only applies to a new recovery phrase",
+            ));
         }
         let name = prompt_profile_name(self.name.clone(), input)?;
 
@@ -389,9 +393,9 @@ impl ImportArgs {
             return secret_file::read(path, "recovery phrase", PHRASE_MAX_BYTES);
         }
         if input != Input::Piped {
-            return input
-                .secret("Recovery phrase: ")?
-                .context("no recovery phrase; pass --phrase-file or pipe it on stdin");
+            return input.secret("Recovery phrase: ")?.ok_or_else(|| {
+                failure::usage("no recovery phrase; pass --phrase-file or pipe it on stdin")
+            });
         }
 
         let mut phrase = Zeroizing::new(String::new());
@@ -401,9 +405,9 @@ impl ImportArgs {
             .read_to_string(&mut phrase)
             .context("error reading stdin")?;
         if phrase.len() as u64 > PHRASE_MAX_BYTES {
-            anyhow::bail!(
+            return Err(failure::usage(format!(
                 "the recovery phrase on stdin is too large (maximum {PHRASE_MAX_BYTES} bytes)"
-            );
+            )));
         }
         Ok(phrase)
     }
@@ -455,10 +459,14 @@ impl RenameArgs {
 impl RevealPhraseArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         if global.non_interactive {
-            anyhow::bail!("profile reveal-phrase never prints the phrase with --non-interactive");
+            return Err(failure::usage(
+                "profile reveal-phrase never prints the phrase with --non-interactive",
+            ));
         }
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-            anyhow::bail!("profile reveal-phrase only runs at a terminal");
+            return Err(failure::usage(
+                "profile reveal-phrase only runs at a terminal",
+            ));
         }
 
         let input = Input::Terminal;
@@ -470,7 +478,8 @@ impl RevealPhraseArgs {
         // An unlocked session alone must not be enough to read the phrase.
         let password = input
             .secret("Decryption password: ")?
-            .context("no decryption password")?;
+            .filter(|password| !password.is_empty())
+            .ok_or_else(|| failure::locked("no decryption password"))?;
         let instance = Instance::open(&data_dir, network, password.as_bytes()).await?;
 
         let mut profiles = instance.profiles().await?;
@@ -602,7 +611,7 @@ fn choose_phrase(profiles: &[ProfileRecord], input: Input) -> Result<Option<u32>
         .collect();
     let choice = input
         .choose("Create the profile on:", &labels)?
-        .context("pass --new-phrase or --phrase-of <profile>")?;
+        .ok_or_else(|| failure::usage("pass --new-phrase or --phrase-of <profile>"))?;
     Ok(choice.checked_sub(1).map(|index| phrases[index].0))
 }
 
@@ -617,9 +626,9 @@ pub fn choose_profile(
         [only] => Ok(only.clone()),
         several => {
             let labels: Vec<String> = several.iter().map(ProfileRecord::display_name).collect();
-            let choice = input
-                .choose("Select a profile:", &labels)?
-                .context("name the profile as `mnemonic/profile` or by name")?;
+            let choice = input.choose("Select a profile:", &labels)?.ok_or_else(|| {
+                failure::usage("name the profile as `mnemonic/profile` or by name")
+            })?;
             Ok(several[choice].clone())
         }
     }

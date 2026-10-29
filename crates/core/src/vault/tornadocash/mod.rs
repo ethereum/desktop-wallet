@@ -5,19 +5,20 @@ use alloy_signer::{Signer, k256::ecdsa::SigningKey};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
 pub use amount::{
-    AmountError, cover_notes, deposit_pools, deposit_pools_with_selection, exact_notes, format_eth,
-    parse_eth, parse_wei,
+    AmountError, PoolSelection, cover_notes, deposit_pools, deposit_pools_for_denominations,
+    deposit_pools_with_selection, exact_notes, format_eth, parse_eth, parse_wei,
 };
-pub use kohaku_tornadocash::PoolSelection;
 use kohaku_tornadocash::{
-    Asset, Deposit, Note, Pool, PoolSet, Withdrawal, WithdrawalError,
+    Asset, Deposit, Note, Pool, Withdrawal, WithdrawalError,
+    event::SyncEvent,
     merkle_tree::{MerkleProof, MerkleTree, MerkleTreeExt},
-    syncer::{DynSyncer, SyncEvent, Syncer},
 };
 use kohaku_tornadocash_keychain::{Keychain, KeychainError, recover};
+use kohaku_tornadocash_syncer::{DynSyncer, Syncer};
 use tokio::sync::Mutex;
 pub use userop::{
-    PaymasterWithdrawal, PaymasterWithdrawalRequest, UserOpError, submit_paymaster_withdrawal,
+    IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest, QuotedWithdrawal,
+    UserOpError, WithdrawalCost, quote_paymaster_withdrawal,
 };
 
 use crate::{
@@ -92,7 +93,7 @@ pub enum TornadoVaultError {
     #[error("provider error: {0}")]
     Provider(#[from] crate::network::NetworkEndpointError),
     #[error("syncer error: {0}")]
-    Syncer(#[from] kohaku_tornadocash::syncer::SyncerError),
+    Syncer(#[from] kohaku_tornadocash_syncer::SyncerError),
     #[error("keychain error: {0}")]
     Keychain(#[from] KeychainError),
     #[error("withdrawal error: {0}")]
@@ -110,17 +111,18 @@ pub enum TornadoVaultError {
 }
 
 impl TornadoVault<PrivateKeySigner> {
-    /// A vault whose notes come from `signing_key` and whose pools sync from Saga, then the endpoint.
+    /// A vault whose notes come from `signing_key`. Pools sync from `indexer_url` when it is set,
+    /// then the endpoint.
     ///
     /// # Errors
-    /// Returns an error if the chain id or the Saga client cannot be obtained.
-    pub async fn open(
+    /// Returns an error if the Saga client cannot be obtained.
+    pub fn open(
         signing_key: SigningKey,
         db: Arc<dyn Database>,
         endpoint: Arc<dyn NetworkEndpoint>,
+        indexer_url: Option<&str>,
     ) -> Result<Self, TornadoVaultError> {
-        let chain_id = endpoint.network_id().await?;
-        let syncer = ChainedSyncer::tornado(chain_id, endpoint.clone())?;
+        let syncer = ChainedSyncer::tornado(endpoint.clone(), indexer_url)?;
         Ok(Self::with_syncer(
             PrivateKeySigner::from_signing_key(signing_key),
             db,
@@ -162,17 +164,25 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         self
     }
 
-    async fn pool_set(&self) -> Result<PoolSet, TornadoVaultError> {
-        Ok(PoolSet::new(self.provider.network_id().await?).with_selection(self.selection))
-    }
-
     /// Plans native ETH deposits using this vault's configured pool set.
     pub async fn deposit_pools(&self, amount: U256) -> Result<Vec<Pool>, TornadoVaultError> {
-        self.pool_set()
-            .await?
-            .deposit_pools(amount)
-            .map_err(AmountError::from)
-            .map_err(Into::into)
+        Ok(deposit_pools_with_selection(
+            amount,
+            self.provider.network_id().await?,
+            self.selection,
+        )?)
+    }
+
+    /// Plans exactly the requested native ETH denominations in their supplied order.
+    pub async fn deposit_pools_for_denominations(
+        &self,
+        denominations: &[U256],
+    ) -> Result<Vec<Pool>, TornadoVaultError> {
+        Ok(deposit_pools_for_denominations(
+            denominations,
+            self.provider.network_id().await?,
+            self.selection,
+        )?)
     }
 
     /// Selects the fewest eligible held notes summing to `amount`.
@@ -248,7 +258,12 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// Nonces are shared across pools. Scanning stops after 20 consecutive nonces with no
     /// deposit in any pool. Returns how many unspent notes were stored.
     pub async fn recover_chain(&self) -> Result<usize, TornadoVaultError> {
-        let pools: Vec<Pool> = self.pool_set().await?.pools().cloned().collect();
+        let chain_id = self.provider.network_id().await?;
+        let pools: Vec<Pool> = Pool::POOLS
+            .iter()
+            .filter(|pool| pool.chain_id == chain_id && self.selection.includes(pool))
+            .cloned()
+            .collect();
         self.recover(&pools).await?;
         let notes = self.pool_notes(&pools).await?;
         Ok(notes.iter().filter(|note| !note.spent).count())
@@ -299,7 +314,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         };
         let (withdrawal, proof) = self.withdrawal_inputs(note, *recipient).await?;
         let proven = withdrawal.prove(&proof, &mut rand::rng())?;
-        let call = proven.data();
+        let call = proven.call();
         Ok(Call::new(call.target, call.input, call.value))
     }
 
@@ -353,11 +368,12 @@ impl<S: Signer + Send + Sync> Vault for TornadoVault<S> {
 impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// The current network's pools for `asset`, largest denomination first.
     async fn pools(&self, asset: &AssetId) -> Result<Vec<Pool>, TornadoVaultError> {
-        let mut pools: Vec<Pool> = self
-            .pool_set()
-            .await?
-            .pools()
-            .filter(|pool| is_eq(pool, asset))
+        let chain_id = self.provider.network_id().await?;
+        let mut pools: Vec<Pool> = Pool::POOLS
+            .iter()
+            .filter(|pool| {
+                pool.chain_id == chain_id && self.selection.includes(pool) && is_eq(pool, asset)
+            })
             .cloned()
             .collect();
 
@@ -406,12 +422,12 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         pool_db.put_snapshot(&snapshot).await?;
 
         if let Some(tree) = self.trees_cache.lock().await.get_mut(pool) {
-            tree.splice_events(&snapshot.events)
+            tree.splice_events(&snapshot)
                 .map_err(|e| TornadoVaultError::MerkleTree(e.to_string()))?;
         }
 
         let mut notes = pool_db.notes().await?;
-        apply_events(&mut notes, &snapshot.events);
+        apply_events(&mut notes, snapshot.events());
         pool_db.put_notes(&notes).await?;
 
         //? Last, so a sync interrupted before here is redone from the same block. Every step
@@ -452,8 +468,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         });
         pool_db.put_notes(&notes).await?;
 
-        let deposit = Deposit::new(pool, note);
-        let call = deposit.deposit_data();
+        let call = Deposit::new(pool, note).call();
         Ok(Call::new(call.target, call.input, call.value))
     }
 
@@ -476,7 +491,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     async fn build_tree(&self, pool: &Pool) -> Result<MerkleTree, TornadoVaultError> {
         let mut tree = MerkleTree::new();
         for snapshot in self.pool_db(pool).snapshots().await? {
-            tree.splice_events(&snapshot.events)
+            tree.splice_events(&snapshot)
                 .map_err(|e| TornadoVaultError::MerkleTree(e.to_string()))?;
         }
         Ok(tree)
@@ -662,7 +677,8 @@ mod tests {
     async fn configured_note_selection_excludes_extended_without_deleting_stored_notes() {
         use alloy_primitives::U64;
         use alloy_transport::mock::Asserter;
-        use kohaku_tornadocash::syncer::{Snapshot, SyncerError};
+        use kohaku_tornadocash::event::Snapshot;
+        use kohaku_tornadocash_syncer::SyncerError;
         struct EmptySyncer;
         #[async_trait::async_trait]
         impl Syncer for EmptySyncer {
@@ -672,7 +688,10 @@ mod tests {
                 from: u64,
                 to: u64,
             ) -> Result<Snapshot, SyncerError> {
-                Ok(Snapshot::new(pool.clone(), from..to, Vec::new()))
+                Ok(
+                    Snapshot::new(pool.clone(), from..to, Vec::new())
+                        .expect("valid empty snapshot"),
+                )
             }
         }
         let mock = Asserter::new();
