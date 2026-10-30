@@ -144,7 +144,7 @@ pub fn exact_notes(amount: U256, notes: &[TornadoNote]) -> Result<Vec<TornadoNot
     best.ok_or(AmountError::CannotMake { amount })
 }
 
-/// The fewest notes covering `amount`, preferring the least excess value on ties.
+/// Notes covering `amount` with the least excess value, preferring fewer notes on ties.
 /// Returns the chosen notes largest first.
 ///
 /// # Errors
@@ -224,8 +224,13 @@ fn select_notes(
 ) {
     if remaining.is_zero() {
         if best.as_ref().is_none_or(|best| {
-            chosen.len() < best.len()
-                || (chosen.len() == best.len() && note_sum(chosen) < note_sum(best))
+            if cover {
+                note_sum(chosen) < note_sum(best)
+                    || (note_sum(chosen) == note_sum(best) && chosen.len() < best.len())
+            } else {
+                chosen.len() < best.len()
+                    || (chosen.len() == best.len() && note_sum(chosen) < note_sum(best))
+            }
         }) {
             *best = Some(chosen.clone());
         }
@@ -234,14 +239,22 @@ fn select_notes(
     let Some(first) = notes.get(start) else {
         return;
     };
-    if best.as_ref().is_some_and(|best| chosen.len() >= best.len()) {
+    if !cover && best.as_ref().is_some_and(|best| chosen.len() >= best.len()) {
+        return;
+    }
+    if cover
+        && best
+            .as_ref()
+            .is_some_and(|best| note_sum(chosen) >= note_sum(best))
+    {
         return;
     }
     // Even using only the largest remaining note, this many notes are necessary.
     let lower_bound = remaining.div_ceil(U256::from(first.pool.amount_wei));
-    if best
-        .as_ref()
-        .is_some_and(|best| lower_bound > U256::from(best.len() - chosen.len()))
+    if !cover
+        && best
+            .as_ref()
+            .is_some_and(|best| lower_bound > U256::from(best.len() - chosen.len()))
     {
         return;
     }
@@ -404,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn covering_minimizes_count_then_excess_and_ignores_ineligible_notes() {
+    fn covering_minimizes_change_then_count_and_ignores_ineligible_notes() {
         let mut notes = vec![
             held(Pool::ETHEREUM_ETHER_1, 0),
             held(Pool::ETHEREUM_ETHER_03, 1),
@@ -413,8 +426,12 @@ mod tests {
         notes.extend((3..=6).map(|nonce| held(Pool::ETHEREUM_ETHER_003, nonce)));
         let amount = parse_eth("0.12").expect("amount");
         let cover = cover_notes(amount, &notes).expect("cover");
-        assert_eq!(cover.len(), 1);
-        assert_eq!(cover[0].pool, Pool::ETHEREUM_ETHER_03);
+        assert_eq!(cover.len(), 4);
+        assert!(
+            cover
+                .iter()
+                .all(|note| note.pool == Pool::ETHEREUM_ETHER_003)
+        );
         notes[0].spent = true;
         notes[1].leaf_index = None;
         assert_eq!(exact_notes(amount, &notes).expect("exact").len(), 4);
@@ -441,12 +458,13 @@ mod tests {
                     .filter(|(i, _)| mask & (1 << i) != 0)
                     .map(|(_, note)| note.clone())
                     .collect();
-                let key = (subset.len(), note_sum(&subset));
-                if key.1 == amount && exact.is_none_or(|best| key < best) {
-                    exact = Some(key);
+                let sum = note_sum(&subset);
+                let count = subset.len();
+                if sum == amount && exact.is_none_or(|best| (count, sum) < best) {
+                    exact = Some((count, sum));
                 }
-                if key.1 >= amount && cover.is_none_or(|best| key < best) {
-                    cover = Some(key);
+                if sum >= amount && cover.is_none_or(|best| (sum, count) < best) {
+                    cover = Some((sum, count));
                 }
             }
             assert_eq!(
@@ -458,10 +476,38 @@ mod tests {
             assert_eq!(
                 cover_notes(amount, &notes)
                     .ok()
-                    .map(|chosen| (chosen.len(), note_sum(&chosen))),
+                    .map(|chosen| (note_sum(&chosen), chosen.len())),
                 cover
             );
         }
+    }
+
+    #[test]
+    fn transfer_prefers_four_notes_over_one_ether_for_less_change() {
+        let notes = vec![
+            held(Pool::ETHEREUM_ETHER_1, 0),
+            held(Pool::ETHEREUM_ETHER_03, 1),
+            held(Pool::ETHEREUM_ETHER_01, 2),
+            held(Pool::ETHEREUM_ETHER_001, 3),
+            held(Pool::ETHEREUM_ETHER_001, 4),
+        ];
+        let chosen = cover_notes(parse_eth("0.4111").expect("amount"), &notes).expect("cover");
+        assert_eq!(note_sum(&chosen), parse_eth("0.42").expect("sum"));
+        assert_eq!(chosen.len(), 4);
+        assert_eq!(chosen[0].pool, Pool::ETHEREUM_ETHER_03);
+
+        let affordable_fee = parse_eth("0.008").expect("fee");
+        let chosen = cover_notes(
+            parse_eth("0.4111").expect("amount") + affordable_fee,
+            &notes,
+        )
+        .expect("amount and fee");
+        assert_eq!(note_sum(&chosen), parse_eth("0.42").expect("sum"));
+
+        let larger_fee = parse_eth("0.01").expect("fee");
+        let chosen = cover_notes(parse_eth("0.4111").expect("amount") + larger_fee, &notes)
+            .expect("amount and fee");
+        assert_eq!(note_sum(&chosen), parse_eth("1").expect("sum"));
     }
 
     #[test]

@@ -26,19 +26,13 @@ use crate::{
 const FEE_ATTEMPTS: usize = 3;
 
 sol! {
-    struct PaymasterData {
-        address adapter;
-        bytes adapterData;
-    }
-
-    struct TornadoAdapterData {
+    struct TornadoPaymasterData {
+        address instance;
         bytes proof;
         bytes32 root;
         bytes32 nullifierHash;
         address recipient;
-        address relayer;
         uint256 fee;
-        uint256 refund;
     }
 }
 
@@ -537,11 +531,13 @@ fn proven_fee(op: &SignableUserOperation) -> Result<U256, UserOpError> {
     let Some(data) = op.user_op.paymaster_data.as_deref() else {
         return Err(UserOpError::FeeMissing);
     };
-    let outer = PaymasterData::abi_decode(data)
+    paymaster_fee(data)
+}
+
+fn paymaster_fee(data: &[u8]) -> Result<U256, UserOpError> {
+    let decoded = TornadoPaymasterData::abi_decode(data)
         .map_err(|error| UserOpError::FeeDecode(error.to_string()))?;
-    let inner = TornadoAdapterData::abi_decode(outer.adapterData.as_ref())
-        .map_err(|error| UserOpError::FeeDecode(error.to_string()))?;
-    Ok(inner.fee)
+    Ok(decoded.fee)
 }
 
 fn settle(sum: U256, paid_out: Option<U256>, before: U256, after: U256) -> Option<(U256, U256)> {
@@ -582,6 +578,20 @@ mod tests {
         UserOperationBuilder::<()>::new(Address::ZERO, Address::ZERO, Eip712Domain::default())
             .with_gas(gas(100))
             .build()
+    }
+
+    #[test]
+    fn fee_decodes_direct_tornado_paymaster_data() {
+        let data = TornadoPaymasterData {
+            instance: Address::repeat_byte(1),
+            proof: Bytes::from(vec![2; 256]),
+            root: B256::repeat_byte(3),
+            nullifierHash: B256::repeat_byte(4),
+            recipient: Address::repeat_byte(5),
+            fee: U256::from(123_456),
+        }
+        .abi_encode();
+        assert_eq!(paymaster_fee(&data).unwrap(), U256::from(123_456));
     }
 
     #[test]

@@ -428,8 +428,13 @@ async fn from_tornado(plan: &Plan<'_>) -> Result<(), anyhow::Error> {
         match quoted.map_err(anyhow::Error::downcast::<UserOpError>) {
             Ok(quoted) => break quoted,
             Err(Ok(UserOpError::Short { fee, .. })) if attempts < NOTE_ATTEMPTS => {
-                eprintln!("The fee leaves the notes short; adding a note.");
-                notes = cover_notes(plan.amount + fee, &held)?;
+                eprintln!(
+                    "The quoted fee leaves the notes short; selecting the smallest sufficient note sum."
+                );
+                let required = plan.amount.checked_add(fee).ok_or_else(|| {
+                    anyhow::anyhow!("transfer amount plus paymaster fee overflows")
+                })?;
+                notes = cover_notes(required, &held)?;
             }
             Err(Ok(error)) => return Err(error.into()),
             Err(Err(error)) => return Err(error),

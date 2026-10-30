@@ -6,13 +6,17 @@ use edw_core::{
     broadcast::submit_user_operation,
     bundler::Url,
     call::Call,
+    instance::Instance,
     network::NetworkEndpoint,
+    profile::ProfileRecord,
     vault::tornadocash::{format_eth, parse_eth},
 };
+use futures::{StreamExt, TryStreamExt, stream};
 use serde::Serialize;
 
 use crate::{
     GlobalArgs, failure,
+    input::Input,
     report::Report,
     spend::{
         Account, Consent, account_at, choose_profile, confirm, declined, mnemonic, open_vault,
@@ -32,7 +36,7 @@ pub struct ShieldArgs {
     /// Exact pool sizes in ETH, separated by commas, for example `1,0.1,0.1`.
     #[arg(long)]
     denominations: Option<String>,
-    /// Standard-address index that pays. Defaults to 0.
+    /// Standard-address index that pays. Interactive mode offers funded indexes.
     #[arg(long)]
     from: Option<u32>,
     #[arg(long)]
@@ -96,20 +100,7 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     } else {
         None
     };
-    let from = match args.from {
-        Some(index) => index,
-        None => input
-            .line("Pay from address index [0]: ")?
-            .filter(|line| !line.is_empty())
-            .map(|line| {
-                line.parse::<u32>()
-                    .map_err(|_| failure::usage(format!("`{line}` is not an address index")))
-            })
-            .transpose()?
-            .unwrap_or(0),
-    };
     let phrase = mnemonic(&instance, &profile).await?;
-    let payer = account_at(&phrase, profile.profile_index, from)?;
     let endpoint = instance.rpc().await?;
     let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
     let pools = if let Some(denominations) = &requested_denominations {
@@ -123,6 +114,22 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     };
     let amount: U256 = pools.iter().map(|pool| U256::from(pool.amount_wei)).sum();
     verify_requested_amount(amount, requested_amount)?;
+    let from = match args.from {
+        Some(index) => index,
+        None if input == Input::Terminal => {
+            choose_funded_payer(&instance, &profile, endpoint.as_ref(), amount, input).await?
+        }
+        None => input
+            .line("Pay from address index [0]: ")?
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                line.parse::<u32>()
+                    .map_err(|_| failure::usage(format!("`{line}` is not an address index")))
+            })
+            .transpose()?
+            .unwrap_or(0),
+    };
+    let payer = account_at(&phrase, profile.profile_index, from)?;
     let notes: Vec<String> = pools
         .iter()
         .map(|pool| {
@@ -167,6 +174,59 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
         transactions,
     }
     .emit(global.mode())
+}
+
+async fn choose_funded_payer(
+    instance: &Instance,
+    profile: &ProfileRecord,
+    endpoint: &dyn NetworkEndpoint,
+    amount: U256,
+    input: Input,
+) -> Result<u32, anyhow::Error> {
+    let addresses = instance.stored_address_accounts(profile).await?;
+    let balances: Vec<(u32, U256)> = stream::iter(addresses)
+        .map(|account| async move {
+            Ok::<_, anyhow::Error>((account.index, endpoint.balance(account.address).await?))
+        })
+        .buffered(8)
+        .try_collect()
+        .await?;
+    let funded = funded_indexes(amount, &balances);
+    let Some(&default) = funded.first() else {
+        anyhow::bail!(
+            "no stored address has more than {} ETH for the shield; gas is also required. Fund an address or pass --from <index>",
+            format_eth(amount)
+        );
+    };
+    let listed = funded
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let prompt = format!("Pay from address index [{listed}] (default {default}): ");
+    let entered = input.line(&prompt)?.unwrap_or_default();
+    if entered.is_empty() {
+        return Ok(default);
+    }
+    let index = entered
+        .parse::<u32>()
+        .map_err(|_| failure::usage(format!("`{entered}` is not an address index")))?;
+    if !funded.contains(&index) {
+        return Err(failure::usage(format!(
+            "address index {index} is not among the funded choices [{listed}]"
+        )));
+    }
+    Ok(index)
+}
+
+fn funded_indexes(amount: U256, balances: &[(u32, U256)]) -> Vec<u32> {
+    let mut funded: Vec<u32> = balances
+        .iter()
+        .filter_map(|(index, balance)| (*balance > amount).then_some(*index))
+        .collect();
+    funded.sort_unstable();
+    funded.dedup();
+    funded
 }
 
 fn confirmation(
@@ -293,5 +353,19 @@ mod tests {
             crate::Cli::try_parse_from(["edw", "shield", "--denominations", "1,0.1", "--yes"])
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn payer_choices_start_at_the_lowest_funded_index() {
+        let amount = parse_eth("1").expect("amount");
+        let headroom = parse_eth("0.1").expect("headroom");
+        let balances = [
+            (15, amount + headroom),
+            (0, amount),
+            (5, amount + headroom),
+            (1, amount + headroom),
+        ];
+        assert_eq!(funded_indexes(amount, &balances), vec![1, 5, 15]);
+        assert!(funded_indexes(amount, &[(0, amount)]).is_empty());
     }
 }
