@@ -19,3 +19,8 @@ EDW provides a [justfile](./justfile) for common commands. For information on th
 ```bash
 just --list
 ```
+
+## Implementations & Tooling
+
+- **[kohaku-py](https://github.com/rorupuntou/kohaku-py)**: Pure Python implementation of the EDW engine, Kohaku privacy protocols (Tornado Cash, 0xBow Privacy Pools, Saga Sync), and terminal UI (`edw-py`).
+
