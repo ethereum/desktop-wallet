@@ -41,7 +41,7 @@ A profile derives its keys at `x`:
 ```sh
 Address { index }                       # m/44'/60'/x'/0/i, where i = 0 is the identity anchor
 Stealth { scheme }                      # m/44'/60'/x'/5564'/scheme'/{0,1}, spending and viewing
-TornadoCash                             # m/29795'/1'/x'/{0',1'}/deposit', nullifier and salt
+TornadoCash                             # m/29795'/1'/x', signs each chain and nonce; pool mixes into note secrets
 Railgun                                 # m/44'/1984'/0'/0'/x' and m/420'/1984'/0'/0'/x', BabyJubJub
 SmartAccount { implementation, index }  # m/44'/60'/x'/i'/j'
 ```

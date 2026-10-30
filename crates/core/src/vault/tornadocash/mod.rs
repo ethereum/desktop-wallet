@@ -221,8 +221,20 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// Replaces the pools' stored notes, so deposits not yet mined are forgotten. A later
     /// `recover` finds them once they are.
     pub async fn recover(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
+        self.recover_with_progress(pools, |_, _, _| {}).await
+    }
+
+    async fn recover_with_progress(
+        &self,
+        pools: &[Pool],
+        mut progress: impl FnMut(usize, usize, &Pool),
+    ) -> Result<(), TornadoVaultError> {
         self.track(pools).await?;
-        self.sync(pools).await?;
+        let end = self.provider.block_height().await?.saturating_add(1);
+        for (index, pool) in pools.iter().enumerate() {
+            progress(index + 1, pools.len(), pool);
+            self.sync_pool(pool, end).await?;
+        }
 
         let mut snapshots = Vec::new();
         for pool in pools {
@@ -258,13 +270,21 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// Nonces are shared across pools. Scanning stops after 20 consecutive nonces with no
     /// deposit in any pool. Returns how many unspent notes were stored.
     pub async fn recover_chain(&self) -> Result<usize, TornadoVaultError> {
+        self.recover_chain_with_progress(|_, _, _| {}).await
+    }
+
+    /// Recovers the chain's pools, reporting each pool before it is synced.
+    pub async fn recover_chain_with_progress(
+        &self,
+        progress: impl FnMut(usize, usize, &Pool),
+    ) -> Result<usize, TornadoVaultError> {
         let chain_id = self.provider.network_id().await?;
         let pools: Vec<Pool> = Pool::POOLS
             .iter()
             .filter(|pool| pool.chain_id == chain_id && self.selection.includes(pool))
             .cloned()
             .collect();
-        self.recover(&pools).await?;
+        self.recover_with_progress(&pools, progress).await?;
         let notes = self.pool_notes(&pools).await?;
         Ok(notes.iter().filter(|note| !note.spent).count())
     }

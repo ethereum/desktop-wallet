@@ -2,6 +2,7 @@ use std::{
     fmt,
     io::{self, IsTerminal, Read},
     path::PathBuf,
+    time::Duration,
 };
 
 use anyhow::Context;
@@ -353,6 +354,7 @@ impl ImportArgs {
         let instance = global.open().await?;
         let input = global.input();
         let phrase = self.phrase(input)?;
+        eprintln!("Recovery phrase entered; importing profile...");
         let name = prompt_profile_name(self.name.clone(), input)?;
         let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
         if self.no_extended_pools {
@@ -525,7 +527,19 @@ async fn recover_tornado(instance: &Instance, profile: &ProfileRecord) -> Option
         let endpoint = instance.rpc().await?;
         let phrase = crate::spend::mnemonic(instance, profile).await?;
         let vault = crate::spend::open_vault(instance, profile, &phrase, endpoint).await?;
-        let count = vault.recover_chain().await?;
+        eprintln!("Recovering Tornado notes...");
+        let recovery = vault.recover_chain_with_progress(|index, total, pool| {
+            eprintln!("Syncing Tornado pool {index}/{total}: {pool}");
+        });
+        tokio::pin!(recovery);
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
+        heartbeat.tick().await;
+        let count = loop {
+            tokio::select! {
+                result = &mut recovery => break result?,
+                _ = heartbeat.tick() => eprintln!("Still recovering Tornado notes..."),
+            }
+        };
         Ok(u32::try_from(count)?)
     }
     .await;
@@ -556,8 +570,20 @@ fn write_tornado_count(f: &mut fmt::Formatter<'_>, count: Option<u32>) -> fmt::R
 /// Scans `profile`'s addresses, or warns on stderr that only address 0 gets an address vault and
 /// returns `None` when the scan fails.
 async fn scan(instance: &Instance, profile: &ProfileRecord) -> Option<EoaScan> {
+    eprintln!("Scanning standard addresses...");
     let scan = match instance.rpc().await {
-        Ok(endpoint) => instance.scan_profile(profile, endpoint.as_ref()).await,
+        Ok(endpoint) => {
+            let scanning = instance.scan_profile(profile, endpoint.as_ref());
+            tokio::pin!(scanning);
+            let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
+            heartbeat.tick().await;
+            loop {
+                tokio::select! {
+                    result = &mut scanning => break result,
+                    _ = heartbeat.tick() => eprintln!("Still scanning standard addresses..."),
+                }
+            }
+        }
         Err(error) => Err(error),
     };
     scan.map_err(|error| {
