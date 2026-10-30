@@ -320,6 +320,50 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         self.pool_notes(&pools).await
     }
 
+    /// Forget unmined deposit reservations after syncing tracked pools to the current head.
+    /// The keychain nonce is never rewound: a forgotten deposit can still be recovered if it
+    /// lands later. `nonce` limits the cleanup to one reservation.
+    pub async fn clear_pending(
+        &self,
+        nonce: Option<u64>,
+    ) -> Result<Vec<TornadoNote>, TornadoVaultError> {
+        let chain_id = self.provider.network_id().await?;
+        let pools: Vec<Pool> = self
+            .db
+            .tracked_pools()
+            .await?
+            .into_iter()
+            .filter(|pool| pool.chain_id == chain_id)
+            .collect();
+        let end = self.provider.block_height().await?.saturating_add(1);
+        for pool in &pools {
+            // Include tracked pools even when this profile currently excludes their family.
+            self.sync_pool(pool, end).await?;
+        }
+        let mut cleared = Vec::new();
+        for pool in &pools {
+            let pool_db = self.pool_db(pool);
+            let mut records = pool_db.notes().await?;
+            records.retain(|record| {
+                if record.leaf_index.is_some()
+                    || record.spent
+                    || nonce.is_some_and(|n| n != record.nonce)
+                {
+                    return true;
+                }
+                cleared.push(TornadoNote {
+                    pool: pool.clone(),
+                    nonce: record.nonce,
+                    leaf_index: None,
+                    spent: false,
+                });
+                false
+            });
+            pool_db.put_notes(&records).await?;
+        }
+        Ok(cleared)
+    }
+
     /// Returns the call that withdraws `note` to `to`.
     ///
     /// Withdrawing several notes to the same recipient links them on-chain.
@@ -691,6 +735,67 @@ mod tests {
         vault.selection = PoolSelection::Classic;
         // Turning support off must not delete stored notes or tracked pools.
         assert_eq!(vault.db.tracked_pools().await.expect("tracked"), [pool]);
+    }
+
+    #[tokio::test]
+    async fn clear_pending_preserves_mined_notes_and_does_not_reuse_nonces() {
+        use alloy_primitives::U64;
+        use alloy_transport::mock::Asserter;
+        use kohaku_tornadocash::event::Snapshot;
+        use kohaku_tornadocash_syncer::SyncerError;
+        struct EmptySyncer;
+        #[async_trait::async_trait]
+        impl Syncer for EmptySyncer {
+            async fn sync_range(
+                &self,
+                pool: &Pool,
+                from: u64,
+                to: u64,
+            ) -> Result<Snapshot, SyncerError> {
+                Ok(Snapshot::new(pool.clone(), from..to, Vec::new()).expect("empty snapshot"))
+            }
+        }
+        let mock = Asserter::new();
+        let vault = TornadoVault::with_syncer(
+            PrivateKeySigner::random(),
+            Arc::new(crate::database::memory::MemoryDatabase::default()),
+            crate::test_support::mocked_provider(&mock),
+            DynSyncer::new(EmptySyncer),
+        );
+        let pool = Pool::ETHEREUM_ETHER_1;
+        vault.deposit(&pool).await.expect("first deposit");
+        vault.deposit(&pool).await.expect("second deposit");
+        let db = vault.pool_db(&pool);
+        let mut records = db.notes().await.expect("records");
+        records[0].leaf_index = Some(0);
+        db.put_notes(&records).await.expect("mined");
+
+        mock.push_success(&U64::from(1));
+        mock.push_success(&U64::from(pool.deployed_block + 1));
+        let cleared = vault.clear_pending(None).await.expect("clear");
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].nonce, 1);
+        assert_eq!(db.notes().await.expect("records")[0].nonce, 0);
+        assert_eq!(vault.db.next_nonce().await.expect("next nonce"), 2);
+
+        vault.deposit(&pool).await.expect("third deposit");
+        vault.deposit(&pool).await.expect("fourth deposit");
+        assert_eq!(db.notes().await.expect("records")[1].nonce, 2);
+        mock.push_success(&U64::from(1));
+        mock.push_success(&U64::from(pool.deployed_block + 2));
+        let cleared = vault.clear_pending(Some(2)).await.expect("clear one");
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].nonce, 2);
+        assert_eq!(
+            db.notes()
+                .await
+                .expect("records")
+                .iter()
+                .map(|record| record.nonce)
+                .collect::<Vec<_>>(),
+            vec![0, 3]
+        );
+        assert_eq!(vault.db.next_nonce().await.expect("next nonce"), 4);
     }
 
     #[tokio::test]

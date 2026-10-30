@@ -27,6 +27,8 @@ pub enum Command {
     Import(ImportArgs),
     /// Scan a profile's addresses again and add an address vault for each one it is missing.
     Rescan(RescanArgs),
+    /// Forget unmined Tornado deposit reservations after syncing their pools. Use after a failed shield; a later mined deposit can be recovered by rescan.
+    ClearPending(ClearPendingArgs),
     /// Set or clear a profile's optional name.
     Rename(RenameArgs),
     /// Show the recovery phrase behind a profile. Runs only at a terminal.
@@ -89,6 +91,15 @@ pub struct RescanArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct ClearPendingArgs {
+    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
+    selector: Option<String>,
+    /// Clear only this Tornado note nonce. Omit to clear all unmined reservations.
+    #[arg(long)]
+    nonce: Option<u64>,
+}
+
+#[derive(Args, Debug)]
 pub struct RevealPhraseArgs {
     /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
     selector: Option<String>,
@@ -138,6 +149,18 @@ struct RescanReport {
     added: Vec<ScannedAddress>,
     /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed.
     tornado_notes: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct ClearPendingReport {
+    profile: ProfileSummary,
+    cleared: Vec<PendingNote>,
+}
+
+#[derive(Serialize)]
+struct PendingNote {
+    nonce: u64,
+    pool: String,
 }
 
 #[derive(Serialize)]
@@ -225,6 +248,26 @@ impl Report for RescanReport {
     const VERSION: u32 = 3;
 }
 
+impl Report for ClearPendingReport {
+    const KIND: &'static str = "edw/profile-clear-pending";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for ClearPendingReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Cleared {} unmined Tornado deposit reservation(s) for {}.",
+            self.cleared.len(),
+            self.profile
+        )?;
+        for note in &self.cleared {
+            write!(f, "\nnonce {}  {}", note.nonce, note.pool)?;
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for RescanReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Rescanned profile {}.", self.profile)?;
@@ -260,6 +303,7 @@ impl Command {
             Self::New(args) => args.run(global).await,
             Self::Import(args) => args.run(global).await,
             Self::Rescan(args) => args.run(global).await,
+            Self::ClearPending(args) => args.run(global).await,
             Self::Rename(args) => args.run(global).await,
             Self::RevealPhrase(args) => args.run(global).await,
         }
@@ -440,6 +484,37 @@ impl RescanArgs {
                 })
                 .collect(),
             tornado_notes,
+        }
+        .emit(global.mode())
+    }
+}
+
+impl ClearPendingArgs {
+    pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
+        let instance = global.open().await?;
+        let profile = if let Some(selector) = &self.selector {
+            instance.profile(selector).await?
+        } else {
+            let mut profiles = instance.profiles().await?;
+            profiles.sort_by_key(ProfileRecord::key);
+            choose_profile(&profiles, global.input())?
+        };
+        let phrase = crate::spend::mnemonic(&instance, &profile).await?;
+        let endpoint = instance.rpc().await?;
+        let vault = crate::spend::open_vault(&instance, &profile, &phrase, endpoint).await?;
+        eprintln!("Syncing Tornado pools before clearing unmined reservations...");
+        let cleared = vault
+            .clear_pending(self.nonce)
+            .await?
+            .into_iter()
+            .map(|note| PendingNote {
+                nonce: note.nonce,
+                pool: note.pool.id(),
+            })
+            .collect();
+        ClearPendingReport {
+            profile: ProfileSummary::load(&instance, &profile).await?,
+            cleared,
         }
         .emit(global.mode())
     }
