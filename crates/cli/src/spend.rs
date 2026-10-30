@@ -144,13 +144,7 @@ pub async fn open_vault(
     endpoint: Arc<dyn NetworkEndpoint>,
 ) -> Result<TornadoVault<alloy_signer_local::PrivateKeySigner>, anyhow::Error> {
     let key = mnemonic.keychain_key(profile.profile_index)?;
-    let indexer = instance.indexer_config().await?;
-    Ok(TornadoVault::open(
-        key,
-        instance.tornado_database(profile),
-        endpoint,
-        indexer.effective_url(),
-    )?)
+    Ok(instance.open_tornado_vault(profile, key, endpoint).await?)
 }
 
 /// `--amount-formatted` as decimal ETH, `--amount-raw` as wei, or a prompted ETH amount.

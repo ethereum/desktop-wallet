@@ -216,7 +216,7 @@ impl BalanceArgs {
             .transpose()?;
 
         BalanceReport {
-            profile: ProfileSummary::from(&profile),
+            profile: ProfileSummary::load(&instance, &profile).await?,
             complete: tornado_ok
                 && unbuilt.is_empty()
                 && read.iter().all(|vault| vault.balances.is_ok()),
@@ -244,7 +244,7 @@ impl fmt::Display for BalanceAmounts {
 
 impl Report for BalanceReport {
     const KIND: &'static str = "edw/balance";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
 }
 
 impl fmt::Display for BalanceReport {

@@ -5,7 +5,8 @@ use alloy_signer::{Signer, k256::ecdsa::SigningKey};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
 pub use amount::{
-    AmountError, cover_notes, deposit_pools, exact_notes, format_eth, parse_eth, parse_wei,
+    AmountError, PoolSelection, cover_notes, deposit_pools, deposit_pools_for_denominations,
+    deposit_pools_with_selection, exact_notes, format_eth, parse_eth, parse_wei,
 };
 use kohaku_tornadocash::{
     Asset, Deposit, Note, Pool, Withdrawal, WithdrawalError,
@@ -50,6 +51,7 @@ sol!(
 /// Each deposit creates one note in a single pool, and each withdrawal spends one note. Choosing
 /// which pools to deposit to and which notes to withdraw is left to the caller.
 pub struct TornadoVault<S: Signer + Send + Sync> {
+    selection: PoolSelection,
     trees_cache: Mutex<HashMap<Pool, MerkleTree>>,
     address: Address,
     keychain: Keychain<S>,
@@ -82,6 +84,10 @@ pub struct UnspentNote {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TornadoVaultError {
+    #[error(transparent)]
+    Amount(#[from] AmountError),
+    #[error("extended pool {0} is disabled")]
+    ExtendedDisabled(String),
     #[error("database error: {0}")]
     Database(#[from] db::TornadoVaultDbError),
     #[error("provider error: {0}")]
@@ -141,6 +147,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         syncer: DynSyncer,
     ) -> Self {
         Self {
+            selection: PoolSelection::default(),
             trees_cache: Mutex::new(HashMap::new()),
             address: signer.address(),
             keychain: Keychain::new(signer),
@@ -150,11 +157,58 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         }
     }
 
+    /// Selects supported pool families for syncing, recovery and spending.
+    #[must_use]
+    pub fn with_pool_selection(mut self, selection: PoolSelection) -> Self {
+        self.selection = selection;
+        self
+    }
+
+    /// Plans native ETH deposits using this vault's configured pool set.
+    pub async fn deposit_pools(&self, amount: U256) -> Result<Vec<Pool>, TornadoVaultError> {
+        Ok(deposit_pools_with_selection(
+            amount,
+            self.provider.network_id().await?,
+            self.selection,
+        )?)
+    }
+
+    /// Plans exactly the requested native ETH denominations in their supplied order.
+    pub async fn deposit_pools_for_denominations(
+        &self,
+        denominations: &[U256],
+    ) -> Result<Vec<Pool>, TornadoVaultError> {
+        Ok(deposit_pools_for_denominations(
+            denominations,
+            self.provider.network_id().await?,
+            self.selection,
+        )?)
+    }
+
+    /// Selects the fewest eligible held notes summing to `amount`.
+    pub async fn exact_notes(&self, amount: U256) -> Result<Vec<TornadoNote>, TornadoVaultError> {
+        Ok(exact_notes(amount, &self.notes().await?)?)
+    }
+
+    /// Selects the fewest eligible held notes covering `amount`.
+    pub async fn cover_notes(&self, amount: U256) -> Result<Vec<TornadoNote>, TornadoVaultError> {
+        Ok(cover_notes(amount, &self.notes().await?)?)
+    }
+
+    fn check_pool(&self, pool: &Pool) -> Result<(), TornadoVaultError> {
+        if !self.selection.includes(pool) {
+            return Err(TornadoVaultError::ExtendedDisabled(pool.id()));
+        }
+        Ok(())
+    }
+
     /// Syncs the given pools' events up to the latest block, updating the vault's notes.
     pub async fn sync(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
+        for pool in pools {
+            self.check_pool(pool)?;
+        }
         //? `block_height` is inclusive, sync ranges are half-open.
         let end = self.provider.block_height().await?.saturating_add(1);
-
         for pool in pools {
             self.sync_pool(pool, end).await?;
         }
@@ -167,8 +221,20 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// Replaces the pools' stored notes, so deposits not yet mined are forgotten. A later
     /// `recover` finds them once they are.
     pub async fn recover(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
+        self.recover_with_progress(pools, |_, _, _| {}).await
+    }
+
+    async fn recover_with_progress(
+        &self,
+        pools: &[Pool],
+        mut progress: impl FnMut(usize, usize, &Pool),
+    ) -> Result<(), TornadoVaultError> {
         self.track(pools).await?;
-        self.sync(pools).await?;
+        let end = self.provider.block_height().await?.saturating_add(1);
+        for (index, pool) in pools.iter().enumerate() {
+            progress(index + 1, pools.len(), pool);
+            self.sync_pool(pool, end).await?;
+        }
 
         let mut snapshots = Vec::new();
         for pool in pools {
@@ -204,13 +270,21 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// Nonces are shared across pools. Scanning stops after 20 consecutive nonces with no
     /// deposit in any pool. Returns how many unspent notes were stored.
     pub async fn recover_chain(&self) -> Result<usize, TornadoVaultError> {
+        self.recover_chain_with_progress(|_, _, _| {}).await
+    }
+
+    /// Recovers the chain's pools, reporting each pool before it is synced.
+    pub async fn recover_chain_with_progress(
+        &self,
+        progress: impl FnMut(usize, usize, &Pool),
+    ) -> Result<usize, TornadoVaultError> {
         let chain_id = self.provider.network_id().await?;
         let pools: Vec<Pool> = Pool::POOLS
             .iter()
-            .filter(|pool| pool.canonical && pool.chain_id == chain_id)
+            .filter(|pool| pool.chain_id == chain_id && self.selection.includes(pool))
             .cloned()
             .collect();
-        self.recover(&pools).await?;
+        self.recover_with_progress(&pools, progress).await?;
         let notes = self.pool_notes(&pools).await?;
         Ok(notes.iter().filter(|note| !note.spent).count())
     }
@@ -220,6 +294,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     /// ERC-20 deposits are preceded by an approval for the pool's denomination. The pool is
     /// tracked from then on.
     pub async fn deposit(&self, pool: &Pool) -> Result<Vec<Call>, TornadoVaultError> {
+        self.check_pool(pool)?;
         self.track(std::slice::from_ref(pool)).await?;
 
         let mut calls: Vec<Call> = approval(pool).into_iter().collect();
@@ -238,11 +313,55 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
             .tracked_pools()
             .await?
             .into_iter()
-            .filter(|pool| pool.chain_id == chain_id)
+            .filter(|pool| pool.chain_id == chain_id && self.selection.includes(pool))
             .collect();
 
         self.sync(&pools).await?;
         self.pool_notes(&pools).await
+    }
+
+    /// Forget unmined deposit reservations after syncing tracked pools to the current head.
+    /// The keychain nonce is never rewound: a forgotten deposit can still be recovered if it
+    /// lands later. `nonce` limits the cleanup to one reservation.
+    pub async fn clear_pending(
+        &self,
+        nonce: Option<u64>,
+    ) -> Result<Vec<TornadoNote>, TornadoVaultError> {
+        let chain_id = self.provider.network_id().await?;
+        let pools: Vec<Pool> = self
+            .db
+            .tracked_pools()
+            .await?
+            .into_iter()
+            .filter(|pool| pool.chain_id == chain_id)
+            .collect();
+        let end = self.provider.block_height().await?.saturating_add(1);
+        for pool in &pools {
+            // Include tracked pools even when this profile currently excludes their family.
+            self.sync_pool(pool, end).await?;
+        }
+        let mut cleared = Vec::new();
+        for pool in &pools {
+            let pool_db = self.pool_db(pool);
+            let mut records = pool_db.notes().await?;
+            records.retain(|record| {
+                if record.leaf_index.is_some()
+                    || record.spent
+                    || nonce.is_some_and(|n| n != record.nonce)
+                {
+                    return true;
+                }
+                cleared.push(TornadoNote {
+                    pool: pool.clone(),
+                    nonce: record.nonce,
+                    leaf_index: None,
+                    spent: false,
+                });
+                false
+            });
+            pool_db.put_notes(&records).await?;
+        }
+        Ok(cleared)
     }
 
     /// Returns the call that withdraws `note` to `to`.
@@ -272,6 +391,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         note: &TornadoNote,
         recipient: Address,
     ) -> Result<(Withdrawal, MerkleProof), TornadoVaultError> {
+        self.check_pool(&note.pool)?;
         if note.spent {
             return Err(TornadoVaultError::NoteSpent(note.nonce));
         }
@@ -315,7 +435,9 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         let chain_id = self.provider.network_id().await?;
         let mut pools: Vec<Pool> = Pool::POOLS
             .iter()
-            .filter(|pool| pool.canonical && pool.chain_id == chain_id && is_eq(pool, asset))
+            .filter(|pool| {
+                pool.chain_id == chain_id && self.selection.includes(pool) && is_eq(pool, asset)
+            })
             .cloned()
             .collect();
 
@@ -338,6 +460,9 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
 
     /// Adds `pools` to the tracked pools.
     async fn track(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
+        for pool in pools {
+            self.check_pool(pool)?;
+        }
         let mut tracked = self.db.tracked_pools().await?;
         let untracked: Vec<Pool> = pools
             .iter()
@@ -545,6 +670,191 @@ mod tests {
             nonce: 0,
             leaf_index,
             spent,
+        }
+    }
+
+    fn offline_vault(selection: PoolSelection) -> TornadoVault<PrivateKeySigner> {
+        use alloy_provider::{Provider, ProviderBuilder};
+        let provider = ProviderBuilder::new()
+            .connect_http("http://127.0.0.1:1".parse().expect("URL"))
+            .erased();
+        TornadoVault::new(
+            PrivateKeySigner::random(),
+            Arc::new(crate::database::memory::MemoryDatabase::default()),
+            Arc::new(crate::network::SimpleNetworkEndpoint::new(provider)),
+        )
+        .with_pool_selection(selection)
+    }
+
+    #[tokio::test]
+    async fn disabled_extended_operations_fail_before_rpc_or_storage_changes() {
+        let vault = offline_vault(PoolSelection::Classic);
+        let pool = Pool::ETHEREUM_ETHER_001;
+        assert!(matches!(
+            vault.deposit(&pool).await,
+            Err(TornadoVaultError::ExtendedDisabled(_))
+        ));
+        assert!(matches!(
+            vault.sync(std::slice::from_ref(&pool)).await,
+            Err(TornadoVaultError::ExtendedDisabled(_))
+        ));
+        assert!(matches!(
+            vault.recover(std::slice::from_ref(&pool)).await,
+            Err(TornadoVaultError::ExtendedDisabled(_))
+        ));
+        assert!(matches!(
+            vault
+                .withdrawal_inputs(&note(pool, Some(0), false), Address::ZERO)
+                .await,
+            Err(TornadoVaultError::ExtendedDisabled(_))
+        ));
+        assert!(vault.db.tracked_pools().await.expect("tracked").is_empty());
+        assert_eq!(vault.db.next_nonce().await.expect("nonce"), 0);
+    }
+
+    #[tokio::test]
+    async fn enabled_extended_deposit_is_tracked_and_survives_reopening_with_support_disabled() {
+        let mut vault = offline_vault(PoolSelection::IncludeExtended);
+        let pool = Pool::SEPOLIA_ETHER_003;
+        let calls = vault.deposit(&pool).await.expect("deposit");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].target, pool.address);
+        assert_eq!(calls[0].value, U256::from(pool.amount_wei));
+        assert_eq!(
+            vault.db.tracked_pools().await.expect("tracked").as_slice(),
+            std::slice::from_ref(&pool)
+        );
+        assert_eq!(
+            vault
+                .pool_notes(std::slice::from_ref(&pool))
+                .await
+                .expect("notes")
+                .len(),
+            1
+        );
+        vault.selection = PoolSelection::Classic;
+        // Turning support off must not delete stored notes or tracked pools.
+        assert_eq!(vault.db.tracked_pools().await.expect("tracked"), [pool]);
+    }
+
+    #[tokio::test]
+    async fn clear_pending_preserves_mined_notes_and_does_not_reuse_nonces() {
+        use alloy_primitives::U64;
+        use alloy_transport::mock::Asserter;
+        use kohaku_tornadocash::event::Snapshot;
+        use kohaku_tornadocash_syncer::SyncerError;
+        struct EmptySyncer;
+        #[async_trait::async_trait]
+        impl Syncer for EmptySyncer {
+            async fn sync_range(
+                &self,
+                pool: &Pool,
+                from: u64,
+                to: u64,
+            ) -> Result<Snapshot, SyncerError> {
+                Ok(Snapshot::new(pool.clone(), from..to, Vec::new()).expect("empty snapshot"))
+            }
+        }
+        let mock = Asserter::new();
+        let vault = TornadoVault::with_syncer(
+            PrivateKeySigner::random(),
+            Arc::new(crate::database::memory::MemoryDatabase::default()),
+            crate::test_support::mocked_provider(&mock),
+            DynSyncer::new(EmptySyncer),
+        );
+        let pool = Pool::ETHEREUM_ETHER_1;
+        vault.deposit(&pool).await.expect("first deposit");
+        vault.deposit(&pool).await.expect("second deposit");
+        let db = vault.pool_db(&pool);
+        let mut records = db.notes().await.expect("records");
+        records[0].leaf_index = Some(0);
+        db.put_notes(&records).await.expect("mined");
+
+        mock.push_success(&U64::from(1));
+        mock.push_success(&U64::from(pool.deployed_block + 1));
+        let cleared = vault.clear_pending(None).await.expect("clear");
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].nonce, 1);
+        assert_eq!(db.notes().await.expect("records")[0].nonce, 0);
+        assert_eq!(vault.db.next_nonce().await.expect("next nonce"), 2);
+
+        vault.deposit(&pool).await.expect("third deposit");
+        vault.deposit(&pool).await.expect("fourth deposit");
+        assert_eq!(db.notes().await.expect("records")[1].nonce, 2);
+        mock.push_success(&U64::from(1));
+        mock.push_success(&U64::from(pool.deployed_block + 2));
+        let cleared = vault.clear_pending(Some(2)).await.expect("clear one");
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].nonce, 2);
+        assert_eq!(
+            db.notes()
+                .await
+                .expect("records")
+                .iter()
+                .map(|record| record.nonce)
+                .collect::<Vec<_>>(),
+            vec![0, 3]
+        );
+        assert_eq!(vault.db.next_nonce().await.expect("next nonce"), 4);
+    }
+
+    #[tokio::test]
+    async fn configured_note_selection_excludes_extended_without_deleting_stored_notes() {
+        use alloy_primitives::U64;
+        use alloy_transport::mock::Asserter;
+        use kohaku_tornadocash::event::Snapshot;
+        use kohaku_tornadocash_syncer::SyncerError;
+        struct EmptySyncer;
+        #[async_trait::async_trait]
+        impl Syncer for EmptySyncer {
+            async fn sync_range(
+                &self,
+                pool: &Pool,
+                from: u64,
+                to: u64,
+            ) -> Result<Snapshot, SyncerError> {
+                Ok(
+                    Snapshot::new(pool.clone(), from..to, Vec::new())
+                        .expect("valid empty snapshot"),
+                )
+            }
+        }
+        let mock = Asserter::new();
+        let mut vault = TornadoVault::with_syncer(
+            PrivateKeySigner::random(),
+            Arc::new(crate::database::memory::MemoryDatabase::default()),
+            crate::test_support::mocked_provider(&mock),
+            DynSyncer::new(EmptySyncer),
+        )
+        .with_pool_selection(PoolSelection::IncludeExtended);
+        let pool = Pool::ETHEREUM_ETHER_003;
+        vault.deposit(&pool).await.expect("deposit");
+        let db = vault.pool_db(&pool);
+        let mut records = db.notes().await.expect("records");
+        records[0].leaf_index = Some(0);
+        db.put_notes(&records).await.expect("mined");
+        let amount = U256::from(pool.amount_wei);
+        for enabled in [true, false, true] {
+            vault.selection = if enabled {
+                PoolSelection::IncludeExtended
+            } else {
+                PoolSelection::Classic
+            };
+            for cover in [false, true] {
+                mock.push_success(&U64::from(1));
+                mock.push_success(&U64::from(pool.deployed_block + 1));
+                let selected = if cover {
+                    vault.cover_notes(amount).await
+                } else {
+                    vault.exact_notes(amount).await
+                };
+                assert_eq!(selected.is_ok(), enabled);
+            }
+            assert_eq!(db.notes().await.expect("records").len(), 1);
+            assert_eq!(
+                vault.db.tracked_pools().await.expect("tracked").as_slice(),
+                std::slice::from_ref(&pool)
+            );
         }
     }
 

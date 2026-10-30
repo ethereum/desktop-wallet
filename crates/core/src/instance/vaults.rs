@@ -29,6 +29,26 @@ impl Instance {
         Ok(self.profile_db(profile).vault_records().await?)
     }
 
+    /// Public addresses already stored for this profile, ordered by derivation index.
+    pub async fn stored_address_accounts(
+        &self,
+        profile: &ProfileRecord,
+    ) -> Result<Vec<DerivedAddress>, InstanceError> {
+        let mut addresses = Vec::new();
+        for record in self.vault_records(profile).await? {
+            if record.tag == ADDRESS_VAULT_TAG {
+                addresses.push(
+                    self.vault_db(profile, &record)
+                        .get_derived_address()
+                        .await?,
+                );
+            }
+        }
+        addresses.sort_by_key(|address| address.index);
+        addresses.dedup_by_key(|address| address.index);
+        Ok(addresses)
+    }
+
     /// A record and an empty database for a new vault of `tag` on `profile`.
     ///
     /// The vault is not listed until [`Self::add_vault`] is called with the record, so one whose

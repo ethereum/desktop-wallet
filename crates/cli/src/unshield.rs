@@ -2,7 +2,7 @@ use std::fmt;
 
 use alloy_primitives::{Address, U256};
 use clap::{ArgGroup, Args};
-use edw_core::vault::tornadocash::{deposit_pools, exact_notes, format_eth};
+use edw_core::vault::tornadocash::{exact_notes, format_eth};
 use serde::Serialize;
 
 use crate::{
@@ -86,8 +86,6 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     let to = destination(args.to.as_deref(), input)?;
     let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
-    let chain_id = endpoint.network_id().await?;
-    deposit_pools(amount, chain_id)?;
     let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
     eprintln!("Syncing Tornado pools...");
     let held = vault.notes().await?;

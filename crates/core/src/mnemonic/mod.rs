@@ -76,11 +76,12 @@ impl Mnemonic {
         Zeroizing::new(self.inner.to_string())
     }
 
-    /// Tornado note keychain signer at `m/44'/60'/<profileIndex>'/29795'/0/0`.
+    /// Tornado note keychain signer at `m/29795'/1'/<profileIndex>'`.
+    /// This matches kohaku-cli's signature-derived Tornado notes.
     ///
     /// This is one secp256k1 key. The vault derives every note from its signatures.
     pub fn keychain_key(&self, profile_index: u32) -> Result<SigningKey, MnemonicError> {
-        self.derive(&format!("m/44'/60'/{profile_index}'/29795'/0/0"))
+        self.derive(&format!("m/29795'/1'/{profile_index}'"))
     }
 
     /// Standard public-address key at `m/44'/60'/<profileIndex>'/0/<address_index>`.
@@ -245,5 +246,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(std_0, expected);
+    }
+
+    #[test]
+    fn tornado_key_matches_kohaku_cli_keystore() {
+        // derive-railgun-keys Mnemonic.to0xPrivateKey(FIXTURE, "m/29795'/1'/0'")
+        let expected = alloy_primitives::hex::decode_to_array::<_, 32>(
+            "5a0b790023fb11a062d90e7dc5b9164a4829271e006977b93d2618f744604993",
+        )
+        .unwrap();
+        assert_eq!(key_bytes(&fixture().keychain_key(0).unwrap()), expected);
+        assert_ne!(key_bytes(&fixture().keychain_key(1).unwrap()), expected);
+    }
+
+    #[tokio::test]
+    async fn tornado_note_matches_kohaku_cli_signature_secrets() {
+        use kohaku_tornadocash::Pool;
+        use kohaku_tornadocash_keychain::Keychain;
+
+        // @kohaku-eth/tornado-cash SignatureSecretManager, accountIndex 0,
+        // FIXTURE, nonce 0, Ethereum 1 ETH pool.
+        let signer = PrivateKeySigner::from_signing_key(fixture().keychain_key(0).unwrap());
+        let hashes = Keychain::new(signer)
+            .note_hashes(0, &[Pool::ETHEREUM_ETHER_1])
+            .await
+            .unwrap();
+        assert_eq!(
+            hashes[0].commitment.to_string(),
+            "0x099917504687de2fdf1ad0ab34b8ba7b8fb1e944922dcbb9db4e3f84f8b165ea"
+        );
+        assert_eq!(
+            hashes[0].nullifier_hash.to_string(),
+            "0x02b7ec937ae334f5881b8c264dd6b887e7bc526c79c7365e067fc2ab9737c3b6"
+        );
     }
 }
