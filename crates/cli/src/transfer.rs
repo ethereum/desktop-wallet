@@ -418,6 +418,7 @@ async fn from_tornado(plan: &Plan<'_>) -> Result<(), anyhow::Error> {
             vault: &vault,
             fresh_index: fresh.index,
             notes: &notes,
+            asset: &edw_core::vault::tornadocash::Asset::ETH,
             forward_to: None,
             minimum_forward: None,
             tail_calls: &send,

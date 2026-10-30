@@ -1,51 +1,26 @@
 //! Local end-to-end coverage; requires `alto` and `anvil` on PATH.
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 use alloy_node_bindings::Anvil;
-use alloy_primitives::{Address, B256, Bytes, Signature, U256};
+use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::{DynProvider, Provider, ProviderBuilder};
-use alloy_signer::Signer;
 use alloy_signer_local::PrivateKeySigner;
 use kohaku_fork_kit::{
     alto::AltoBuilder,
     entry_point::deploy_entry_point,
-    paymaster::{deploy_fee_adapter, deploy_paymaster},
+    paymaster::{allow_instance, deploy_paymaster},
     pool::deploy_pool,
     simple_account::deploy_simple_account,
 };
-use kohaku_tornadocash::{PaymasterInfo, Pool};
+use kohaku_tornadocash::Pool;
 
-use super::{Asset, PaymasterWithdrawalRequest, TornadoVault, submit_paymaster_withdrawal};
+use super::{Asset, PaymasterWithdrawalRequest, TornadoVault, quote_paymaster_withdrawal};
 use crate::{
     bundler::BundlerList,
     call::Call,
     database::memory::MemoryDatabase,
     network::{NetworkEndpoint, SimpleNetworkEndpoint},
 };
-
-struct CountingSigner {
-    key: PrivateKeySigner,
-    requests: AtomicUsize,
-}
-#[async_trait::async_trait]
-impl Signer for CountingSigner {
-    async fn sign_hash(&self, hash: &B256) -> alloy_signer::Result<Signature> {
-        self.requests.fetch_add(1, Ordering::SeqCst);
-        self.key.sign_hash(hash).await
-    }
-    fn address(&self) -> Address {
-        self.key.address()
-    }
-    fn chain_id(&self) -> Option<u64> {
-        self.key.chain_id()
-    }
-    fn set_chain_id(&mut self, id: Option<u64>) {
-        self.key.set_chain_id(id);
-    }
-}
 
 async fn sponsored_pool(
     provider: &DynProvider,
@@ -59,17 +34,14 @@ async fn sponsored_pool(
         Address::repeat_byte(0x22),
     )
     .await?;
-    let adapter = deploy_fee_adapter(provider.clone(), paymaster, pool.address).await?;
-    pool.paymaster = Some(PaymasterInfo {
-        address: paymaster,
-        adapter,
-    });
+    allow_instance(provider.clone(), paymaster, pool.address).await?;
+    pool.paymaster = Some(paymaster);
     Ok(pool)
 }
 
 #[tokio::test]
 #[ignore = "requires alto on PATH and slow proof generation; run in release mode"]
-async fn userop_tail_spends_unshielded_funds_and_signs_only_after_real_simulation()
+async fn userop_tail_spends_unshielded_funds_and_rejects_unfunded_final_execution()
 -> Result<(), Box<dyn std::error::Error>> {
     let anvil = Anvil::new().try_spawn()?;
     let provider = ProviderBuilder::new()
@@ -112,10 +84,7 @@ async fn userop_tail_spends_unshielded_funds_and_signs_only_after_real_simulatio
     let urls = (3000..3020)
         .map(|port| format!("http://127.0.0.1:{port}").parse())
         .collect::<Result<Vec<_>, _>>()?;
-    let owner = CountingSigner {
-        key: PrivateKeySigner::random(),
-        requests: AtomicUsize::new(0),
-    };
+    let owner = PrivateKeySigner::random();
     let recipient = Address::repeat_byte(0x42);
     let denomination = U256::from(pool.amount_wei);
     // This target succeeds with simulation funding but reverts with only real proceeds.
@@ -127,10 +96,10 @@ async fn userop_tail_spends_unshielded_funds_and_signs_only_after_real_simulatio
         .raw_request::<_, ()>("anvil_setCode".into(), (trap, code))
         .await?;
     let trapped = [Call::new(trap, Bytes::new(), U256::ZERO)];
-    let rejected = submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
+    let rejected = quote_paymaster_withdrawal(PaymasterWithdrawalRequest {
         vault: &vault,
         provider: provider.clone(),
-        owner: &owner,
+        owner: owner.clone(),
         asset: &Asset::ETH,
         tail_calls: &trapped,
         notes: &notes,
@@ -139,23 +108,24 @@ async fn userop_tail_spends_unshielded_funds_and_signs_only_after_real_simulatio
         chain_id,
         bundlers: BundlerList::from_urls(chain_id, &urls)?,
     })
+    .await?
+    .submit()
     .await;
     let Err(error) = rejected else {
         return Err("unfunded final execution should fail".into());
     };
     assert!(
-        error.to_string().contains("final operation simulation"),
+        error.to_string().contains("bundler") || error.to_string().contains("gas"),
         "{error}"
     );
-    assert_eq!(owner.requests.load(Ordering::SeqCst), 0);
     assert!(!vault.notes().await?[0].spent);
-    // The seed quote leaves only 90%; this call deliberately needs 95%.
+    // A successful tail consumes most of the withdrawn ETH.
     let value = denomination * U256::from(95) / U256::from(100);
     let calls = [Call::new(recipient, Bytes::new(), value)];
-    let submitted = submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
+    let submitted = quote_paymaster_withdrawal(PaymasterWithdrawalRequest {
         vault: &vault,
         provider: provider.clone(),
-        owner: &owner,
+        owner: owner.clone(),
         asset: &Asset::ETH,
         tail_calls: &calls,
         notes: &notes,
@@ -164,9 +134,9 @@ async fn userop_tail_spends_unshielded_funds_and_signs_only_after_real_simulatio
         chain_id,
         bundlers: BundlerList::from_urls(chain_id, &urls)?,
     })
+    .await?
+    .submit()
     .await?;
-    // UserOp and 7702 authorization, with no signing during either fee quote.
-    assert_eq!(owner.requests.load(Ordering::SeqCst), 2);
     submitted.wait().await?;
     assert_eq!(provider.get_balance(recipient).await?, value);
     let remainder = provider.get_balance(owner.address()).await?;
@@ -204,10 +174,10 @@ async fn check_forward(
         .collect::<Vec<_>>();
     let owner = PrivateKeySigner::random();
     let recipient = Address::repeat_byte(0x66);
-    let submitted = submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
+    let submitted = quote_paymaster_withdrawal(PaymasterWithdrawalRequest {
         vault,
         provider: provider.clone(),
-        owner: &owner,
+        owner: owner.clone(),
         asset: &Asset::ETH,
         tail_calls: &[],
         notes: &notes,
@@ -216,6 +186,8 @@ async fn check_forward(
         chain_id: pool.chain_id,
         bundlers: BundlerList::from_urls(pool.chain_id, urls)?,
     })
+    .await?
+    .submit()
     .await?;
     submitted.wait().await?;
     assert_eq!(
@@ -259,10 +231,10 @@ async fn check_prepared_reshield(
         .collect();
     let owner = PrivateKeySigner::random();
     assert_eq!(provider.get_balance(owner.address()).await?, U256::ZERO);
-    let submitted = submit_paymaster_withdrawal(PaymasterWithdrawalRequest {
+    let submitted = quote_paymaster_withdrawal(PaymasterWithdrawalRequest {
         vault,
         provider: provider.clone(),
-        owner: &owner,
+        owner: owner.clone(),
         asset: &Asset::ETH,
         tail_calls: &calls,
         notes: &notes,
@@ -271,6 +243,8 @@ async fn check_prepared_reshield(
         chain_id: source.chain_id,
         bundlers: BundlerList::from_urls(source.chain_id, urls)?,
     })
+    .await?
+    .submit()
     .await?;
     submitted.wait().await?;
     let held = vault.notes().await?;

@@ -1,4 +1,4 @@
-//! Simulation funding compensates only the SDK's temporary 10% sponsor fee.
+//! Simulation funding lets a quote estimate calls that consume withdrawn ETH.
 //! Real withdrawals still execute. No override is used to validate or submit the final operation.
 use alloy_primitives::{Address, U256};
 use alloy_provider::{DynProvider, Provider};
@@ -75,7 +75,7 @@ pub(super) async fn seed_overrides(
             "only ETH notes may sponsor withdrawals".into(),
         ));
     }
-    let seed = U256::from(pool.amount_wei) / U256::from(10);
+    let seed = U256::from(pool.amount_wei);
     let balance = provider
         .get_balance(owner)
         .await
@@ -106,10 +106,7 @@ mod tests {
         let owner = Address::repeat_byte(0x42);
         let pool = Pool::ETHEREUM_ETHER_01;
         let overrides = seed_overrides(&provider, &pool, owner).await.unwrap();
-        assert_eq!(
-            overrides[&owner].balance,
-            Some(U256::from(pool.amount_wei / 10))
-        );
+        assert_eq!(overrides[&owner].balance, Some(U256::from(pool.amount_wei)));
         assert_eq!(provider.get_balance(owner).await.unwrap(), U256::ZERO);
     }
 }

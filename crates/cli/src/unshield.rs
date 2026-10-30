@@ -2,8 +2,9 @@ use std::fmt;
 
 use alloy_primitives::{Address, U256};
 use clap::{ArgGroup, Args};
-use edw_core::vault::tornadocash::{
-    deposit_pools_for_asset, format_amount, resolve_asset, withdrawal_notes,
+use edw_core::{
+    instance::FreshAddress,
+    vault::tornadocash::{Asset, TornadoNote, format_amount, resolve_asset, withdrawal_notes},
 };
 use serde::Serialize;
 
@@ -11,8 +12,9 @@ use crate::{
     GlobalArgs, failure,
     report::Report,
     spend::{
-        ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster, first_bundler,
-        mnemonic, open_vault, parse_address, parse_tail_calls, submit_shielded, token_amount,
+        Consent, ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster,
+        first_bundler, keep_fresh, mnemonic, open_vault, parse_tail_calls, quote_shielded,
+        recipient_address, submit_shielded, token_amount,
     },
 };
 
@@ -31,6 +33,12 @@ pub struct UnshieldArgs {
     /// Calls after withdrawal, from the fresh account: TARGET:CALLDATA[:WEI],...
     #[arg(long, conflicts_with = "to", value_parser = validate_tail_calls)]
     tail_calls: Option<String>,
+    /// Quote the sponsor fee without signing, sending, or reserving the fresh address.
+    #[arg(long)]
+    quote: bool,
+    /// Send ETH left after custom calls and the quoted fee to this address in the same `UserOp`.
+    #[arg(long, requires = "tail_calls", conflicts_with = "to")]
+    sweep_to: Option<String>,
     /// Where the selected asset is forwarded. Omitted, it stays on the fresh address.
     #[arg(long)]
     to: Option<String>,
@@ -39,6 +47,8 @@ pub struct UnshieldArgs {
     expected_fresh_address: Option<Address>,
     #[arg(long)]
     profile: Option<String>,
+    #[command(flatten)]
+    consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -63,6 +73,36 @@ struct UnshieldReport {
     transaction: String,
 }
 
+#[derive(Serialize)]
+struct UnshieldQuoteReport {
+    fresh_index: u32,
+    fresh_address: String,
+    token: String,
+    fee_token: String,
+    fee_raw: String,
+    available_raw: String,
+    tail_value_raw: String,
+    sweep_value_raw: Option<String>,
+    bundler: String,
+    tail_calls: usize,
+    notes: Vec<NoteLine>,
+}
+
+impl Report for UnshieldQuoteReport {
+    const KIND: &'static str = "edw/unshield-quote";
+    const VERSION: u32 = 1;
+}
+
+impl fmt::Display for UnshieldQuoteReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Quote: fee {} wei; available {} base units; fresh {} {}. No transaction was sent.",
+            self.fee_raw, self.available_raw, self.fresh_index, self.fresh_address
+        )
+    }
+}
+
 impl Report for UnshieldReport {
     const KIND: &'static str = "edw/unshield";
     const VERSION: u32 = 2;
@@ -85,8 +125,11 @@ impl fmt::Display for UnshieldReport {
 }
 
 pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow::Error> {
-    let instance = global.open().await?;
     let input = global.input();
+    if !args.quote {
+        args.consent.ensure_possible(input)?;
+    }
+    let instance = global.open().await?;
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
     let endpoint = instance.rpc().await?;
     let chain_id = endpoint.network_id().await?;
@@ -98,13 +141,19 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         input,
         &asset,
     )?;
-    let to = if tails.is_empty() {
+    let to = if let Some(sweep) = &args.sweep_to {
+        if asset != edw_core::vault::tornadocash::Asset::ETH {
+            return Err(failure::usage(
+                "--sweep-to currently supports ETH unshields only",
+            ));
+        }
+        Some(recipient_address(sweep)?)
+    } else if tails.is_empty() {
         destination(args.to.as_deref(), input)?
     } else {
         None
     };
     let phrase = mnemonic(&instance, &profile).await?;
-    deposit_pools_for_asset(amount, chain_id, &asset)?;
     let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
     eprintln!("Syncing Tornado pools...");
     let held = vault.notes().await?;
@@ -116,35 +165,7 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
     verify_fresh(args.expected_fresh_address, fresh.address)?;
     let bundler_urls = instance.bundler_urls().await?;
     let bundler = first_bundler(&bundler_urls)?;
-    let description = format!(
-        "Unshield {} {} to fresh {} ({}).\n{}\n{} custom tail calls. Bundler {bundler}.",
-        format_amount(amount, asset.decimals()),
-        asset.symbol().to_uppercase(),
-        fresh.index,
-        fresh.address,
-        note_lines(&notes)
-            .iter()
-            .map(|n| format!("{} {}", n.role, n.amount))
-            .collect::<Vec<_>>()
-            .join(" + "),
-        tails.len()
-    );
-    let description = if let Some(to) = to {
-        format!(
-            "{description}\nForward remaining {} to {to}.",
-            asset.symbol().to_uppercase()
-        )
-    } else {
-        format!("{description}\nRemainder stays on the fresh account.")
-    };
-    for call in &tails {
-        eprintln!("tail {}:{}:{}", call.target, call.data, call.value);
-    }
-    if !confirm(input, &description)? {
-        declined();
-        return Ok(());
-    }
-    let submitted = submit_shielded(ShieldedWithdrawal {
+    let withdrawal = ShieldedWithdrawal {
         phrase: &phrase,
         profile_index: profile.profile_index,
         endpoint: endpoint.as_ref(),
@@ -156,10 +177,30 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         asset: &asset,
         minimum_forward: None,
         bundler_urls: &bundler_urls,
-    })
-    .await?;
-    instance.commit_fresh_address(&profile, fresh.index).await?;
-    let transaction = submitted.wait().await?;
+    };
+    if args.quote {
+        return emit_quote(
+            global,
+            withdrawal,
+            &fresh,
+            &asset,
+            &notes,
+            bundler,
+            tails.len(),
+        )
+        .await;
+    }
+    let description = confirmation(amount, &asset, &fresh, &notes, tails.len(), to, &bundler);
+    for call in &tails {
+        eprintln!("tail {}:{}:{}", call.target, call.data, call.value);
+    }
+    if !confirm(input, &args.consent, &description)? {
+        declined();
+        return Ok(());
+    }
+    let submitted = submit_shielded(withdrawal).await?;
+    keep_fresh(&instance, &profile, &fresh).await;
+    let transaction = submitted.wait().await?.transaction;
     UnshieldReport {
         fresh_index: fresh.index,
         fresh_address: fresh.address.to_string(),
@@ -177,6 +218,79 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         transaction: transaction.to_string(),
     }
     .emit(global.mode())
+}
+
+async fn emit_quote(
+    global: &GlobalArgs,
+    withdrawal: ShieldedWithdrawal<'_>,
+    fresh: &FreshAddress,
+    asset: &Asset,
+    notes: &[TornadoNote],
+    bundler: String,
+    tail_calls: usize,
+) -> Result<(), anyhow::Error> {
+    let quoted = quote_shielded(withdrawal).await?;
+    let sum: U256 = notes
+        .iter()
+        .filter(|note| note.pool.asset == *asset)
+        .map(|note| U256::from(note.pool.amount_wei))
+        .sum();
+    let available = if asset == &Asset::ETH {
+        sum.saturating_sub(quoted.fee)
+    } else {
+        sum
+    };
+    UnshieldQuoteReport {
+        fresh_index: fresh.index,
+        fresh_address: fresh.address.to_string(),
+        token: asset.symbol().to_uppercase(),
+        fee_token: "ETH".to_string(),
+        fee_raw: quoted.fee.to_string(),
+        available_raw: available.to_string(),
+        tail_value_raw: if asset == &Asset::ETH {
+            available
+        } else {
+            U256::ZERO
+        }
+        .to_string(),
+        sweep_value_raw: quoted.forwarded.map(|value| value.to_string()),
+        bundler,
+        tail_calls,
+        notes: note_lines(notes),
+    }
+    .emit(global.mode())
+}
+
+fn confirmation(
+    amount: U256,
+    asset: &Asset,
+    fresh: &FreshAddress,
+    notes: &[TornadoNote],
+    tail_calls: usize,
+    to: Option<Address>,
+    bundler: &str,
+) -> String {
+    let description = format!(
+        "Unshield {} {} to fresh {} ({}).\n{}\n{} custom tail calls. Bundler {bundler}.",
+        format_amount(amount, asset.decimals()),
+        asset.symbol().to_uppercase(),
+        fresh.index,
+        fresh.address,
+        note_lines(notes)
+            .iter()
+            .map(|note| format!("{} {}", note.role, note.amount))
+            .collect::<Vec<_>>()
+            .join(" + "),
+        tail_calls,
+    );
+    if let Some(to) = to {
+        format!(
+            "{description}\nForward remaining {} to {to}.",
+            asset.symbol().to_uppercase()
+        )
+    } else {
+        format!("{description}\nRemainder stays on the fresh account.")
+    }
 }
 
 fn verify_fresh(expected: Option<Address>, actual: Address) -> Result<(), anyhow::Error> {
@@ -221,7 +335,7 @@ fn destination(
     };
     match text.as_deref() {
         None | Some("") => Ok(None),
-        Some(value) => Ok(Some(parse_address(value)?)),
+        Some(value) => Ok(Some(recipient_address(value)?)),
     }
 }
 
@@ -248,6 +362,44 @@ fn validate_tail_calls(raw: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn quote_and_sweep_parse_without_broadcast_consent() {
+        let tail = "0x1111111111111111111111111111111111111111:0x:1";
+        assert!(
+            crate::Cli::try_parse_from([
+                "edw",
+                "unshield",
+                "--quote",
+                "--tail-calls",
+                tail,
+                "--non-interactive"
+            ])
+            .is_ok()
+        );
+        assert!(
+            crate::Cli::try_parse_from([
+                "edw",
+                "unshield",
+                "--tail-calls",
+                tail,
+                "--sweep-to",
+                "0x2222222222222222222222222222222222222222",
+                "--yes"
+            ])
+            .is_ok()
+        );
+        assert!(
+            crate::Cli::try_parse_from([
+                "edw",
+                "unshield",
+                "--sweep-to",
+                "0x2222222222222222222222222222222222222222"
+            ])
+            .is_err()
+        );
+    }
     #[test]
     fn expected_address_is_optional_but_mismatch_aborts() {
         let actual = Address::repeat_byte(0x11);

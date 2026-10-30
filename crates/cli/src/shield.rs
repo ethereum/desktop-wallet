@@ -1,22 +1,29 @@
 use std::fmt;
 
 use alloy_primitives::{Address, U256};
+use alloy_signer_local::PrivateKeySigner;
 use clap::{ArgGroup, Args};
 use edw_core::{
     broadcast::submit_user_operation,
     bundler::Url,
     call::Call,
+    instance::Instance,
     network::NetworkEndpoint,
-    vault::tornadocash::{deposit_pools_for_asset, format_amount, format_eth, resolve_asset},
+    vault::tornadocash::{
+        Asset, Pool, TornadoVault, format_amount, format_eth, parse_amount, resolve_asset,
+        token_address, token_balance,
+    },
 };
+use futures::{StreamExt, TryStreamExt, stream};
 use serde::Serialize;
 
 use crate::{
     GlobalArgs, failure,
+    input::Input,
     report::Report,
     spend::{
-        Account, account_at, choose_profile, confirm, declined, mnemonic, open_vault, send_one,
-        token_amount,
+        Account, Consent, account_at, choose_profile, confirm, declined, mnemonic, open_vault,
+        send_one, token_amount,
     },
 };
 
@@ -32,6 +39,9 @@ pub struct ShieldArgs {
     /// Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC.
     #[arg(long, default_value = "ETH")]
     token: String,
+    /// Exact pool sizes in the selected token, separated by commas.
+    #[arg(long)]
+    denominations: Option<String>,
     /// Reserve notes and return deposit calls without checking balances or broadcasting.
     #[arg(long, conflicts_with = "from")]
     prepare: bool,
@@ -40,6 +50,8 @@ pub struct ShieldArgs {
     from: Option<u32>,
     #[arg(long)]
     profile: Option<String>,
+    #[command(flatten)]
+    consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -126,25 +138,36 @@ impl fmt::Display for ShieldReport {
 }
 
 pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::Error> {
-    let instance = global.open().await?;
     let input = global.input();
+    if !args.prepare {
+        args.consent.ensure_possible(input)?;
+    }
+    let instance = global.open().await?;
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
     let endpoint = instance.rpc().await?;
     let chain_id = endpoint.network_id().await?;
     let asset = resolve_asset(&args.token, chain_id).map_err(failure::usage)?;
     let symbol = asset.symbol().to_uppercase();
-    let amount = token_amount(
-        args.amount_formatted.as_deref(),
-        args.amount_raw.as_deref(),
-        input,
-        &asset,
-    )?;
-    let pools = deposit_pools_for_asset(amount, chain_id, &asset)?;
+    let phrase = mnemonic(&instance, &profile).await?;
+    let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
+    let (pools, amount) = plan_pools(args, input, &asset, &vault).await?;
     if args.prepare {
-        return prepare(global, &instance, &profile, endpoint, &pools).await;
+        let deposits = vault.prepare_deposits(&pools).await?;
+        return prepared_report(deposits)?.emit(global.mode());
     }
     let from = match args.from {
         Some(index) => index,
+        None if input == Input::Terminal => {
+            choose_funded_payer(
+                &instance,
+                &profile,
+                endpoint.as_ref(),
+                amount,
+                &asset,
+                input,
+            )
+            .await?
+        }
         None => input
             .line("Pay from address index [0]: ")?
             .filter(|line| !line.is_empty())
@@ -155,7 +178,6 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
             .transpose()?
             .unwrap_or(0),
     };
-    let phrase = mnemonic(&instance, &profile).await?;
     let payer = account_at(&phrase, profile.profile_index, from)?;
     let notes: Vec<String> = pools
         .iter()
@@ -173,38 +195,11 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
         payer.address,
         pools.len() > 1 || edw_core::vault::tornadocash::token_address(&asset).is_some(),
     );
-    if !confirm(input, &summary)? {
+    if !confirm(input, &args.consent, &summary)? {
         declined();
         return Ok(());
     }
-    let balance = endpoint.balance(payer.address).await?;
-    let total: U256 = pools.iter().map(|pool| U256::from(pool.amount_wei)).sum();
-    if let Some(token) = edw_core::vault::tornadocash::token_address(&asset) {
-        let held =
-            edw_core::vault::tornadocash::token_balance(endpoint.as_ref(), token, payer.address)
-                .await?;
-        if held < total {
-            anyhow::bail!(
-                "insufficient {symbol}: have {}, need {}",
-                format_amount(held, asset.decimals()),
-                format_amount(total, asset.decimals())
-            );
-        }
-    }
-    let eth_required = if edw_core::vault::tornadocash::token_address(&asset).is_none() {
-        total
-    } else {
-        U256::ZERO
-    };
-    if balance <= eth_required {
-        anyhow::bail!(
-            "{} has {} ETH, which does not cover {} ETH plus gas",
-            payer.address,
-            format_eth(balance),
-            format_eth(eth_required)
-        );
-    }
-    let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
+    check_balances(endpoint.as_ref(), &payer, &asset, amount).await?;
     let mut calls = Vec::new();
     for pool in &pools {
         calls.extend(vault.deposit(pool).await?);
@@ -226,17 +221,165 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     .emit(global.mode())
 }
 
-async fn prepare(
-    global: &GlobalArgs,
-    instance: &edw_core::instance::Instance,
-    profile: &edw_core::profile::ProfileRecord,
-    endpoint: std::sync::Arc<dyn NetworkEndpoint>,
-    pools: &[edw_core::vault::tornadocash::Pool],
+async fn plan_pools(
+    args: &ShieldArgs,
+    input: Input,
+    asset: &Asset,
+    vault: &TornadoVault<PrivateKeySigner>,
+) -> Result<(Vec<Pool>, U256), anyhow::Error> {
+    let denominations = args
+        .denominations
+        .as_deref()
+        .map(|raw| parse_denominations(raw, asset))
+        .transpose()?;
+    let requested = if denominations.is_none()
+        || args.amount_formatted.is_some()
+        || args.amount_raw.is_some()
+    {
+        Some(token_amount(
+            args.amount_formatted.as_deref(),
+            args.amount_raw.as_deref(),
+            input,
+            asset,
+        )?)
+    } else {
+        None
+    };
+    let pools = if let Some(denominations) = &denominations {
+        vault
+            .deposit_pools_for_asset_denominations(denominations, asset)
+            .await?
+    } else {
+        vault
+            .deposit_pools_for_asset(
+                requested.ok_or_else(|| failure::usage("shield amount is required"))?,
+                asset,
+            )
+            .await?
+    };
+    let amount: U256 = pools.iter().map(|pool| U256::from(pool.amount_wei)).sum();
+    if let Some(requested) = requested
+        && requested != amount
+    {
+        anyhow::bail!(
+            "--denominations sum to {} {}, but the requested shield amount is {} {}",
+            format_amount(amount, asset.decimals()),
+            asset.symbol().to_uppercase(),
+            format_amount(requested, asset.decimals()),
+            asset.symbol().to_uppercase()
+        );
+    }
+    Ok((pools, amount))
+}
+
+async fn check_balances(
+    endpoint: &dyn NetworkEndpoint,
+    payer: &Account,
+    asset: &Asset,
+    total: U256,
 ) -> Result<(), anyhow::Error> {
-    let phrase = mnemonic(instance, profile).await?;
-    let vault = open_vault(instance, profile, &phrase, endpoint).await?;
-    let deposits = vault.prepare_deposits(pools).await?;
-    prepared_report(deposits)?.emit(global.mode())
+    if let Some(token) = token_address(asset) {
+        let held = token_balance(endpoint, token, payer.address).await?;
+        if held < total {
+            anyhow::bail!(
+                "insufficient {}: have {}, need {}",
+                asset.symbol().to_uppercase(),
+                format_amount(held, asset.decimals()),
+                format_amount(total, asset.decimals())
+            );
+        }
+    }
+    let eth_required = if token_address(asset).is_none() {
+        total
+    } else {
+        U256::ZERO
+    };
+    let balance = endpoint.balance(payer.address).await?;
+    if balance <= eth_required {
+        anyhow::bail!(
+            "{} has {} ETH, which does not cover {} ETH plus gas",
+            payer.address,
+            format_eth(balance),
+            format_eth(eth_required)
+        );
+    }
+    Ok(())
+}
+
+fn parse_denominations(raw: &str, asset: &Asset) -> Result<Vec<U256>, anyhow::Error> {
+    if raw.is_empty() {
+        anyhow::bail!("--denominations needs one to five comma-separated pool sizes");
+    }
+    raw.split(',')
+        .map(|part| {
+            if part.trim().is_empty() {
+                anyhow::bail!("--denominations contains an empty pool size");
+            }
+            Ok(parse_amount(part.trim(), asset.decimals())?)
+        })
+        .collect()
+}
+
+async fn choose_funded_payer(
+    instance: &Instance,
+    profile: &edw_core::profile::ProfileRecord,
+    endpoint: &dyn NetworkEndpoint,
+    amount: U256,
+    asset: &Asset,
+    input: Input,
+) -> Result<u32, anyhow::Error> {
+    let token = token_address(asset);
+    let addresses = instance.stored_address_accounts(profile).await?;
+    let balances: Vec<(u32, U256, U256)> = stream::iter(addresses)
+        .map(|account| async move {
+            let eth = endpoint.balance(account.address).await?;
+            let held = if let Some(token) = token {
+                token_balance(endpoint, token, account.address).await?
+            } else {
+                eth
+            };
+            Ok::<_, anyhow::Error>((account.index, eth, held))
+        })
+        .buffered(8)
+        .try_collect()
+        .await?;
+    let mut funded: Vec<u32> = balances
+        .into_iter()
+        .filter_map(|(index, eth, held)| {
+            (eth > if token.is_some() { U256::ZERO } else { amount } && held >= amount)
+                .then_some(index)
+        })
+        .collect();
+    funded.sort_unstable();
+    funded.dedup();
+    let Some(&default) = funded.first() else {
+        anyhow::bail!(
+            "no stored address has enough {} and ETH for gas; fund an address or pass --from <index>",
+            asset.symbol().to_uppercase()
+        );
+    };
+    let listed = funded
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let entered = input
+        .line(&format!(
+            "Pay from address index [{listed}] (default {default}): "
+        ))?
+        .unwrap_or_default();
+    if entered.is_empty() {
+        return Ok(default);
+    }
+    let index = entered
+        .parse::<u32>()
+        .map_err(|_| failure::usage(format!("`{entered}` is not an address index")))?;
+    if !funded.contains(&index) {
+        return Err(failure::usage(format!(
+            "address index {index} is not among the funded choices [{listed}]"
+        )));
+    }
+    Ok(index)
 }
 
 fn prepared_report(
@@ -362,6 +505,27 @@ mod tests {
     use edw_core::vault::tornadocash::{Pool, PreparedDeposit};
 
     use super::*;
+
+    #[test]
+    fn explicit_token_denominations_keep_the_requested_units() {
+        let parsed = parse_denominations("100,1000", &Asset::ETHEREUM_USDC).unwrap();
+        assert_eq!(
+            parsed,
+            vec![U256::from(100_000_000_u64), U256::from(1_000_000_000_u64)]
+        );
+        assert!(
+            crate::Cli::try_parse_from([
+                "edw",
+                "shield",
+                "--token",
+                "USDC",
+                "--denominations",
+                "100,1000",
+                "--yes"
+            ])
+            .is_ok()
+        );
+    }
 
     #[test]
     fn prepare_needs_no_from_and_returns_roundtrippable_public_calls() {

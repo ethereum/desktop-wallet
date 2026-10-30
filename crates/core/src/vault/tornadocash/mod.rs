@@ -5,20 +5,24 @@ use alloy_signer::{Signer, k256::ecdsa::SigningKey};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
 pub use amount::{
-    AmountError, cover_notes, deposit_pools, deposit_pools_for_asset, exact_notes,
+    AmountError, PoolSelection, cover_notes, deposit_pools, deposit_pools_for_asset,
+    deposit_pools_for_asset_denominations, deposit_pools_for_asset_with_selection,
+    deposit_pools_for_denominations, deposit_pools_with_selection, exact_notes,
     exact_notes_for_asset, format_amount, format_eth, parse_amount, parse_eth, parse_wei,
     resolve_asset, withdrawal_notes,
 };
 pub use kohaku_tornadocash::{Asset, Pool};
 use kohaku_tornadocash::{
     Deposit, Note, Withdrawal, WithdrawalError,
+    event::SyncEvent,
     merkle_tree::{MerkleProof, MerkleTree, MerkleTreeExt},
-    syncer::{DynSyncer, SyncEvent, Syncer},
 };
 use kohaku_tornadocash_keychain::{Keychain, KeychainError, recover};
+use kohaku_tornadocash_syncer::{DynSyncer, Syncer};
 use tokio::sync::Mutex;
 pub use userop::{
-    PaymasterWithdrawal, PaymasterWithdrawalRequest, UserOpError, submit_paymaster_withdrawal,
+    IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest, QuotedWithdrawal,
+    UserOpError, WithdrawalCost, quote_paymaster_withdrawal,
 };
 
 use crate::{
@@ -58,6 +62,7 @@ sol!(
 /// Each deposit creates one note in a single pool, and each withdrawal spends one note. Choosing
 /// which pools to deposit to and which notes to withdraw is left to the caller.
 pub struct TornadoVault<S: Signer + Send + Sync> {
+    selection: PoolSelection,
     trees_cache: Mutex<HashMap<Pool, MerkleTree>>,
     address: Address,
     keychain: Keychain<S>,
@@ -99,12 +104,16 @@ pub struct UnspentNote {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TornadoVaultError {
+    #[error(transparent)]
+    Amount(#[from] AmountError),
+    #[error("extended pool {0} is disabled")]
+    ExtendedDisabled(String),
     #[error("database error: {0}")]
     Database(#[from] db::TornadoVaultDbError),
     #[error("provider error: {0}")]
     Provider(#[from] crate::network::NetworkEndpointError),
     #[error("syncer error: {0}")]
-    Syncer(#[from] kohaku_tornadocash::syncer::SyncerError),
+    Syncer(#[from] kohaku_tornadocash_syncer::SyncerError),
     #[error("keychain error: {0}")]
     Keychain(#[from] KeychainError),
     #[error("withdrawal error: {0}")]
@@ -148,6 +157,50 @@ impl TornadoVault<PrivateKeySigner> {
 }
 
 impl<S: Signer + Send + Sync> TornadoVault<S> {
+    pub async fn deposit_pools(&self, amount: U256) -> Result<Vec<Pool>, TornadoVaultError> {
+        Ok(deposit_pools_with_selection(
+            amount,
+            self.provider.network_id().await?,
+            self.selection,
+        )?)
+    }
+    pub async fn deposit_pools_for_asset(
+        &self,
+        amount: U256,
+        asset: &Asset,
+    ) -> Result<Vec<Pool>, TornadoVaultError> {
+        Ok(deposit_pools_for_asset_with_selection(
+            amount,
+            self.provider.network_id().await?,
+            asset,
+            self.selection,
+        )?)
+    }
+
+    pub async fn deposit_pools_for_denominations(
+        &self,
+        denominations: &[U256],
+    ) -> Result<Vec<Pool>, TornadoVaultError> {
+        Ok(deposit_pools_for_denominations(
+            denominations,
+            self.provider.network_id().await?,
+            self.selection,
+        )?)
+    }
+
+    pub async fn deposit_pools_for_asset_denominations(
+        &self,
+        denominations: &[U256],
+        asset: &Asset,
+    ) -> Result<Vec<Pool>, TornadoVaultError> {
+        Ok(deposit_pools_for_asset_denominations(
+            denominations,
+            self.provider.network_id().await?,
+            asset,
+            self.selection,
+        )?)
+    }
+
     async fn operation_lock(&self) -> Result<crate::database::DatabaseGuard, TornadoVaultError> {
         Ok(self
             .db
@@ -170,6 +223,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         syncer: DynSyncer,
     ) -> Self {
         Self {
+            selection: PoolSelection::default(),
             trees_cache: Mutex::new(HashMap::new()),
             address: signer.address(),
             keychain: Keychain::new(signer),
@@ -179,8 +233,24 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         }
     }
 
+    #[must_use]
+    pub fn with_pool_selection(mut self, selection: PoolSelection) -> Self {
+        self.selection = selection;
+        self
+    }
+
+    fn check_pool(&self, pool: &Pool) -> Result<(), TornadoVaultError> {
+        if !self.selection.includes(pool) {
+            return Err(TornadoVaultError::ExtendedDisabled(pool.id()));
+        }
+        Ok(())
+    }
+
     /// Syncs the given pools' events up to the latest block, updating the vault's notes.
     pub async fn sync(&self, pools: &[Pool]) -> Result<(), TornadoVaultError> {
+        for pool in pools {
+            self.check_pool(pool)?;
+        }
         let _guard = self.operation_lock().await?;
         self.sync_unlocked(pools).await
     }
@@ -210,9 +280,26 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         pools: &[Pool],
         gap_limit: Option<u64>,
     ) -> Result<(), TornadoVaultError> {
+        self.recover_with_gap_and_progress(pools, gap_limit, |_, _, _| {})
+            .await
+    }
+
+    async fn recover_with_gap_and_progress(
+        &self,
+        pools: &[Pool],
+        gap_limit: Option<u64>,
+        mut progress: impl FnMut(usize, usize, &Pool),
+    ) -> Result<(), TornadoVaultError> {
+        for pool in pools {
+            self.check_pool(pool)?;
+        }
         let _guard = self.operation_lock().await?;
         self.track(pools).await?;
-        self.sync_unlocked(pools).await?;
+        let end = self.provider.block_height().await?.saturating_add(1);
+        for (index, pool) in pools.iter().enumerate() {
+            progress(index + 1, pools.len(), pool);
+            self.sync_pool(pool, end).await?;
+        }
 
         let mut snapshots = Vec::new();
         for pool in pools {
@@ -277,13 +364,23 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         &self,
         gap_limit: Option<u64>,
     ) -> Result<usize, TornadoVaultError> {
+        self.recover_chain_with_gap_and_progress(gap_limit, |_, _, _| {})
+            .await
+    }
+
+    pub async fn recover_chain_with_gap_and_progress(
+        &self,
+        gap_limit: Option<u64>,
+        progress: impl FnMut(usize, usize, &Pool),
+    ) -> Result<usize, TornadoVaultError> {
         let chain_id = self.provider.network_id().await?;
         let pools: Vec<Pool> = Pool::POOLS
             .iter()
-            .filter(|pool| pool.chain_id == chain_id)
+            .filter(|pool| pool.chain_id == chain_id && self.selection.includes(pool))
             .cloned()
             .collect();
-        self.recover_with_gap(&pools, gap_limit).await?;
+        self.recover_with_gap_and_progress(&pools, gap_limit, progress)
+            .await?;
         let notes = self.pool_notes(&pools).await?;
         Ok(notes
             .iter()
@@ -310,6 +407,9 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         &self,
         pools: &[Pool],
     ) -> Result<Vec<PreparedDeposit>, TornadoVaultError> {
+        for pool in pools {
+            self.check_pool(pool)?;
+        }
         let _guard = self.operation_lock().await?;
         self.track(pools).await?;
         let mut deposits = Vec::with_capacity(pools.len());
@@ -331,11 +431,53 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
             .tracked_pools()
             .await?
             .into_iter()
-            .filter(|pool| pool.chain_id == chain_id)
+            .filter(|pool| pool.chain_id == chain_id && self.selection.includes(pool))
             .collect();
 
         self.sync_unlocked(&pools).await?;
         self.pool_notes(&pools).await
+    }
+
+    /// Forgets unmined deposits after syncing tracked pools. Nonces are never reused.
+    pub async fn clear_pending(
+        &self,
+        nonce: Option<u64>,
+    ) -> Result<Vec<TornadoNote>, TornadoVaultError> {
+        let _guard = self.operation_lock().await?;
+        let chain_id = self.provider.network_id().await?;
+        let pools: Vec<Pool> = self
+            .db
+            .tracked_pools()
+            .await?
+            .into_iter()
+            .filter(|pool| pool.chain_id == chain_id)
+            .collect();
+        let end = self.provider.block_height().await?.saturating_add(1);
+        for pool in &pools {
+            self.sync_pool(pool, end).await?;
+        }
+        let mut cleared = Vec::new();
+        for pool in &pools {
+            let db = self.pool_db(pool);
+            let mut records = db.notes().await?;
+            records.retain(|record| {
+                if record.leaf_index.is_some()
+                    || record.spent
+                    || nonce.is_some_and(|n| n != record.nonce)
+                {
+                    return true;
+                }
+                cleared.push(TornadoNote {
+                    pool: pool.clone(),
+                    nonce: record.nonce,
+                    leaf_index: None,
+                    spent: false,
+                });
+                false
+            });
+            db.put_notes(&records).await?;
+        }
+        Ok(cleared)
     }
 
     /// Returns the call that withdraws `note` to `to`.
@@ -352,11 +494,8 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         };
         let (withdrawal, proof) = self.withdrawal_inputs(note, *recipient).await?;
         let proven = withdrawal.prove(&proof, &mut rand::rng())?;
-        Ok(Call::new(
-            proven.target(),
-            proven.input().into(),
-            U256::ZERO,
-        ))
+        let call = proven.call();
+        Ok(Call::new(call.target, call.input, call.value))
     }
 
     /// The unproven withdrawal of `note` to `recipient`, and the merkle proof it commits to.
@@ -368,6 +507,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         note: &TornadoNote,
         recipient: Address,
     ) -> Result<(Withdrawal, MerkleProof), TornadoVaultError> {
+        self.check_pool(&note.pool)?;
         if note.spent {
             return Err(TornadoVaultError::NoteSpent(note.nonce));
         }
@@ -461,7 +601,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         self.trees_cache.lock().await.remove(pool);
 
         let mut notes = pool_db.notes().await?;
-        apply_events(&mut notes, &snapshot.events);
+        apply_events(&mut notes, snapshot.events());
         pool_db.put_notes(&notes).await?;
 
         //? Last, so a sync interrupted before here is redone from the same block. Every step
@@ -511,11 +651,8 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         let commitment = note.commitment().into();
         let deposit = Deposit::new(pool, note);
         let mut calls: Vec<Call> = approval(pool).into_iter().collect();
-        calls.push(Call::new(
-            deposit.target(),
-            deposit.input().into(),
-            deposit.value(),
-        ));
+        let call = deposit.call();
+        calls.push(Call::new(call.target, call.input, call.value));
         Ok(PreparedDeposit {
             pool: pool.clone(),
             nonce,
@@ -543,7 +680,7 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
     async fn build_tree(&self, pool: &Pool) -> Result<MerkleTree, TornadoVaultError> {
         let mut tree = MerkleTree::new();
         for snapshot in self.pool_db(pool).snapshots().await? {
-            tree.splice_events(&snapshot.events)
+            tree.splice_events(&snapshot)
                 .map_err(|e| TornadoVaultError::MerkleTree(e.to_string()))?;
         }
         Ok(tree)

@@ -6,10 +6,8 @@ use std::sync::{
 
 use alloy_signer_local::PrivateKeySigner;
 use alloy_transport::mock::Asserter;
-use kohaku_tornadocash::{
-    Pool,
-    syncer::{DynSyncer, Snapshot, Syncer, SyncerError},
-};
+use kohaku_tornadocash::{Pool, event::Snapshot};
+use kohaku_tornadocash_syncer::{DynSyncer, Syncer, SyncerError};
 use zeroize::Zeroizing;
 
 use super::{
@@ -40,7 +38,7 @@ impl Syncer for PausedSyncer {
     async fn sync_range(&self, pool: &Pool, from: u64, to: u64) -> Result<Snapshot, SyncerError> {
         self.started.notify_one();
         self.release.notified().await;
-        Ok(Snapshot::new(pool.clone(), from..to, Vec::new()))
+        Ok(Snapshot::new(pool.clone(), from..to, Vec::new()).expect("valid empty snapshot"))
     }
 }
 
@@ -81,7 +79,7 @@ impl Database for FailNoteWrite {
 #[async_trait::async_trait]
 impl Syncer for EmptySyncer {
     async fn sync_range(&self, pool: &Pool, from: u64, to: u64) -> Result<Snapshot, SyncerError> {
-        Ok(Snapshot::new(pool.clone(), from..to, Vec::new()))
+        Ok(Snapshot::new(pool.clone(), from..to, Vec::new()).expect("valid empty snapshot"))
     }
 }
 

@@ -613,7 +613,19 @@ async fn recover_tornado(
         let phrase = crate::spend::mnemonic(instance, profile).await?;
         let vault = crate::spend::open_vault(instance, profile, &phrase, endpoint).await?;
         eprintln!("Recovering Tornado notes...");
-        let count = vault.recover_chain_with_gap(gap_limit).await?;
+        let recovery =
+            vault.recover_chain_with_gap_and_progress(gap_limit, |index, total, pool| {
+                eprintln!("Syncing Tornado pool {index}/{total}: {pool}");
+            });
+        tokio::pin!(recovery);
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
+        heartbeat.tick().await;
+        let count = loop {
+            tokio::select! {
+                result = &mut recovery => break result?,
+                _ = heartbeat.tick() => eprintln!("Still recovering Tornado notes..."),
+            }
+        };
         Ok(u32::try_from(count)?)
     }
     .await;
