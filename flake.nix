@@ -8,6 +8,7 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    kohaku-rs.url = "github:ethereum/kohaku-rs/289051fdfd9b6f5d80e74bb4510365c644329f28";
   };
 
   outputs = {
@@ -15,6 +16,7 @@
     nixpkgs,
     flake-utils,
     rust-overlay,
+    kohaku-rs,
   }:
     flake-utils.lib.eachDefaultSystem (system: let
       pkgs = import nixpkgs {
@@ -31,12 +33,13 @@
       };
 
       rustfmt = pkgs.rust-bin.nightly.latest.rustfmt;
+      alto = kohaku-rs.packages.${system}.alto;
     in {
       packages.default = import ./nix/package.nix {inherit pkgs rust;};
 
       devShells = {
         default = import ./nix/devshell.nix {inherit pkgs rust rustfmt;};
-        ci = import ./nix/ci.nix {inherit pkgs rust rustfmt;};
+        ci = import ./nix/ci.nix {inherit pkgs rust rustfmt alto;};
       };
     })
     // {
