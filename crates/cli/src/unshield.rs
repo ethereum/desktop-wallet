@@ -361,8 +361,9 @@ fn validate_tail_calls(raw: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::Parser;
+
+    use super::*;
 
     #[test]
     fn quote_and_sweep_parse_without_broadcast_consent() {

@@ -16,8 +16,11 @@ use kohaku_userop_kit::{
     user_operation::{UserOperationGasEstimate, UserOperationHash},
 };
 
-use super::estimation::{FundingBundler, seed_overrides};
-use super::{TornadoVault, TornadoVaultError, format_amount, format_eth};
+use super::{
+    TornadoVault, TornadoVaultError,
+    estimation::{FundingBundler, seed_overrides},
+    format_amount, format_eth,
+};
 use crate::{
     bundler::BundlerList,
     call::Call,
