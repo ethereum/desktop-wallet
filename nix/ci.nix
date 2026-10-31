@@ -2,6 +2,7 @@
   pkgs,
   rust,
   rustfmt,
+  alto,
   ...
 }:
 pkgs.mkShell {
@@ -11,5 +12,6 @@ pkgs.mkShell {
     cargo-audit
 
     foundry
+    alto
   ];
 }

@@ -62,9 +62,9 @@ enum Command {
     Lock,
     /// Prints the next unused standard address, and stores it unless `--peek` is set.
     NextFreshAddress(fresh::NextFreshAddressArgs),
-    /// Deposits native ETH into Tornado Cash.
+    /// Deposits ETH or supported ERC-20 tokens into Tornado Cash.
     Shield(shield::ShieldArgs),
-    /// Withdraws native ETH from Tornado Cash.
+    /// Withdraws ETH or supported ERC-20 tokens from Tornado Cash.
     Unshield(unshield::UnshieldArgs),
     /// Sends ETH or a tracked ERC-20 from an account, or ETH from Tornado Cash.
     Transfer(transfer::TransferArgs),

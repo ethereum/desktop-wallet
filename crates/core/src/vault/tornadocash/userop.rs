@@ -2,8 +2,8 @@ use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_provider::{DynProvider, Provider};
 use alloy_signer::Signer;
 use alloy_signer_local::PrivateKeySigner;
-use alloy_sol_types::{SolValue, sol};
-use kohaku_tornadocash::{Withdrawal, merkle_tree::MerkleProof};
+use alloy_sol_types::{SolCall, SolValue, sol};
+use kohaku_tornadocash::{Asset, Withdrawal, merkle_tree::MerkleProof};
 use kohaku_tornadocash_paymaster::UserOperationPaymasterExt;
 use kohaku_userop_kit::{
     builder::UserOperationBuilder,
@@ -16,7 +16,11 @@ use kohaku_userop_kit::{
     user_operation::{UserOperationGasEstimate, UserOperationHash},
 };
 
-use super::{TornadoVault, TornadoVaultError, format_eth};
+use super::{
+    TornadoVault, TornadoVaultError,
+    estimation::{FundingBundler, seed_overrides},
+    format_amount, format_eth,
+};
 use crate::{
     bundler::BundlerList,
     call::Call,
@@ -26,6 +30,8 @@ use crate::{
 const FEE_ATTEMPTS: usize = 3;
 
 sol! {
+    function transfer(address to, uint256 amount) external returns (bool);
+
     struct TornadoPaymasterData {
         address instance;
         bytes proof;
@@ -41,12 +47,13 @@ pub struct PaymasterWithdrawalRequest<'a, S: Signer + Send + Sync> {
     pub vault: &'a TornadoVault<S>,
     pub provider: DynProvider,
     pub owner: PrivateKeySigner,
+    pub asset: &'a Asset,
     pub notes: &'a [TornadoNote],
     pub forward_to: Option<Address>,
     /// When set, the remainder after the sponsor fee must be at least this much.
     pub minimum_forward: Option<U256>,
     /// Calls run after the withdrawals. The ETH they send must fit in what the notes leave after
-    /// the sponsor fee. Not combined with `forward_to`.
+    /// the sponsor fee. For ETH, `forward_to` appends a final call for the remaining balance.
     pub tail_calls: &'a [Call],
     pub chain_id: u64,
     pub bundlers: BundlerList,
@@ -109,6 +116,8 @@ struct QuoteInput<'a> {
     bundlers: &'a BundlerList,
     tails: &'a [UserOpCall],
     sum: U256,
+    asset: &'a Asset,
+    funding: &'a alloy_rpc_types_eth::state::StateOverride,
     forward_to: Option<Address>,
     required: Option<U256>,
     sponsor: &'a TornadoNote,
@@ -116,6 +125,10 @@ struct QuoteInput<'a> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum UserOpError {
+    #[error("invalid withdrawal: {0}")]
+    Invalid(String),
+    #[error("final operation simulation: {0}")]
+    Simulation(String),
     #[error("no notes to withdraw")]
     Empty,
     #[error("sponsoring pool {0} has no paymaster")]
@@ -131,7 +144,7 @@ pub enum UserOpError {
         available: U256,
         required: U256,
     },
-    #[error("forward_to cannot be combined with tail calls")]
+    #[error("ERC-20 forwarding cannot be combined with tail calls")]
     ForwardWithTailCalls,
     #[error(
         "the proven operation needs more gas than the quoted fee covers, so it was not signed; the bundler estimated it with real proofs, so check `balance` before trying again"
@@ -277,7 +290,7 @@ impl<S: Signer + Send + Sync> QuotedWithdrawal<'_, S> {
             hash,
             fee,
             forwarded,
-            paid_out: paid_out.or(forwarded),
+            paid_out,
             sum,
             fresh: owner.address(),
             provider,
@@ -288,9 +301,9 @@ impl<S: Signer + Send + Sync> QuotedWithdrawal<'_, S> {
 
 /// Quotes one paymaster user operation from `request.notes` without sending it.
 ///
-/// The largest note, which is first, sponsors gas. Its remainder and every other note are paid
-/// to the fresh address that signs the operation. `forward_to` adds a final call that sends
-/// whatever is left after the sponsor fee; `tail_calls` run after the withdrawals instead.
+/// The first ETH note sponsors gas. Its remainder and every other note are paid to the fresh
+/// address that signs the operation. `tail_calls` run after the withdrawals; `forward_to` adds
+/// a final call that sends whatever remains after the sponsor fee and those calls.
 ///
 /// # Errors
 /// Returns an error when the sponsoring pool has no paymaster, the notes cannot cover
@@ -306,6 +319,7 @@ where
         vault,
         provider,
         owner,
+        asset,
         notes,
         forward_to,
         minimum_forward,
@@ -315,15 +329,35 @@ where
     } = request;
 
     let sponsor = notes.first().ok_or(UserOpError::Empty)?;
+    if sponsor.pool.asset != Asset::ETH {
+        return Err(UserOpError::MissingPaymaster(sponsor.pool.id()));
+    }
     if sponsor.pool.paymaster.is_none() {
         return Err(UserOpError::MissingPaymaster(sponsor.pool.id()));
     }
-    if forward_to.is_some() && !tail_calls.is_empty() {
+    if forward_to.is_some() && !tail_calls.is_empty() && asset != &Asset::ETH {
         return Err(UserOpError::ForwardWithTailCalls);
+    }
+    if notes.iter().any(|note| note.pool.chain_id != chain_id)
+        || notes.iter().skip(1).any(|note| &note.pool.asset != asset)
+    {
+        return Err(UserOpError::Invalid(
+            "notes belong to another chain or asset".into(),
+        ));
+    }
+    if asset != &Asset::ETH && tail_calls.iter().any(|call| !call.value.is_zero()) {
+        return Err(UserOpError::Invalid(
+            "ERC-20 tail calls cannot spend ETH".into(),
+        ));
     }
     let fresh = owner.address();
     let (withdrawal, proof) = vault.withdrawal_inputs(sponsor, fresh).await?;
-    let mut tails = placeholder_withdrawals(vault, notes, fresh).await?;
+    let mut tails = if asset == &Asset::ETH {
+        placeholder_withdrawals(vault, notes, fresh).await?
+    } else {
+        // Token tail calls need real withdrawal proceeds during gas simulation.
+        proven_withdrawals(vault, notes, fresh).await?
+    };
     let withdrawals = tails.len();
     tails.extend(tail_calls.iter().map(|call| UserOpCall {
         target: call.target,
@@ -333,9 +367,16 @@ where
     let spend = tail_calls.iter().map(|call| call.value).sum::<U256>();
     let sum = notes
         .iter()
+        .filter(|note| &note.pool.asset == asset)
+        .map(|note| U256::from(note.pool.amount_wei))
+        .sum::<U256>();
+    let eth_sum = notes
+        .iter()
+        .filter(|note| note.pool.asset == Asset::ETH)
         .map(|note| U256::from(note.pool.amount_wei))
         .sum::<U256>();
     let account = Simple7702SmartAccount::new(provider.clone(), fresh, chain_id);
+    let funding = seed_overrides(&provider, &sponsor.pool, fresh).await?;
     let mut rng = rand::rng();
     let quoted = quote_until_settled(
         &QuoteInput {
@@ -344,8 +385,11 @@ where
             bundlers: &bundlers,
             tails: &tails,
             sum,
+            asset,
+            funding: &funding,
             forward_to,
-            required: minimum_forward.max((!spend.is_zero()).then_some(spend)),
+            required: minimum_forward
+                .max((asset == &Asset::ETH && !spend.is_zero()).then_some(spend)),
             sponsor,
         },
         &mut rng,
@@ -356,12 +400,13 @@ where
     Ok(QuotedWithdrawal {
         fee: quoted.fee,
         forwarded: quoted.forwarded,
-        sum,
+        sum: eth_sum,
         vault,
         owner,
         notes,
         after_withdrawals: quoted.calls[withdrawals..].to_vec(),
-        paid_out: (!spend.is_zero()).then_some(spend),
+        paid_out: (asset == &Asset::ETH)
+            .then_some(spend.saturating_add(quoted.forwarded.unwrap_or_default())),
         signable: quoted.signable,
         provider,
         bundlers,
@@ -407,36 +452,37 @@ async fn quote_until_settled(
         if pass > 0 {
             eprintln!("Quoting the fee again so the forward matches it.");
         }
-        let signable = quote(
-            input.account,
-            &calls,
-            withdrawal.clone(),
-            proof,
-            input.provider,
-            input.bundlers,
-            rng,
-        )
-        .await?;
+        let signable = quote(input, &calls, withdrawal.clone(), proof, rng).await?;
         let fee = proven_fee(&signable)?;
+        let asset_fee = if input.asset == &Asset::ETH {
+            fee
+        } else {
+            U256::ZERO
+        };
         let available = input
             .sum
-            .checked_sub(fee)
+            .checked_sub(asset_fee)
             .ok_or_else(|| short(fee, U256::ZERO, input.required.unwrap_or(U256::ZERO)))?;
         if let Some(required) = input.required
             && available < required
         {
             return Err(short(fee, available, required));
         }
-        if input.forward_to.is_none() || pending_forward == Some(available) {
+        let to_forward = if input.asset == &Asset::ETH {
+            available.saturating_sub(input.tails.iter().map(|call| call.value).sum::<U256>())
+        } else {
+            available
+        };
+        if input.forward_to.is_none() || pending_forward == Some(to_forward) {
             return Ok(Quoted {
                 signable,
                 calls,
                 fee,
-                forwarded: input.forward_to.map(|_| available),
+                forwarded: input.forward_to.map(|_| to_forward),
             });
         }
-        pending_forward = Some(available);
-        calls = forward_calls(input.tails, input.forward_to, available);
+        pending_forward = Some(to_forward);
+        calls = forward_calls(input.tails, input.forward_to, to_forward, input.asset);
         if pass + 1 == FEE_ATTEMPTS {
             return Err(UserOpError::Unstable {
                 fee: format_eth(fee),
@@ -452,13 +498,21 @@ fn forward_calls(
     tails: &[UserOpCall],
     forward_to: Option<Address>,
     available: U256,
+    asset: &Asset,
 ) -> Vec<UserOpCall> {
     let mut calls = tails.to_vec();
     if let Some(target) = forward_to.filter(|_| !available.is_zero()) {
-        calls.push(UserOpCall {
-            target,
-            value: available,
-            data: Bytes::new(),
+        calls.push(match super::token_address(asset) {
+            Some(token) => UserOpCall {
+                target: token,
+                value: U256::ZERO,
+                data: transferCall::new((target, available)).abi_encode().into(),
+            },
+            None => UserOpCall {
+                target,
+                value: available,
+                data: Bytes::new(),
+            },
         });
     }
     calls
@@ -494,8 +548,9 @@ async fn proven_withdrawals<S: Signer + Send + Sync>(
     let mut calls = Vec::with_capacity(tails);
     for (index, note) in notes.iter().skip(1).enumerate() {
         eprintln!(
-            "Proving {} ETH ({}/{})...",
-            format_eth(U256::from(note.pool.amount_wei)),
+            "Proving {} {} ({}/{})...",
+            format_amount(U256::from(note.pool.amount_wei), note.pool.asset.decimals()),
+            note.pool.symbol().to_uppercase(),
             index + 1,
             tails
         );
@@ -510,19 +565,26 @@ async fn proven_withdrawals<S: Signer + Send + Sync>(
 }
 
 async fn quote(
-    account: &Simple7702SmartAccount<DynProvider>,
+    input: &QuoteInput<'_>,
     calls: &[UserOpCall],
     withdrawal: Withdrawal,
     proof: &MerkleProof,
-    provider: &DynProvider,
-    bundlers: &BundlerList,
     rng: &mut impl rand::CryptoRng,
 ) -> Result<SignableUserOperation, UserOpError> {
     let calls = calls.to_vec();
-    let builder = UserOperationBuilder::new_with_smart_account(account)
+    let builder = UserOperationBuilder::new_with_smart_account(input.account)
         .await?
         .with_call(&calls)
-        .with_tornado_paymaster(withdrawal, proof, provider, bundlers, rng)
+        .with_tornado_paymaster(
+            withdrawal,
+            proof,
+            input.provider,
+            &FundingBundler {
+                inner: input.bundlers,
+                funding: input.funding,
+            },
+            rng,
+        )
         .await?;
     Ok(builder.build())
 }
@@ -618,5 +680,29 @@ mod tests {
         let mut op = quoted();
         assert!(!fits(&mut op, &gas(110), U256::from(509)));
         assert_eq!(op.user_op.pre_verification_gas, 100);
+    }
+
+    #[test]
+    fn eth_tail_can_be_followed_by_a_remainder_sweep() {
+        let tail = UserOpCall {
+            target: Address::repeat_byte(1),
+            value: U256::from(70),
+            data: Bytes::new(),
+        };
+        let recipient = Address::repeat_byte(2);
+        let calls = forward_calls(&[tail], Some(recipient), U256::from(20), &Asset::ETH);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].value, U256::from(70));
+        assert_eq!(calls[1].target, recipient);
+        assert_eq!(calls[1].value, U256::from(20));
+        assert_eq!(
+            settle(
+                U256::from(100),
+                Some(U256::from(90)),
+                U256::ZERO,
+                U256::from(9)
+            ),
+            Some((U256::from(1), U256::from(9)))
+        );
     }
 }

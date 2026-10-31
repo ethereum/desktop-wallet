@@ -14,9 +14,9 @@ use edw_core::{
     profile::ProfileRecord,
     signer::{Signer, simple::SimpleSigner},
     vault::tornadocash::{
-        IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest, QuotedWithdrawal,
-        TornadoNote, TornadoVault, WithdrawalCost, format_eth, parse_eth, parse_wei,
-        quote_paymaster_withdrawal,
+        Asset, IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest,
+        QuotedWithdrawal, TornadoNote, TornadoVault, WithdrawalCost, format_eth, parse_amount,
+        parse_wei, quote_paymaster_withdrawal,
     },
 };
 use zeroize::Zeroizing;
@@ -38,8 +38,9 @@ pub struct ShieldedWithdrawal<'a> {
     pub fresh_index: u32,
     pub notes: &'a [TornadoNote],
     pub forward_to: Option<Address>,
-    pub minimum_forward: Option<U256>,
     pub tail_calls: &'a [Call],
+    pub asset: &'a Asset,
+    pub minimum_forward: Option<U256>,
     pub bundler_urls: &'a [Url],
 }
 
@@ -51,15 +52,14 @@ pub struct Consent {
 }
 
 impl Consent {
-    /// Fails unless consent can be given: `--yes`, or a terminal to ask at. Call it before any
-    /// network work.
     pub fn ensure_possible(&self, input: Input) -> Result<(), anyhow::Error> {
         if self.yes || input == Input::Terminal {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(failure::usage(
+                "nothing was broadcast; without a terminal to confirm at, pass --yes",
+            ))
         }
-        Err(failure::usage(
-            "nothing was broadcast; without a terminal to confirm at, pass --yes",
-        ))
     }
 }
 
@@ -147,30 +147,6 @@ pub async fn open_vault(
     Ok(instance.open_tornado_vault(profile, key, endpoint).await?)
 }
 
-/// `--amount-formatted` as decimal ETH, `--amount-raw` as wei, or a prompted ETH amount.
-///
-/// The two flags cannot both be set. A missing amount is read as decimal ETH.
-pub fn tornado_amount(
-    formatted: Option<&str>,
-    raw: Option<&str>,
-    input: Input,
-) -> Result<U256, anyhow::Error> {
-    match (formatted, raw) {
-        (Some(_), Some(_)) => Err(failure::usage(
-            "pass only one of --amount-formatted and --amount-raw",
-        )),
-        (Some(amount), None) => Ok(parse_eth(amount)?),
-        (None, Some(amount)) => Ok(parse_wei(amount)?),
-        (None, None) => {
-            let text = input
-                .line("Amount (ETH): ")?
-                .filter(|line| !line.is_empty())
-                .ok_or_else(|| failure::usage("pass --amount-formatted or --amount-raw"))?;
-            Ok(parse_eth(&text)?)
-        }
-    }
-}
-
 pub fn confirm(input: Input, consent: &Consent, summary: &str) -> Result<bool, anyhow::Error> {
     consent.ensure_possible(input)?;
     if consent.yes {
@@ -203,8 +179,9 @@ pub fn ensure_paymaster(notes: &[TornadoNote]) -> Result<(), anyhow::Error> {
     let sponsor = notes.first().context("no notes to withdraw")?;
     if sponsor.pool.paymaster.is_none() {
         anyhow::bail!(
-            "the {} ETH pool has no paymaster, so this withdrawal cannot be bundled",
-            note_eth(sponsor)
+            "the {} {} pool has no paymaster, so this withdrawal cannot be bundled",
+            sponsor.pool.amount(),
+            sponsor.pool.symbol().to_uppercase()
         );
     }
     Ok(())
@@ -242,17 +219,17 @@ pub async fn quote_shielded(
         vault: withdrawal.vault,
         provider,
         owner,
+        asset: withdrawal.asset,
+        tail_calls: withdrawal.tail_calls,
         notes: withdrawal.notes,
         forward_to: withdrawal.forward_to,
         minimum_forward: withdrawal.minimum_forward,
-        tail_calls: withdrawal.tail_calls,
         chain_id,
         bundlers,
     })
     .await?)
 }
 
-/// The fee and change of `included`, or a warning and `None` when they cannot be measured.
 pub async fn measured(included: &IncludedWithdrawal) -> Option<WithdrawalCost> {
     match included.measure().await {
         Ok(cost) => Some(cost),
@@ -263,8 +240,6 @@ pub async fn measured(included: &IncludedWithdrawal) -> Option<WithdrawalCost> {
     }
 }
 
-/// Stores the fresh address as used and as an address vault, so `balance` shows what it holds.
-/// Call it after consent and before submitting; a failure only warns.
 pub async fn keep_fresh(instance: &Instance, profile: &ProfileRecord, fresh: &FreshAddress) {
     let stored = async {
         instance.commit_fresh_address(profile, fresh.index).await?;
@@ -280,15 +255,126 @@ pub async fn keep_fresh(instance: &Instance, profile: &ProfileRecord, fresh: &Fr
     }
 }
 
+/// Amount flags use the selected token's decimals; raw amounts are base units.
+pub fn token_amount(
+    formatted: Option<&str>,
+    raw: Option<&str>,
+    input: Input,
+    asset: &Asset,
+) -> Result<U256, anyhow::Error> {
+    match (formatted, raw) {
+        (Some(_), Some(_)) => Err(failure::usage("pass only one amount flag")),
+        (Some(value), None) => Ok(parse_amount(value, asset.decimals())?),
+        (None, Some(value)) => Ok(parse_wei(value)?),
+        (None, None) => {
+            let value = input
+                .line(&format!("Amount ({}): ", asset.symbol().to_uppercase()))?
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| failure::usage("pass --amount-formatted or --amount-raw"))?;
+            Ok(parse_amount(&value, asset.decimals())?)
+        }
+    }
+}
+
+/// Same TARGET:CALLDATA[:VALUE] grammar as kohaku-cli. Values are always wei.
+pub fn parse_tail_calls(raw: &str) -> Result<Vec<Call>, String> {
+    raw.split(',').enumerate().map(|(index, entry)| {
+        let parts: Vec<_> = entry.split(':').map(str::trim).collect();
+        let invalid = || format!("invalid tail call {index}; expected TARGET:0xCALLDATA[:VALUE], with decimal or 0x wei value");
+        if !(2..=3).contains(&parts.len()) || parts.iter().any(|p| p.is_empty()) { return Err(invalid()); }
+        if !parts[0].starts_with("0x") || parts[0].len() != 42 { return Err(invalid()); }
+        let target = parts[0].parse().map_err(|_| invalid())?;
+        if !parts[1].starts_with("0x") || parts[1].len() % 2 != 0 { return Err(invalid()); }
+        let data = parts[1].parse().map_err(|_| invalid())?;
+        let value = match parts.get(2) {
+            None => U256::ZERO,
+            Some(value) if value.starts_with("0x") && value.len() > 2 && value[2..].bytes().all(|b| b.is_ascii_hexdigit()) => U256::from_str_radix(&value[2..], 16).map_err(|_| invalid())?,
+            Some(value) => parse_wei(value).map_err(|_| invalid())?,
+        };
+        Ok(Call::new(target, data, value))
+    }).collect()
+}
+
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
     #[test]
-    fn without_a_terminal_only_yes_consents() {
-        for input in [Input::Piped, Input::Disabled] {
-            assert!(Consent { yes: false }.ensure_possible(input).is_err());
-            assert!(Consent { yes: true }.ensure_possible(input).is_ok());
+    fn tails_preserve_order_calldata_and_decimal_or_hex_wei() {
+        let target = "0x1111111111111111111111111111111111111111";
+        let calls = parse_tail_calls(&format!(
+            " {target}:0x ,{target}:0x1234:42,{target}:0xab:0x2a"
+        ))
+        .expect("valid tails");
+        assert_eq!(calls.len(), 3);
+        assert!(calls[0].data.is_empty());
+        assert_eq!(calls[0].value, U256::ZERO);
+        assert_eq!(calls[1].data.as_ref(), &[0x12, 0x34]);
+        assert_eq!(calls[1].value, U256::from(42));
+        assert_eq!(calls[2].value, U256::from(42));
+    }
+
+    #[test]
+    fn tails_reject_malformed_entries_and_overflow() {
+        let target = "0x1111111111111111111111111111111111111111";
+        for entry in [
+            String::new(),
+            format!("{target}:0x,"),
+            "nope:0x".into(),
+            format!("{target}:0x1"),
+            format!("{target}:aa"),
+            format!("{target}:0xgg"),
+            format!("{target}:0x:-1"),
+            format!("{target}:0x:1.5"),
+            format!("{target}:0x:0x"),
+            format!("{target}:0x:0x+1"),
+            format!("{}:0x", &target[2..]),
+            format!("{target}:0x:1:2"),
+            format!("{target}:0x:0x1{}", "0".repeat(64)),
+        ] {
+            assert!(parse_tail_calls(&entry).is_err(), "accepted {entry}");
         }
+    }
+
+    #[test]
+    fn command_parser_defaults_to_eth_and_checks_tail_conflicts() {
+        use clap::Parser;
+        for command in ["shield", "unshield"] {
+            assert!(
+                crate::Cli::try_parse_from([
+                    "edw",
+                    command,
+                    "--amount-formatted",
+                    "100",
+                    "--token",
+                    "USDC"
+                ])
+                .is_ok()
+            );
+            assert!(
+                crate::Cli::try_parse_from([
+                    "edw",
+                    command,
+                    "--amount-raw",
+                    "100",
+                    "--amount-formatted",
+                    "100"
+                ])
+                .is_err()
+            );
+        }
+        assert!(crate::Cli::try_parse_from(["edw", "unshield", "--tail-calls", "nope"]).is_err());
+        assert!(
+            crate::Cli::try_parse_from([
+                "edw",
+                "unshield",
+                "--tail-calls",
+                "0x1111111111111111111111111111111111111111:0x",
+                "--to",
+                "0x1111111111111111111111111111111111111111"
+            ])
+            .is_err()
+        );
     }
 }
