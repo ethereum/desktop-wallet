@@ -22,6 +22,7 @@ in
     cargoLock.lockFile = ../crates/Cargo.lock;
 
     nativeBuildInputs = with pkgs; [
+      pkgs.rustPlatform.bindgenHook
       cmake
       perl
       pkg-config

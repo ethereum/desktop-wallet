@@ -21,34 +21,37 @@ use crate::{
 #[derive(Args, Debug)]
 #[command(group = ArgGroup::new("amount").args(["amount_formatted", "amount_raw"]))]
 pub struct UnshieldArgs {
-    /// Decimal tokens to unshield, for example `1.1`. Must be a sum of this chain's Tornado denominations.
+    /// Privacy protocol: tornado or railgun.
+    #[arg(long, default_value = "tornado", value_enum)]
+    pub(crate) protocol: crate::railgun::Protocol,
+    /// Decimal tokens to unshield, for example `1.1`. Tornado requires a sum of pool denominations; Railgun accepts variable amounts.
     #[arg(long)]
-    amount_formatted: Option<String>,
-    /// Base units to unshield. Must be a sum of this chain's Tornado denominations.
+    pub(crate) amount_formatted: Option<String>,
+    /// Base units to unshield. Tornado requires a sum of pool denominations; Railgun accepts variable amounts.
     #[arg(long)]
-    amount_raw: Option<String>,
-    /// Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC.
+    pub(crate) amount_raw: Option<String>,
+    /// Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC. Railgun also accepts WETH or a tracked token address.
     #[arg(long, default_value = "ETH")]
-    token: String,
+    pub(crate) token: String,
     /// Calls after withdrawal, from the fresh account: TARGET:CALLDATA[:WEI],...
     #[arg(long, conflicts_with = "to", value_parser = validate_tail_calls)]
-    tail_calls: Option<String>,
+    pub(crate) tail_calls: Option<String>,
     /// Quote the sponsor fee without signing, sending, or reserving the fresh address.
     #[arg(long)]
-    quote: bool,
-    /// Send ETH left after custom calls and the quoted fee to this address in the same `UserOp`.
+    pub(crate) quote: bool,
+    /// Send remaining ETH after custom calls to this address. Tornado also subtracts the sponsor fee.
     #[arg(long, requires = "tail_calls", conflicts_with = "to")]
-    sweep_to: Option<String>,
+    pub(crate) sweep_to: Option<String>,
     /// Where the selected asset is forwarded. Omitted, it stays on the fresh address.
     #[arg(long)]
-    to: Option<String>,
+    pub(crate) to: Option<String>,
     /// Abort if the next fresh account differs from this address.
     #[arg(long)]
-    expected_fresh_address: Option<Address>,
+    pub(crate) expected_fresh_address: Option<Address>,
     #[arg(long)]
-    profile: Option<String>,
+    pub(crate) profile: Option<String>,
     #[command(flatten)]
-    consent: Consent,
+    pub(crate) consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -125,6 +128,9 @@ impl fmt::Display for UnshieldReport {
 }
 
 pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow::Error> {
+    if args.protocol == crate::railgun::Protocol::Railgun {
+        return crate::railgun::unshield(global, args).await;
+    }
     let input = global.input();
     if !args.quote {
         args.consent.ensure_possible(input)?;

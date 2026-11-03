@@ -6,6 +6,7 @@
   ...
 }:
 pkgs.mkShell {
+  nativeBuildInputs = [pkgs.rustPlatform.bindgenHook];
   packages = with pkgs; [
     rustfmt
     rust

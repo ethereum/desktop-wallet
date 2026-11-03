@@ -143,6 +143,37 @@ impl Mnemonic {
         ))
     }
 
+    /// Railgun's hardened Baby Jubjub derivation, matching kohaku-cli and the
+    /// Railgun engine. This deliberately does not use secp256k1 BIP-32.
+    pub fn railgun_keys(&self, profile_index: u32) -> Result<([u8; 32], [u8; 32]), MnemonicError> {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha512;
+
+        if profile_index >= 0x8000_0000 {
+            return Err(MnemonicError::SigningKey);
+        }
+        let derive = |prefix: u32| -> Result<[u8; 32], MnemonicError> {
+            let seed = Zeroizing::new(self.inner.to_seed(""));
+            let mut mac = Hmac::<Sha512>::new_from_slice(b"babyjubjub seed")
+                .map_err(|_| MnemonicError::SigningKey)?;
+            mac.update(seed.as_ref());
+            let mut node = Zeroizing::new([0u8; 64]);
+            node.copy_from_slice(&mac.finalize().into_bytes());
+            for index in [prefix, 1984, 0, 0, profile_index] {
+                let mut mac = Hmac::<Sha512>::new_from_slice(&node[32..])
+                    .map_err(|_| MnemonicError::SigningKey)?;
+                mac.update(&[0]);
+                mac.update(&node[..32]);
+                mac.update(&(index | 0x8000_0000).to_be_bytes());
+                node.copy_from_slice(&mac.finalize().into_bytes());
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&node[..32]);
+            Ok(key)
+        };
+        Ok((derive(44)?, derive(420)?))
+    }
+
     fn derive(&self, path: &str) -> Result<SigningKey, MnemonicError> {
         let seed = self.inner.to_seed("");
         let path = DerivationPath::from_str(path).map_err(MnemonicError::Path)?;
@@ -279,5 +310,34 @@ mod tests {
             hashes[0].nullifier_hash.to_string(),
             "0x02b7ec937ae334f5881b8c264dd6b887e7bc526c79c7365e067fc2ab9737c3b6"
         );
+    }
+}
+
+#[cfg(test)]
+mod railgun_tests {
+    use alloy_primitives::hex;
+
+    use super::*;
+
+    #[test]
+    fn railgun_keys_match_kohaku_cli_babyjubjub_derivation() {
+        let phrase=Mnemonic::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+        for (index, spending, viewing) in [
+            (
+                0,
+                "08b2d974aa7fffd9d068b78c34434c534ddcd9343fcbf5aa12cf78e1a3c1ccb9",
+                "9a9e1ca3b9476dc8500b43f30f34104c92a3eedfd727757ffd0ad15da8e11572",
+            ),
+            (
+                1,
+                "6b021e0d06d0b2d161cf0ea494e3fc1cbff12cc1b29281f7412170351b708fad",
+                "4064dd49251ac6b9335305b200b0310bb22ff64692b2cb20d380b9101219ba9e",
+            ),
+        ] {
+            let (s, v) = phrase.railgun_keys(index).unwrap();
+            assert_eq!(hex::encode(s), spending);
+            assert_eq!(hex::encode(v), viewing);
+        }
+        assert!(phrase.railgun_keys(0x8000_0000).is_err());
     }
 }

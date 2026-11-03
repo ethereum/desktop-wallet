@@ -32,6 +32,14 @@ kohaku-tornadocash-keychain = { workspace = true }
 kohaku-tornadocash-paymaster = { workspace = true }
 kohaku-tornadocash-syncer = { workspace = true }
 kohaku-userop-kit = { workspace = true }
+kohaku-railgun = { workspace = true }
+kohaku-railgun-sync = { workspace = true }
+kohaku-railgun-poi = { workspace = true }
+kohaku-railgun-paymaster = { workspace = true }
+railgun-userop-kit = { workspace = true }
+flate2 = { workspace = true }
+hmac = { workspace = true }
+serde_json = { workspace = true }
 
 alloy-primitives = { workspace = true, features = ["serde", "k256"] }
 alloy-provider = { workspace = true, features = ["ccip-read"] }

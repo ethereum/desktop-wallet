@@ -488,7 +488,6 @@ impl<S: Signer + Send + Sync> TornadoVault<S> {
         note: &TornadoNote,
         to: &VaultId,
     ) -> Result<Call, TornadoVaultError> {
-        #[expect(irrefutable_let_patterns)]
         let VaultId::Address(recipient) = to else {
             return Err(TornadoVaultError::UnsupportedVaultId(to.clone()));
         };

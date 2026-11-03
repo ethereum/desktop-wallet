@@ -18,6 +18,7 @@ mod global_args;
 mod input;
 mod network;
 mod profile;
+mod railgun;
 mod report;
 mod secret_file;
 mod session;
@@ -62,12 +63,15 @@ enum Command {
     Lock,
     /// Prints the next unused standard address, and stores it unless `--peek` is set.
     NextFreshAddress(fresh::NextFreshAddressArgs),
-    /// Deposits ETH or supported ERC-20 tokens into Tornado Cash.
+    /// Deposits ETH or ERC-20 tokens into Tornado Cash or Railgun.
     Shield(shield::ShieldArgs),
-    /// Withdraws ETH or supported ERC-20 tokens from Tornado Cash.
+    /// Withdraws ETH or ERC-20 tokens from Tornado Cash or Railgun.
     Unshield(unshield::UnshieldArgs),
     /// Sends ETH or a tracked ERC-20 from an account, or ETH from Tornado Cash.
     Transfer(transfer::TransferArgs),
+    /// Railgun address, PPOI synchronization and interrupted-operation recovery.
+    #[command(subcommand)]
+    Railgun(railgun::Command),
 }
 
 impl Cli {
@@ -103,6 +107,7 @@ impl Cli {
             Command::Shield(args) => shield::run(&self.global, args).await,
             Command::Unshield(args) => unshield::run(&self.global, args).await,
             Command::Transfer(args) => transfer::run(&self.global, args).await,
+            Command::Railgun(args) => args.run(&self.global).await,
         }
     }
 }

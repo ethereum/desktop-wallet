@@ -30,28 +30,31 @@ use crate::{
 #[derive(Args, Debug)]
 #[command(group = ArgGroup::new("amount").args(["amount_formatted", "amount_raw"]))]
 pub struct ShieldArgs {
-    /// Decimal tokens to shield, for example `1.1`. Must be a sum of this chain's Tornado denominations.
+    /// Privacy protocol: tornado or railgun.
+    #[arg(long, default_value = "tornado", value_enum)]
+    pub(crate) protocol: crate::railgun::Protocol,
+    /// Decimal tokens to shield, for example `1.1`. Tornado requires a sum of pool denominations; Railgun accepts variable amounts.
     #[arg(long)]
-    amount_formatted: Option<String>,
-    /// Base units to shield. Must be a sum of this chain's Tornado denominations.
+    pub(crate) amount_formatted: Option<String>,
+    /// Base units to shield. Tornado requires a sum of pool denominations; Railgun accepts variable amounts.
     #[arg(long)]
-    amount_raw: Option<String>,
-    /// Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC.
+    pub(crate) amount_raw: Option<String>,
+    /// Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC. Railgun also accepts WETH or a tracked token address.
     #[arg(long, default_value = "ETH")]
-    token: String,
+    pub(crate) token: String,
     /// Exact pool sizes in the selected token, separated by commas.
     #[arg(long)]
-    denominations: Option<String>,
-    /// Reserve notes and return deposit calls without checking balances or broadcasting.
+    pub(crate) denominations: Option<String>,
+    /// Return deposit calls without checking balances or broadcasting. Tornado reserves notes locally.
     #[arg(long, conflicts_with = "from")]
-    prepare: bool,
+    pub(crate) prepare: bool,
     /// Standard-address index that pays. Defaults to 0.
     #[arg(long)]
-    from: Option<u32>,
+    pub(crate) from: Option<u32>,
     #[arg(long)]
-    profile: Option<String>,
+    pub(crate) profile: Option<String>,
     #[command(flatten)]
-    consent: Consent,
+    pub(crate) consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -138,6 +141,9 @@ impl fmt::Display for ShieldReport {
 }
 
 pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::Error> {
+    if args.protocol == crate::railgun::Protocol::Railgun {
+        return crate::railgun::shield(global, args).await;
+    }
     let input = global.input();
     if !args.prepare {
         args.consent.ensure_possible(input)?;

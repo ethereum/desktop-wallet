@@ -118,6 +118,16 @@ struct BalanceReport {
     /// Unspent Tornado notes. Present only with `--detailed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     tornado_notes: Option<Vec<TornadoNoteRow>>,
+    /// Railgun address and notes, with amounts grouped by validated PPOI status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    railgun: Option<RailgunBalanceReport>,
+}
+
+#[derive(Serialize)]
+struct RailgunBalanceReport {
+    address: String,
+    notes: Vec<edw_core::vault::railgun::RailgunNote>,
+    pending_user_operation: Option<String>,
 }
 
 impl Asset {
@@ -193,6 +203,14 @@ impl BalanceArgs {
             }
         }
 
+        let railgun = read_railgun(global, &instance, &profile, endpoint.clone(), &ids).await;
+        let (railgun, railgun_balances, railgun_ok) = match railgun {
+            Ok((report, balances)) => (report, balances, true),
+            Err(error) => {
+                eprintln!("Could not read Railgun notes: {error:#}");
+                (None, Vec::new(), false)
+            }
+        };
         let tornado = read_tornado(&instance, &profile, endpoint).await;
         let (holdings, tornado_ok) = match tornado {
             Ok(holdings) => (holdings, true),
@@ -211,6 +229,9 @@ impl BalanceArgs {
             .collect();
         let mut totals = balance::totals(&read, assets.len());
         fold_tornado(&assets, &mut totals, &holdings);
+        for (total, railgun) in totals.iter_mut().zip(railgun_balances) {
+            total.private = total.private.saturating_add(railgun);
+        }
         let tornado_notes = (self.detailed && tornado_ok)
             .then(|| note_rows(&holdings))
             .transpose()?;
@@ -218,6 +239,7 @@ impl BalanceArgs {
         BalanceReport {
             profile: ProfileSummary::load(&instance, &profile).await?,
             complete: tornado_ok
+                && railgun_ok
                 && unbuilt.is_empty()
                 && read.iter().all(|vault| vault.balances.is_ok()),
             assets: assets
@@ -227,6 +249,7 @@ impl BalanceArgs {
                 .collect::<anyhow::Result<_>>()?,
             vaults,
             tornado_notes,
+            railgun,
         }
         .emit(global.mode())
     }
@@ -244,7 +267,7 @@ impl fmt::Display for BalanceAmounts {
 
 impl Report for BalanceReport {
     const KIND: &'static str = "edw/balance";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
 }
 
 impl fmt::Display for BalanceReport {
@@ -291,8 +314,56 @@ impl fmt::Display for BalanceReport {
         if let Some(notes) = &self.tornado_notes {
             write!(f, "{}", tornado_lines(notes))?;
         }
+        if let Some(railgun) = &self.railgun {
+            write!(f, "\n\nrailgun {}", railgun.address)?;
+            if self.vaults.is_some() {
+                for note in &railgun.notes {
+                    write!(
+                        f,
+                        "\n  {} {}  PPOI {}  tree {} leaf {}",
+                        note.amount, note.token, note.poi_status, note.tree, note.leaf
+                    )?;
+                }
+            }
+            if let Some(hash) = &railgun.pending_user_operation {
+                write!(f, "\n  pending {hash}; use `edw railgun retry`")?;
+            }
+        }
         Ok(())
     }
+}
+
+async fn read_railgun(
+    global: &GlobalArgs,
+    instance: &Instance,
+    profile: &ProfileRecord,
+    endpoint: Arc<dyn NetworkEndpoint>,
+    assets: &[AssetId],
+) -> anyhow::Result<(Option<RailgunBalanceReport>, Vec<Balance>)> {
+    if !matches!(instance.network().id.0, 1 | 11_155_111) {
+        return Ok((None, Vec::new()));
+    }
+    let phrase = crate::spend::mnemonic(instance, profile).await?;
+    let vault = crate::railgun::open_vault(global, instance, profile, &phrase, endpoint).await?;
+    let mut session = vault.session().await?;
+    eprintln!("Syncing Railgun notes and PPOI...");
+    if let Some(report) = session.sync(true).await? {
+        for failure in report.failed {
+            eprintln!("PPOI {}: {}", failure.txid, failure.error);
+        }
+    }
+    let mut balances = Vec::with_capacity(assets.len());
+    for asset in assets {
+        balances.push(session.balance(asset).await);
+    }
+    let report = RailgunBalanceReport {
+        address: vault.address().to_string(),
+        notes: session.notes().await,
+        pending_user_operation: session
+            .pending()
+            .map(|p| p.signed.hash(vault.chain().id).0.to_string()),
+    };
+    Ok((Some(report), balances))
 }
 
 /// Builds `profile`'s vaults. An empty record list needs no endpoint.

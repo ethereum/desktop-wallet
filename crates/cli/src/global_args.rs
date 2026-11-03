@@ -20,6 +20,9 @@ pub struct GlobalArgs {
     /// from flags, the environment, the session, or piped stdin.
     #[arg(long, global = true, visible_alias = "porcelain")]
     pub non_interactive: bool,
+    /// Alternate Railgun/PPOI circuit artifact server.
+    #[arg(long, global = true, env = "EDW_RAILGUN_ARTIFACT_URL")]
+    pub railgun_artifact_url: Option<String>,
     #[command(flatten)]
     pub verbosity: Verbosity<WarnLevel>,
 }
