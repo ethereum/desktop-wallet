@@ -118,3 +118,11 @@ With `--non-interactive`, a failure prints one `edw/error` document on stdout in
 ```json
 {"kind":"edw/error","version":1,"class":"locked","message":"wallet is locked; run `edw unlock` or set EDW_DECRYPTION_PASSWORD"}
 ```
+
+### Railgun
+
+Use `shield --protocol railgun`, `unshield --protocol railgun`, or
+`transfer --from railgun`. The transfer recipient may be public or a private 0zk
+address. `balance --detailed` includes Railgun notes and PPOI status. Sponsor fees
+always use private WETH. See [Railgun commands and recovery](railgun.md) for
+examples, tail calls, PPOI synchronization, Saga coverage and interrupted sends.

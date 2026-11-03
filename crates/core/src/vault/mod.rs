@@ -5,6 +5,7 @@ use crate::asset::AssetId;
 
 pub mod address;
 pub mod db;
+pub mod railgun;
 pub mod simple;
 pub mod tornadocash;
 
@@ -43,6 +44,7 @@ pub struct Balance {
 #[non_exhaustive]
 pub enum VaultId {
     Address(Address),
+    Railgun(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -85,6 +87,7 @@ impl std::fmt::Display for VaultId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VaultId::Address(addr) => write!(f, "addr:{addr:}"),
+            VaultId::Railgun(address) => write!(f, "railgun:{address}"),
         }
     }
 }

@@ -34,25 +34,28 @@ const NOTE_ATTEMPTS: usize = 3;
 
 #[derive(Args, Debug)]
 pub struct TransferArgs {
-    /// An index, a `0x` address of one, or `tornado`.
+    /// An index, a `0x` address of one, `tornado`, or `railgun`.
     #[arg(long)]
-    from: Option<String>,
-    /// An address, or an ENS name.
+    pub(crate) from: Option<String>,
+    /// An address, an ENS name, or a Railgun 0zk address.
     #[arg(long)]
-    to: Option<String>,
+    pub(crate) to: Option<String>,
     /// In the asset's own units, for example `1.5`.
     #[arg(long)]
-    amount: Option<String>,
+    pub(crate) amount: Option<String>,
     /// A tracked ERC-20, by symbol or address. Omitted, the transfer sends ETH.
+    #[arg(long, visible_alias = "token")]
+    pub(crate) asset: Option<String>,
     #[arg(long)]
-    asset: Option<String>,
-    #[arg(long)]
-    profile: Option<String>,
+    pub(crate) profile: Option<String>,
     /// Print the transaction and its fee estimate, then stop without signing.
     #[arg(long)]
-    dry_run: bool,
+    pub(crate) dry_run: bool,
+    /// Encrypted memo on a Railgun 0zk transfer.
+    #[arg(long)]
+    pub(crate) memo: Option<String>,
     #[command(flatten)]
-    consent: Consent,
+    pub(crate) consent: Consent,
 }
 
 #[derive(Serialize)]
@@ -229,6 +232,14 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
         input,
         "From (index, address, or tornado): ",
     )?;
+    if from.eq_ignore_ascii_case("railgun") {
+        return crate::railgun::transfer(global, args, &instance, &profile).await;
+    }
+    if args.memo.is_some() {
+        return Err(failure::usage(
+            "--memo is only supported with --from railgun",
+        ));
+    }
     let asset = chosen_asset(&instance, &profile, args.asset.as_deref()).await?;
     let amount = required(
         args.amount.as_deref(),

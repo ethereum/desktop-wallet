@@ -76,4 +76,11 @@ impl Instance {
         let profile_db: Arc<dyn Database> = Arc::new(self.profile_db(profile));
         Arc::new(ScopedDatabase::new(profile_db, b"tornado"))
     }
+
+    /// Network- and profile-scoped encrypted Railgun checkpoints and pending operations.
+    #[must_use]
+    pub fn railgun_database(&self, profile: &ProfileRecord) -> Arc<dyn Database> {
+        let profile_db: Arc<dyn Database> = Arc::new(self.profile_db(profile));
+        Arc::new(ScopedDatabase::new(profile_db, b"railgun"))
+    }
 }
