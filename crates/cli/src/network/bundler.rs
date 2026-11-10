@@ -38,7 +38,7 @@ struct BundlerConfigReport {
 }
 
 impl Report for BundlerConfigReport {
-    const KIND: &'static str = "edw/network-bundler-config";
+    const KIND: &'static str = "edw/network-bundler";
     const VERSION: u32 = 1;
 }
 
@@ -47,7 +47,7 @@ impl fmt::Display for BundlerConfigReport {
         if self.urls.is_empty() {
             return write!(
                 f,
-                "No bundler URLs. Add one with `edw network bundler-config add --url <url>`."
+                "No bundler URLs. Add one with `edw network bundler add --url <url>`."
             );
         }
         write!(f, "{}", self.urls.join("\n"))

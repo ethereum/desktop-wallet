@@ -12,7 +12,12 @@ use serde::Serialize;
 use zeroize::Zeroizing;
 
 use crate::{
-    GlobalArgs, failure, input::Input, report::Report, secret_file, session::SessionFile, unlock,
+    GlobalArgs, failure,
+    input::{Choice, Input},
+    report::Report,
+    secret_file,
+    session::SessionFile,
+    unlock,
 };
 
 const PHRASE_MAX_BYTES: u64 = 4096;
@@ -36,6 +41,13 @@ pub enum Command {
 }
 
 #[derive(Args, Debug)]
+pub struct ProfileArg {
+    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
+    #[arg(short = 'p', long = "profile", value_name = "PROFILE")]
+    selector: Option<String>,
+}
+
+#[derive(Args, Debug)]
 pub struct ListArgs {}
 
 #[derive(Args, Debug)]
@@ -44,6 +56,7 @@ pub struct NewArgs {
     /// Exclude extended Tornado pools for this profile.
     #[arg(long)]
     no_extended_pools: bool,
+    /// A name to select the profile by. Prompted for at a terminal.
     #[arg(long)]
     name: Option<String>,
     /// Create the profile on a new recovery phrase.
@@ -56,7 +69,7 @@ pub struct NewArgs {
     #[arg(long, conflicts_with = "phrase_of")]
     long_phrase: bool,
     /// Profile index to create. Defaults to 0 on a new phrase, else the smallest unused.
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     index: Option<u32>,
 }
 
@@ -66,8 +79,9 @@ pub struct ImportArgs {
     #[arg(long)]
     no_extended_pools: bool,
     /// Consecutive unused Tornado nonces to scan (default 20). Increase after abandoned preparations.
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    #[arg(long, hide_short_help = true, value_parser = clap::value_parser!(u64).range(1..))]
     tornado_gap_limit: Option<u64>,
+    /// A name to select the profile by. Prompted for at a terminal.
     #[arg(long)]
     name: Option<String>,
     /// Read the recovery phrase from this file instead of stdin. It must be owned by you with
@@ -75,31 +89,31 @@ pub struct ImportArgs {
     #[arg(long, value_name = "PATH")]
     phrase_file: Option<PathBuf>,
     /// Profile index to create. Defaults to 0.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, hide_short_help = true, default_value_t = 0)]
     index: u32,
 }
 
 #[derive(Args, Debug)]
 pub struct RenameArgs {
-    /// Profile to rename, by name.
-    selector: String,
     /// New name. Pass `-` or an empty string to clear it.
     new_name: String,
+    #[command(flatten)]
+    profile: ProfileArg,
 }
 
 #[derive(Args, Debug)]
 pub struct RescanArgs {
     /// Consecutive unused Tornado nonces to scan (default 20). Increase for seed-only recovery.
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    #[arg(long, hide_short_help = true, value_parser = clap::value_parser!(u64).range(1..))]
     tornado_gap_limit: Option<u64>,
-    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
-    selector: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
 }
 
 #[derive(Args, Debug)]
 pub struct ClearPendingArgs {
-    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
-    selector: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
     /// Clear only this Tornado note nonce. Omit to clear all unmined reservations.
     #[arg(long)]
     nonce: Option<u64>,
@@ -107,8 +121,8 @@ pub struct ClearPendingArgs {
 
 #[derive(Args, Debug)]
 pub struct RevealPhraseArgs {
-    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
-    selector: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
 }
 
 #[derive(Serialize)]
@@ -468,13 +482,7 @@ impl ImportArgs {
 impl RescanArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
-        let profile = if let Some(selector) = &self.selector {
-            instance.profile(selector).await?
-        } else {
-            let mut profiles = instance.profiles().await?;
-            profiles.sort_by_key(ProfileRecord::key);
-            choose_profile(&profiles, global.input())?
-        };
+        let profile = self.profile.resolve(&instance, global.input()).await?;
 
         let endpoint = instance.rpc().await?;
         let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
@@ -498,13 +506,7 @@ impl RescanArgs {
 impl ClearPendingArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
-        let profile = if let Some(selector) = &self.selector {
-            instance.profile(selector).await?
-        } else {
-            let mut profiles = instance.profiles().await?;
-            profiles.sort_by_key(ProfileRecord::key);
-            choose_profile(&profiles, global.input())?
-        };
+        let profile = self.profile.resolve(&instance, global.input()).await?;
         let phrase = crate::spend::mnemonic(&instance, &profile).await?;
         let endpoint = instance.rpc().await?;
         let vault = crate::spend::open_vault(&instance, &profile, &phrase, endpoint).await?;
@@ -529,8 +531,16 @@ impl ClearPendingArgs {
 impl RenameArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
+        let profile = self
+            .profile
+            .resolve_by_key(&instance, global.input())
+            .await?;
         let record = instance
-            .rename_profile(&self.selector, Some(self.new_name.clone()))
+            .set_profile_name(
+                profile.mnemonic_index,
+                profile.profile_index,
+                Some(self.new_name.clone()),
+            )
             .await?;
         RenameReport {
             profile: ProfileSummary::load(&instance, &record).await?,
@@ -565,12 +575,9 @@ impl RevealPhraseArgs {
             .ok_or_else(|| failure::locked("no decryption password"))?;
         let instance = Instance::open(&data_dir, network, password.as_bytes()).await?;
 
+        let profile = self.profile.resolve(&instance, input).await?;
         let mut profiles = instance.profiles().await?;
         profiles.sort_by_key(ProfileRecord::key);
-        let profile = match &self.selector {
-            Some(selector) => instance.profile(selector).await?,
-            None => choose_profile(&profiles, input)?,
-        };
         let sharing: Vec<String> = profiles
             .iter()
             .filter(|other| other.mnemonic_index == profile.mnemonic_index)
@@ -581,13 +588,10 @@ impl RevealPhraseArgs {
             "Anyone who sees this phrase can take the funds of: {}.",
             sharing.join(", ")
         );
-        let answer = input
-            .line(&format!(
-                "Show the recovery phrase of {}? [y/N] ",
-                profile.display_name()
-            ))?
-            .unwrap_or_default();
-        if !answer.eq_ignore_ascii_case("y") && !answer.eq_ignore_ascii_case("yes") {
+        if !input.confirm(&format!(
+            "Show the recovery phrase of {}? [y/N] ",
+            profile.display_name()
+        ))? {
             eprintln!("Not shown.");
             return Ok(());
         }
@@ -598,6 +602,65 @@ impl RevealPhraseArgs {
         println!();
         println!("Store it offline, then clear your terminal scrollback.");
         Ok(())
+    }
+}
+
+impl ProfileArg {
+    /// The named profile, else the only one, else the one picked at a terminal.
+    pub async fn resolve(
+        &self,
+        instance: &Instance,
+        input: Input,
+    ) -> Result<ProfileRecord, anyhow::Error> {
+        self.select(instance, input, selector_of).await
+    }
+
+    /// As [`Self::resolve`], recording a pick by `mnemonic/profile`, which survives a rename.
+    pub async fn resolve_by_key(
+        &self,
+        instance: &Instance,
+        input: Input,
+    ) -> Result<ProfileRecord, anyhow::Error> {
+        self.select(instance, input, |profile, _| key_of(profile))
+            .await
+    }
+
+    async fn select(
+        &self,
+        instance: &Instance,
+        input: Input,
+        recorded: impl Fn(&ProfileRecord, &[ProfileRecord]) -> String,
+    ) -> Result<ProfileRecord, anyhow::Error> {
+        if let Some(selector) = &self.selector {
+            return Ok(instance.profile(selector).await?);
+        }
+        let mut profiles = instance.profiles().await?;
+        profiles.sort_by_key(ProfileRecord::key);
+        match profiles.as_slice() {
+            [] => anyhow::bail!(
+                "no profiles; create one with `edw profile new` or `edw profile import`"
+            ),
+            [only] => {
+                input.imply("--profile", Some(recorded(only, &profiles)));
+                Ok(only.clone())
+            }
+            several => {
+                let choices: Vec<Choice> = several
+                    .iter()
+                    .map(|profile| {
+                        Choice::new(
+                            profile.display_name(),
+                            "--profile",
+                            recorded(profile, several),
+                        )
+                    })
+                    .collect();
+                let choice = input
+                    .choose("Select a profile:", &choices)?
+                    .ok_or_else(|| failure::usage("pass --profile <profile>"))?;
+                Ok(several[choice].clone())
+            }
+        }
     }
 }
 
@@ -691,7 +754,7 @@ fn prompt_profile_name(
         return Ok(explicit);
     }
     Ok(input
-        .line("Profile name: ")?
+        .ask("--name", "Profile name: ")?
         .filter(|name| !name.is_empty()))
 }
 
@@ -699,51 +762,65 @@ fn prompt_profile_name(
 ///
 /// With no stored phrase there is nothing to pick, so it is a new one.
 fn choose_phrase(profiles: &[ProfileRecord], input: Input) -> Result<Option<u32>, anyhow::Error> {
-    let mut phrases: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut phrases: Vec<(&ProfileRecord, Vec<String>)> = Vec::new();
     let mut sorted: Vec<&ProfileRecord> = profiles.iter().collect();
     sorted.sort_by_key(|profile| profile.key());
     for profile in sorted {
         match phrases.last_mut() {
-            Some((index, names)) if *index == profile.mnemonic_index => {
+            Some((first, names)) if first.mnemonic_index == profile.mnemonic_index => {
                 names.push(profile.display_name());
             }
-            _ => phrases.push((profile.mnemonic_index, vec![profile.display_name()])),
+            _ => phrases.push((profile, vec![profile.display_name()])),
         }
     }
     if phrases.is_empty() {
+        input.imply("--new-phrase", None);
         return Ok(None);
     }
 
-    let labels: Vec<String> = std::iter::once("a new recovery phrase".to_string())
-        .chain(
-            phrases
-                .iter()
-                .map(|(_, names)| format!("the recovery phrase of {}", names.join(", "))),
-        )
-        .collect();
+    let choices: Vec<Choice> =
+        std::iter::once(Choice::flag("a new recovery phrase", "--new-phrase"))
+            .chain(phrases.iter().map(|(first, names)| {
+                Choice::new(
+                    format!("the recovery phrase of {}", names.join(", ")),
+                    "--phrase-of",
+                    selector_of(first, profiles),
+                )
+            }))
+            .collect();
     let choice = input
-        .choose("Create the profile on:", &labels)?
+        .choose("Create the profile on:", &choices)?
         .ok_or_else(|| failure::usage("pass --new-phrase or --phrase-of <profile>"))?;
-    Ok(choice.checked_sub(1).map(|index| phrases[index].0))
+    Ok(choice
+        .checked_sub(1)
+        .map(|index| phrases[index].0.mnemonic_index))
 }
 
-pub fn choose_profile(
-    profiles: &[ProfileRecord],
-    input: Input,
-) -> Result<ProfileRecord, anyhow::Error> {
-    match profiles {
-        [] => {
-            anyhow::bail!("no profiles; create one with `edw profile new` or `edw profile import`")
+fn selector_of(profile: &ProfileRecord, profiles: &[ProfileRecord]) -> String {
+    match &profile.name {
+        Some(name)
+            if !shaped_like_key(name)
+                && profiles
+                    .iter()
+                    .filter(|other| other.name.as_ref() == Some(name))
+                    .count()
+                    == 1 =>
+        {
+            name.clone()
         }
-        [only] => Ok(only.clone()),
-        several => {
-            let labels: Vec<String> = several.iter().map(ProfileRecord::display_name).collect();
-            let choice = input.choose("Select a profile:", &labels)?.ok_or_else(|| {
-                failure::usage("name the profile as `mnemonic/profile` or by name")
-            })?;
-            Ok(several[choice].clone())
-        }
+        _ => key_of(profile),
     }
+}
+
+fn key_of(profile: &ProfileRecord) -> String {
+    format!("{}/{}", profile.mnemonic_index, profile.profile_index)
+}
+
+/// Whether `--profile` would read `name` as a `mnemonic/profile` pair before trying it as a name.
+fn shaped_like_key(name: &str) -> bool {
+    name.split_once('/').is_some_and(|(mnemonic, profile)| {
+        mnemonic.parse::<u32>().is_ok() && profile.parse::<u32>().is_ok()
+    })
 }
 
 #[cfg(test)]
@@ -773,6 +850,55 @@ mod tests {
             }
         }
         assert!(crate::Cli::try_parse_from(["edw", "shield", "--no-extended-pools"]).is_err());
+    }
+
+    #[test]
+    fn a_name_shaped_like_another_profiles_key_is_replayed_as_its_own_key() {
+        let profiles = [
+            ProfileRecord::new(1, 0, Some("alice".into())),
+            ProfileRecord::new(0, 2, Some("1/0".into())),
+        ];
+        assert_eq!(selector_of(&profiles[0], &profiles), "alice");
+        assert_eq!(selector_of(&profiles[1], &profiles), "0/2");
+    }
+
+    #[test]
+    fn every_command_on_one_profile_selects_it_with_dash_p() {
+        use clap::Parser;
+        let commands: [&[&str]; 12] = [
+            &["balance"],
+            &["receive"],
+            &["shield"],
+            &["unshield"],
+            &["transfer"],
+            &["asset", "list"],
+            &["asset", "add", "DAI"],
+            &["asset", "remove", "DAI"],
+            &["profile", "rescan"],
+            &["profile", "clear-pending"],
+            &["profile", "rename", "bob"],
+            &["profile", "reveal-phrase"],
+        ];
+        for command in commands {
+            let args = std::iter::once(&"edw")
+                .chain(command)
+                .chain(&["-p", "alice"]);
+            assert!(crate::Cli::try_parse_from(args).is_ok(), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn a_recorded_profile_starting_with_a_hyphen_parses_back() {
+        use clap::Parser;
+        let args = ["edw", "profile", "rescan"]
+            .map(String::from)
+            .into_iter()
+            .chain(crate::input::flag_words("--profile", "-p".to_string()));
+        let cli = crate::Cli::try_parse_from(args).expect("valid profile arguments");
+        let crate::Command::Profile(Command::Rescan(args)) = cli.command else {
+            panic!("rescan command")
+        };
+        assert_eq!(args.profile.selector.as_deref(), Some("-p"));
     }
 
     #[test]

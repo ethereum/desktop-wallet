@@ -5,11 +5,11 @@ use alloy_signer::{Signer, k256::ecdsa::SigningKey};
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
 pub use amount::{
-    AmountError, PoolSelection, cover_notes, deposit_pools, deposit_pools_for_asset,
-    deposit_pools_for_asset_denominations, deposit_pools_for_asset_with_selection,
-    deposit_pools_for_denominations, deposit_pools_with_selection, exact_notes,
-    exact_notes_for_asset, format_amount, format_eth, parse_amount, parse_eth, parse_wei,
-    resolve_asset, withdrawal_notes,
+    AmountError, PoolSelection, SUPPORTED_ASSETS, cover_notes, denominations, deposit_pools,
+    deposit_pools_for_asset, deposit_pools_for_asset_denominations,
+    deposit_pools_for_asset_with_selection, deposit_pools_for_denominations,
+    deposit_pools_with_selection, exact_notes, exact_notes_for_asset, format_amount, format_eth,
+    parse_amount, parse_eth, parse_wei, resolve_asset, withdrawal_notes,
 };
 pub use kohaku_tornadocash::{Asset, Pool};
 use kohaku_tornadocash::{

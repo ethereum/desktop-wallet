@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     GlobalArgs, failure,
-    input::Input,
+    input::{Choice, Input},
     report::Report,
     session::{self, Session, SessionFile},
 };
@@ -57,7 +57,7 @@ impl fmt::Display for UnlockReport {
             writeln!(f, "Encrypted store created at {dir}.")?;
             writeln!(
                 f,
-                "Mainnet and Sepolia start on an active RPC named publicnode (500ms between calls), the public Pimlico bundler, and the Saga indexer. Add another RPC with `edw network rpc-config add <name> --url <url>`."
+                "Mainnet and Sepolia start on an active RPC named publicnode (500ms between calls), the public Pimlico bundler, and the Saga indexer. Add another RPC with `edw network rpc add <name> --url <url>`."
             )?;
             writeln!(
                 f,
@@ -201,9 +201,12 @@ pub fn choose_network(data_dir: &DataDir, input: Input) -> Result<NetworkId, any
         ),
         [only] => Ok(*only),
         several => {
-            let labels: Vec<String> = several.iter().map(ToString::to_string).collect();
+            let choices: Vec<Choice> = several
+                .iter()
+                .map(|network| Choice::unrecorded(network.to_string()))
+                .collect();
             let choice = input
-                .choose("Select a network to unlock:", &labels)?
+                .choose("Select a network to unlock:", &choices)?
                 .ok_or_else(|| {
                     failure::usage(if session::can_hold() {
                         "several wallet instances exist; run `edw unlock --network <name or id>`"

@@ -1,36 +1,40 @@
 use std::fmt;
 
+use alloy_primitives::Address;
 use clap::{Args, Subcommand};
+use edw_core::asset::{Erc20Asset, default_erc20s};
 use serde::Serialize;
 
 use crate::{
-    GlobalArgs,
+    GlobalArgs, failure,
+    profile::ProfileArg,
     report::Report,
-    spend::{choose_profile, parse_address},
+    spend::{parse_address, shaped_like_address},
 };
 
 #[derive(Subcommand)]
 pub enum Command {
     /// Lists the ERC-20s a profile tracks.
     List(ListArgs),
-    /// Tracks an ERC-20, including a default the profile had opted out of.
-    OptIn(AddressArgs),
-    /// Stops a profile tracking an ERC-20. A default is recorded as opted out; any other token is
-    /// removed from its opt-ins.
-    OptOut(AddressArgs),
+    /// Tracks an ERC-20, or tracks a network default again after `remove`.
+    Add(AssetArgs),
+    /// Stops tracking an ERC-20, which hides its public balance and its Tornado notes.
+    Remove(AssetArgs),
 }
 
 #[derive(Args, Debug)]
 pub struct ListArgs {
-    #[arg(long)]
-    profile: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
 }
 
 #[derive(Args, Debug)]
-pub struct AddressArgs {
-    address: String,
-    #[arg(long)]
-    profile: Option<String>,
+pub struct AssetArgs {
+    /// A symbol or the token's address. A token neither tracked nor a network default needs its
+    /// address.
+    asset: String,
+    #[command(flatten)]
+    profile: ProfileArg,
 }
 
 #[derive(Serialize)]
@@ -79,22 +83,22 @@ impl fmt::Display for ChangeReport {
 
 impl Report for ChangeReport {
     const KIND: &'static str = "edw/asset";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
 }
 
 impl Command {
     pub async fn run(&self, global: &GlobalArgs) -> anyhow::Result<()> {
         match self {
             Self::List(args) => list(global, args).await,
-            Self::OptIn(args) => opt_in(global, args).await,
-            Self::OptOut(args) => opt_out(global, args).await,
+            Self::Add(args) => add(global, args).await,
+            Self::Remove(args) => remove(global, args).await,
         }
     }
 }
 
 async fn list(global: &GlobalArgs, args: &ListArgs) -> anyhow::Result<()> {
     let instance = global.open().await?;
-    let profile = choose_profile(&instance, args.profile.as_deref(), global.input()).await?;
+    let profile = args.profile.resolve(&instance, global.input()).await?;
     let assets = instance.profile_erc20s(&profile).await?;
     ListReport {
         assets: assets
@@ -108,31 +112,118 @@ async fn list(global: &GlobalArgs, args: &ListArgs) -> anyhow::Result<()> {
     .emit(global.mode())
 }
 
-async fn opt_in(global: &GlobalArgs, args: &AddressArgs) -> anyhow::Result<()> {
-    let address = parse_address(&args.address)?;
+async fn add(global: &GlobalArgs, args: &AssetArgs) -> anyhow::Result<()> {
     let instance = global.open().await?;
-    let profile = choose_profile(&instance, args.profile.as_deref(), global.input()).await?;
+    let profile = args.profile.resolve(&instance, global.input()).await?;
+    let known: Vec<Erc20Asset> = if shaped_like_address(&args.asset) {
+        Vec::new()
+    } else {
+        instance
+            .profile_erc20s(&profile)
+            .await?
+            .into_iter()
+            .chain(default_erc20s(instance.network().id))
+            .collect()
+    };
+    let address = address_of(&args.asset, &known)?.ok_or_else(|| {
+        failure::usage(format!(
+            "no tracked or default ERC-20 is called {}; pass its address",
+            args.asset
+        ))
+    })?;
     let endpoint = instance.rpc().await?;
     let asset = instance
         .opt_in_erc20(&profile, endpoint.as_ref(), address)
         .await?;
     ChangeReport {
-        action: "opted in to",
+        action: "tracking",
         symbol: asset.symbol,
         address: asset.address.to_string(),
     }
     .emit(global.mode())
 }
 
-async fn opt_out(global: &GlobalArgs, args: &AddressArgs) -> anyhow::Result<()> {
-    let address = parse_address(&args.address)?;
+async fn remove(global: &GlobalArgs, args: &AssetArgs) -> anyhow::Result<()> {
     let instance = global.open().await?;
-    let profile = choose_profile(&instance, args.profile.as_deref(), global.input()).await?;
+    let profile = args.profile.resolve(&instance, global.input()).await?;
+    let tracked = instance.profile_erc20s(&profile).await?;
+    let address = address_of(&args.asset, &tracked)?.ok_or_else(|| {
+        failure::usage(format!(
+            "no tracked ERC-20 is called {}; see `edw asset list`",
+            args.asset
+        ))
+    })?;
     let asset = instance.opt_out_erc20(&profile, address).await?;
     ChangeReport {
-        action: "opted out of",
+        action: "stopped tracking",
         symbol: asset.symbol,
         address: asset.address.to_string(),
     }
     .emit(global.mode())
+}
+
+/// The address `selector` names: parsed when shaped like an address, without consulting `known`,
+/// else the one token in `known` with that symbol, or `None` when there is no such token.
+///
+/// # Errors
+///
+/// Fails on a malformed address, and when several tokens share the symbol.
+pub fn address_of(selector: &str, known: &[Erc20Asset]) -> anyhow::Result<Option<Address>> {
+    if shaped_like_address(selector) {
+        return parse_address(selector).map(Some);
+    }
+    let mut matches: Vec<Address> = known
+        .iter()
+        .filter(|asset| asset.symbol.eq_ignore_ascii_case(selector))
+        .map(|asset| asset.address)
+        .collect();
+    matches.sort_unstable();
+    matches.dedup();
+    match matches.as_slice() {
+        [only] => Ok(Some(*only)),
+        [] => Ok(None),
+        several => Err(failure::usage(format!(
+            "several ERC-20s are called {selector}; pass one address: {}",
+            several
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token(byte: u8, symbol: &str) -> Erc20Asset {
+        Erc20Asset {
+            address: Address::repeat_byte(byte),
+            symbol: symbol.to_string(),
+            decimals: 18,
+        }
+    }
+
+    #[test]
+    fn a_symbol_resolves_only_when_it_names_one_token() {
+        let known = [
+            token(1, "DAI"),
+            token(2, "USDC"),
+            token(1, "DAI"),
+            token(3, "FOO"),
+            token(4, "FOO"),
+        ];
+        assert_eq!(
+            address_of("dai", &known).ok(),
+            Some(Some(Address::repeat_byte(1)))
+        );
+        assert_eq!(address_of("BAR", &known).ok(), Some(None));
+        let unknown = Address::repeat_byte(9);
+        assert_eq!(
+            address_of(&unknown.to_string(), &known).ok(),
+            Some(Some(unknown))
+        );
+        assert!(address_of("FOO", &known).is_err());
+    }
 }

@@ -68,7 +68,7 @@ pub enum InstanceError {
     DuplicateRpcConfig(String),
     #[error("no RPC config `{0}`")]
     UnknownRpcConfig(String),
-    #[error("no RPC config; add one with `edw network rpc-config add <name> --url <url>`")]
+    #[error("no RPC config; add one with `edw network rpc add <name> --url <url>`")]
     NoRpcConfigs,
     #[error("bundler URL `{0}` is already configured")]
     DuplicateBundlerUrl(String),

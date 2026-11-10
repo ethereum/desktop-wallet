@@ -1,10 +1,7 @@
 use std::fmt;
 
 use clap::Subcommand;
-use edw_core::{
-    instance::{DataDir, Instance},
-    network::RpcConfigKind,
-};
+use edw_core::instance::DataDir;
 use serde::Serialize;
 
 use crate::{GlobalArgs, report::Report, session::SessionFile};
@@ -13,7 +10,8 @@ use crate::{GlobalArgs, report::Report, session::SessionFile};
 pub enum Command {
     /// Prints the resolved data directory.
     Path,
-    /// Prints the data directory, its network instances, the session, and the active RPC config.
+    /// Prints the data directory, its network instances, the session, and the unlocked instance's
+    /// directory.
     View,
 }
 
@@ -28,19 +26,13 @@ struct ConfigViewReport {
     instances: Vec<String>,
     locked: bool,
     session: Option<SessionView>,
-    rpc_config: Option<RpcConfigView>,
+    instance_dir: Option<String>,
 }
 
 #[derive(Serialize)]
 struct SessionView {
     network: String,
     data_dir: String,
-}
-
-#[derive(Serialize)]
-struct RpcConfigView {
-    name: String,
-    url: String,
 }
 
 impl Report for ConfigPathReport {
@@ -56,7 +48,7 @@ impl fmt::Display for ConfigPathReport {
 
 impl Report for ConfigViewReport {
     const KIND: &'static str = "edw/config-view";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
 }
 
 impl fmt::Display for ConfigViewReport {
@@ -76,10 +68,9 @@ impl fmt::Display for ConfigViewReport {
             )?,
             (None, _) => writeln!(f, "session=(locked)")?,
         }
-        match &self.rpc_config {
-            Some(config) => write!(f, "rpc_config={} {}", config.name, config.url),
-            None if self.locked => write!(f, "rpc_config=(unknown while locked)"),
-            None => write!(f, "rpc_config=(none)"),
+        match &self.instance_dir {
+            Some(dir) => write!(f, "instance_dir={dir}"),
+            None => write!(f, "instance_dir=(unknown while locked)"),
         }
     }
 }
@@ -109,10 +100,12 @@ async fn view(data_dir: &DataDir) -> Result<ConfigViewReport, anyhow::Error> {
             session = None;
         }
     }
-    let rpc_config = match &instance {
-        Some(instance) => active_rpc_config(instance).await?,
-        None => None,
-    };
+    let instance_dir = instance.as_ref().map(|instance| {
+        data_dir
+            .instance_dir(instance.network().id)
+            .display()
+            .to_string()
+    });
     Ok(ConfigViewReport {
         data_dir: data_dir.path().display().to_string(),
         instances: data_dir
@@ -125,18 +118,6 @@ async fn view(data_dir: &DataDir) -> Result<ConfigViewReport, anyhow::Error> {
             network: session.network.to_string(),
             data_dir: session.data_dir.display().to_string(),
         }),
-        rpc_config,
+        instance_dir,
     })
-}
-
-async fn active_rpc_config(instance: &Instance) -> Result<Option<RpcConfigView>, anyhow::Error> {
-    Ok(instance
-        .active_rpc()
-        .await?
-        .map(|config| match config.kind {
-            RpcConfigKind::Http { url } => RpcConfigView {
-                name: config.name,
-                url,
-            },
-        }))
 }
