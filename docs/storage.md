@@ -15,6 +15,7 @@ network          / network            # Network { id, native_asset }
                  / indexerConfig      # IndexerConfig { url, enabled }
 keyring          / mnemonics          # indices of the stored recovery phrases
                  / mnemonic:{m}       # one recovery phrase
+                 / externalSigners    # Vec<ExternalSignerRecord { m, signer }>, signers holding their own keys
 profiles         / index              # Vec<ProfileRecord { m, x, name }>
 profile:{m}:{x}  / pointer            # (m, x)
                  / optedIn            # Vec<Address>, extra ERC-20s the profile tracks
@@ -28,13 +29,14 @@ cache:{protocol} / cursor             # last indexed block
 
 ## Keyring
 
-The keyring holds recovery phrases, indexed by `m`.
+The keyring holds recovery phrases and external signers, indexed by `m` in one sequence.
 Keys are derived from a phrase on use and never stored.
+An external signer keeps its keys: a Ledger is stored as its address at `m/44'/60'/0'/0/0`, which identifies the device, and signs on it.
 
 ## Profiles
 
-A profile is a recovery phrase `m` and a profile index `x`, the BIP-44 `account'` leaf.
-Profiles may share a phrase under different `x`.
+A profile is a keyring entry `m` and a profile index `x`, the BIP-44 `account'` leaf.
+Profiles may share a phrase under different `x`. A Ledger holds one profile.
 
 A profile derives its keys at `x`:
 

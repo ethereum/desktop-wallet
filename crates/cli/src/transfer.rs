@@ -10,10 +10,10 @@ use edw_core::{
     broadcast::{PreparedTransaction, prepare_call, submit_prepared},
     call::Call,
     instance::Instance,
-    mnemonic::Mnemonic,
     network::NetworkEndpoint,
     profile::ProfileRecord,
     recipient::{Recipient, RecipientError, ResolvedRecipient},
+    signer::{Signer, ledger::LEDGER_SIGNER_TAG},
     vault::tornadocash::{TornadoNote, UserOpError, cover_notes, format_eth},
 };
 use serde::Serialize;
@@ -26,9 +26,9 @@ use crate::{
     profile::ProfileArg,
     report::Report,
     spend::{
-        Account, Consent, ShieldedWithdrawal, account_at, account_by_address, confirm, declined,
+        Consent, ShieldedWithdrawal, account_at, account_by_address, confirm, declined,
         ensure_paymaster, first_bundler, keep_fresh, measured, mnemonic, note_eth, open_vault,
-        quote_shielded,
+        parse_address, quote_shielded,
     },
     unshield::{NoteLine, note_lines},
 };
@@ -104,7 +104,6 @@ struct Plan<'a> {
     instance: &'a Instance,
     input: Input,
     profile: &'a ProfileRecord,
-    phrase: &'a Mnemonic,
     endpoint: Arc<dyn NetworkEndpoint>,
     asset: Asset,
     amount: U256,
@@ -260,7 +259,6 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     )?
     .parse()
     .map_err(|error: RecipientError| failure::usage(error.to_string()))?;
-    let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
     let to = to.resolve(endpoint.as_ref()).await?;
     let plan = Plan {
@@ -269,7 +267,6 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
         instance: &instance,
         input,
         profile: &profile,
-        phrase: &phrase,
         endpoint,
         asset,
         amount,
@@ -278,12 +275,39 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     if tornado {
         return from_tornado(&plan).await;
     }
-    let payer = if let Ok(index) = from.parse::<u32>() {
-        account_at(&phrase, profile.profile_index, index)?
-    } else {
-        account_by_address(&phrase, profile.profile_index, &from)?
+    let (index, payer) = payer(&plan, &from).await?;
+    from_account(&plan, index, payer).await
+}
+
+async fn payer(plan: &Plan<'_>, from: &str) -> Result<(u32, Arc<dyn Signer>), anyhow::Error> {
+    let Some(ledger) = plan.instance.external_signer(plan.profile).await? else {
+        let phrase = mnemonic(plan.instance, plan.profile).await?;
+        let account = if let Ok(index) = from.parse::<u32>() {
+            account_at(&phrase, plan.profile.profile_index, index)?
+        } else {
+            account_by_address(&phrase, plan.profile.profile_index, from)?
+        };
+        return Ok((account.index, account.signer));
     };
-    from_account(&plan, payer).await
+    let index = if let Ok(index) = from.parse::<u32>() {
+        index
+    } else {
+        let address = parse_address(from)?;
+        plan.instance
+            .stored_address_accounts(plan.profile)
+            .await?
+            .into_iter()
+            .find(|stored| stored.address == address)
+            .map(|stored| stored.index)
+            .ok_or_else(|| {
+                failure::usage(format!(
+                    "{address} is not one of this profile's addresses; pass its index"
+                ))
+            })?
+    };
+    eprintln!("Connecting to the Ledger...");
+    let account = ledger.connect(plan.profile.profile_index, index).await?;
+    Ok((index, Arc::new(account)))
 }
 
 async fn chosen_asset(
@@ -354,16 +378,21 @@ fn pick_asset(tracked: &[Erc20Asset], input: Input) -> Result<Asset, anyhow::Err
     })
 }
 
-async fn from_account(plan: &Plan<'_>, payer: Account) -> Result<(), anyhow::Error> {
+async fn from_account(
+    plan: &Plan<'_>,
+    index: u32,
+    payer: Arc<dyn Signer>,
+) -> Result<(), anyhow::Error> {
     let endpoint = plan.endpoint.as_ref();
+    let address = payer.address();
     let call = match &plan.asset {
         Asset::Eth => Call::new(plan.to.address, Bytes::new(), plan.amount),
         Asset::Erc20(asset) => {
-            let held = erc20_balance(endpoint, asset.address, payer.address).await?;
+            let held = erc20_balance(endpoint, asset.address, address).await?;
             if held < plan.amount {
                 anyhow::bail!(
                     "{} holds {} {}, which does not cover {} {}; add {} {}",
-                    payer.address,
+                    address,
                     plan.asset.format(held),
                     asset.symbol,
                     plan.asset.format(plan.amount),
@@ -373,26 +402,26 @@ async fn from_account(plan: &Plan<'_>, payer: Account) -> Result<(), anyhow::Err
                 );
             }
             let transfer = transfer_call(asset.address, plan.to.address, plan.amount);
-            simulate_transfer(endpoint, payer.address, &transfer).await?;
+            simulate_transfer(endpoint, address, &transfer).await?;
             transfer
         }
     };
-    let balance = endpoint.balance(payer.address).await?;
+    let balance = endpoint.balance(address).await?;
     if balance < call.value {
         anyhow::bail!(
             "{} holds {} ETH, which does not cover {} ETH; add {} ETH, plus gas",
-            payer.address,
+            address,
             format_eth(balance),
             format_eth(call.value),
             format_eth(call.value - balance)
         );
     }
-    let prepared = prepare_call(endpoint, payer.address, &call).await?;
+    let prepared = prepare_call(endpoint, address, &call).await?;
     let needed = call.value + prepared.max_fee();
     if balance < needed {
         anyhow::bail!(
             "{} holds {} ETH, but this transfer needs up to {} ETH: {} ETH sent plus up to {} ETH of gas; add {} ETH",
-            payer.address,
+            address,
             format_eth(balance),
             format_eth(needed),
             format_eth(call.value),
@@ -401,7 +430,7 @@ async fn from_account(plan: &Plan<'_>, payer: Account) -> Result<(), anyhow::Err
         );
     }
 
-    let mut report = plan.report(payer.address.to_string(), Some(payer.index));
+    let mut report = plan.report(address.to_string(), Some(index));
     if plan.args.dry_run {
         report.unsigned = Some(unsigned(&call, &prepared));
         report.max_fee = Some(format_eth(prepared.max_fee()));
@@ -411,8 +440,8 @@ async fn from_account(plan: &Plan<'_>, payer: Account) -> Result<(), anyhow::Err
         "Transfer {} {} from {} ({}) to {}.\nGas, up to {} ETH, is paid by that same account.",
         plan.asset.format(plan.amount),
         plan.asset.symbol(),
-        payer.index,
-        payer.address,
+        index,
+        address,
         plan.to,
         format_eth(prepared.max_fee())
     );
@@ -420,25 +449,23 @@ async fn from_account(plan: &Plan<'_>, payer: Account) -> Result<(), anyhow::Err
         declined();
         return Ok(());
     }
-    let included = submit_prepared(endpoint, payer.signer, prepared).await?;
+    if payer.tag() == LEDGER_SIGNER_TAG {
+        eprintln!("Confirm the transaction on the Ledger.");
+    }
+    let included = submit_prepared(endpoint, payer, prepared).await?;
     report.fee = Some(format_eth(included.fee));
     report.transaction = Some(included.hash.to_string());
     report.emit(plan.global.mode())
 }
 
 async fn from_tornado(plan: &Plan<'_>) -> Result<(), anyhow::Error> {
-    let vault = open_vault(
-        plan.instance,
-        plan.profile,
-        plan.phrase,
-        plan.endpoint.clone(),
-    )
-    .await?;
+    let phrase = mnemonic(plan.instance, plan.profile).await?;
+    let vault = open_vault(plan.instance, plan.profile, &phrase, plan.endpoint.clone()).await?;
     eprintln!("Syncing Tornado pools...");
     let held = vault.notes().await?;
     let fresh = plan
         .instance
-        .fresh_address(plan.profile, plan.phrase, plan.endpoint.as_ref())
+        .fresh_address(plan.profile, &phrase, plan.endpoint.as_ref())
         .await?;
     let bundler_urls = plan.instance.bundler_urls().await?;
     let bundler = first_bundler(&bundler_urls)?;
@@ -448,7 +475,7 @@ async fn from_tornado(plan: &Plan<'_>) -> Result<(), anyhow::Error> {
     let quoted = loop {
         ensure_paymaster(&notes)?;
         let quoted = quote_shielded(ShieldedWithdrawal {
-            phrase: plan.phrase,
+            phrase: &phrase,
             profile_index: plan.profile.profile_index,
             endpoint: plan.endpoint.as_ref(),
             vault: &vault,

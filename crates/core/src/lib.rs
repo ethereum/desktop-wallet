@@ -6,6 +6,7 @@ pub mod call;
 pub mod database;
 pub mod delegate;
 pub mod executor;
+pub mod external_signer;
 pub mod factory;
 pub mod instance;
 pub mod keyring;

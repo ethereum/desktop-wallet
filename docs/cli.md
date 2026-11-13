@@ -21,7 +21,7 @@ edw network indexer [set-url <url> | enable | disable] # shows the indexer, repl
 
 edw profile list # lists all configured profiles
 edw profile new [--name NAME] [--new-phrase | --phrase-of PROFILE] # creates a new profile; on a new phrase, with an address vault for its first address, else like import
-edw profile import [--name NAME] [--phrase-file PATH] # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails), and scans the chain's Tornado pools (stops after 20 consecutive unused nonces)
+edw profile import [--name NAME] [--phrase-file PATH | --ledger] # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails), and scans the chain's Tornado pools (stops after 20 consecutive unused nonces). With --ledger, from a connected Ledger instead: its addresses are read from the device without a prompt, and the Tornado pools are not scanned
 edw profile rescan [-p PROFILE] # scans a profile's addresses again and adds an address vault for each one it is missing, and scans the chain's Tornado pools the same way
 edw profile clear-pending [-p PROFILE] [--nonce N] # syncs tracked pools, then forgets unmined deposit reservations without reusing nonces
 edw profile rename <new-name> [-p PROFILE] # sets a profile's name, or clears it with `-`
