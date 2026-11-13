@@ -98,6 +98,16 @@ impl Instance {
         scan: &EoaScan,
     ) -> Result<Vec<(u32, Address)>, InstanceError> {
         let addresses = self.addresses_to_add(profile, Some(scan)).await?;
+        self.add_missing_address_vaults_at(profile, addresses).await
+    }
+
+    /// Adds an address vault to `profile` for each of `addresses` whose index it has none for.
+    /// Returns the addresses it added.
+    pub async fn add_missing_address_vaults_at(
+        &self,
+        profile: &ProfileRecord,
+        addresses: Vec<(u32, Address)>,
+    ) -> Result<Vec<(u32, Address)>, InstanceError> {
         let missing = self.not_yet_stored(profile, addresses).await?;
         self.add_address_vaults(profile, &missing).await?;
         Ok(missing)

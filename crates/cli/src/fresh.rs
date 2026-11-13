@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::{
     GlobalArgs,
     report::Report,
-    spend::{choose_profile, mnemonic},
+    spend::{choose_profile, connect_ledger, mnemonic},
 };
 
 #[derive(Args, Debug)]
@@ -46,11 +46,24 @@ pub async fn run(global: &GlobalArgs, args: &NextFreshAddressArgs) -> Result<(),
     let instance = global.open().await?;
     let input = global.input();
     let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
-    let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
-    let fresh = instance
-        .fresh_address(&profile, &phrase, endpoint.as_ref())
-        .await?;
+    let fresh = if let Some(ledger) = instance.external_signer(&profile).await? {
+        let ledger = &connect_ledger(&ledger, profile.profile_index, 0).await?;
+        instance
+            .fresh_address_with(&profile, endpoint.as_ref(), |index| async move {
+                Ok::<_, anyhow::Error>(
+                    ledger
+                        .standard_address(profile.profile_index, index)
+                        .await?,
+                )
+            })
+            .await?
+    } else {
+        let phrase = mnemonic(&instance, &profile).await?;
+        instance
+            .fresh_address(&profile, &phrase, endpoint.as_ref())
+            .await?
+    };
     let stored = if args.peek {
         false
     } else {

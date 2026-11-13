@@ -22,7 +22,7 @@ edw network indexer-config [--url <url>] [--enable | --disable] # shows the inde
 edw profile list # lists all configured profiles
 edw profile new # creates a new profile; on a new phrase, with an address vault for its first address, else like import
 edw profile import # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails), and scans the chain's Tornado pools (stops after 20 consecutive unused nonces). With --ledger, from a connected Ledger instead: its addresses are read from the device without a prompt, and the Tornado pools are not scanned
-edw profile rescan [profile] # scans a profile's addresses again and adds an address vault for each one it is missing, and scans the chain's Tornado pools the same way
+edw profile rescan [profile] # scans a profile's addresses again and adds an address vault for each one it is missing, and scans the chain's Tornado pools the same way. For a Ledger profile, the addresses are read from the device and the Tornado pools are not scanned
 edw profile clear-pending [profile] [--nonce N] # syncs tracked pools, then forgets unmined deposit reservations without reusing nonces
 edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only
 
@@ -87,7 +87,7 @@ edw unshield --amount-formatted 1 --profile alice --non-interactive --yes \
 
 `--expected-fresh-address` is optional. If supplied, unshield aborts before proving/signing/submission when its selected account differs. A mismatch does not inherently guarantee an EVM revert: arbitrary calldata can still succeed with a recipient address baked into an earlier quote, so use the explicit check when calls were built for a peeked address.
 
-`next-fresh-address` prints the next standard address that this profile has not handed out and that has no nonce, code, or ETH, then stores it. `--peek` prints the same address and writes nothing. A declined command and `unshield --quote` do not store a fresh address. `unshield` and `transfer --from tornado` store it before submission, then wait for the receipt.
+`next-fresh-address` prints the next standard address that this profile has not handed out and that has no nonce, code, or ETH, then stores it. For a Ledger profile, the addresses are read from the device without a prompt. `--peek` prints the same address and writes nothing. A declined command and `unshield --quote` do not store a fresh address. `unshield` and `transfer --from tornado` store it before submission, then wait for the receipt.
 
 Pool sync tries the Saga indexer when it is on (`https://saga.gordosoluciones.xyz` on mainnet, `https://saga.gordosoluciones.xyz/sepolia` on Sepolia) and finishes any remaining blocks with `eth_getLogs` on the active RPC. Each log request covers that RPC config's block range (500 by default), and the config's call interval is the pause between RPC requests. Other chains start with the indexer off and use the RPC only. `indexer-config --disable` turns it off and keeps the URL. Import, rescan, and balance read this profile's enabled Tornado pools on the chain. Besides the ETH pools, mainnet includes DAI (100, 1,000, 10,000, 100,000), USDC (100, 1,000), USDT (100, 1,000), and WBTC (0.1, 1, 10); Sepolia includes DAI 100. USDC, USDT, DAI, and WBTC are defaults on mainnet, and DAI is a default on Sepolia. Every address vault is read for them unless the profile opts out.
 

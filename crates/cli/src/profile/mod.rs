@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use alloy_primitives::Address;
 use anyhow::Context;
 use clap::{ArgGroup, Args, Subcommand};
 use edw_core::{
@@ -18,7 +19,8 @@ use serde::Serialize;
 use zeroize::Zeroizing;
 
 use crate::{
-    GlobalArgs, failure, input::Input, report::Report, secret_file, session::SessionFile, unlock,
+    GlobalArgs, failure, input::Input, report::Report, secret_file, session::SessionFile,
+    spend::connect_ledger, unlock,
 };
 
 const PHRASE_MAX_BYTES: u64 = 4096;
@@ -476,13 +478,12 @@ impl ImportArgs {
             .await?;
         self.apply_pool_preference(instance, &profile).await?;
         let scan = scan(instance, &profile, Some(&ledger)).await;
-        let addresses = match &scan {
-            Some(scan) if !scan.addresses.is_empty() => scan.addresses.clone(),
-            _ => vec![(0, ledger.address())],
-        };
-        for (index, address) in addresses {
-            instance.add_address_vault(&profile, index, address).await?;
-        }
+        instance
+            .add_missing_address_vaults_at(
+                &profile,
+                scanned_or_first(scan.as_ref(), ledger.address()),
+            )
+            .await?;
         Ok((profile, scan))
     }
 
@@ -536,9 +537,23 @@ impl RescanArgs {
         };
 
         let endpoint = instance.rpc().await?;
-        let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
-        let added = instance.add_missing_address_vaults(&profile, &scan).await?;
-        let tornado_notes = recover_tornado(&instance, &profile, self.tornado_gap_limit).await;
+        let (added, tornado_notes) =
+            if let Some(ledger) = instance.external_signer(&profile).await? {
+                let ledger = connect_ledger(&ledger, profile.profile_index, 0).await?;
+                let scan = ledger
+                    .scan_standard_eoas(profile.profile_index, endpoint.as_ref())
+                    .await?;
+                let addresses = scanned_or_first(Some(&scan), ledger.address());
+                let added = instance
+                    .add_missing_address_vaults_at(&profile, addresses)
+                    .await?;
+                (added, None)
+            } else {
+                let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
+                let added = instance.add_missing_address_vaults(&profile, &scan).await?;
+                let notes = recover_tornado(&instance, &profile, self.tornado_gap_limit).await;
+                (added, notes)
+            };
         RescanReport {
             profile: ProfileSummary::load(&instance, &profile).await?,
             added: added
@@ -746,6 +761,14 @@ async fn scan(
         eprintln!("The address scan failed, so only address 0 gets an address vault: {error:#}");
     })
     .ok()
+}
+
+/// The scanned addresses, or else `first`, the profile's address 0.
+fn scanned_or_first(scan: Option<&EoaScan>, first: Address) -> Vec<(u32, Address)> {
+    match scan {
+        Some(scan) if !scan.addresses.is_empty() => scan.addresses.clone(),
+        _ => vec![(0, first)],
+    }
 }
 
 /// `explicit` when given, else a name typed at an interactive terminal. Validation is the

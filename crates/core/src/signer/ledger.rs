@@ -6,7 +6,10 @@ use alloy_primitives::{Address, Signature};
 use alloy_signer::Signer as AlloySigner;
 use alloy_signer_ledger::{
     HDPath, LedgerError, LedgerSigner,
-    coins_ledger::{common::APDUResponseCodes, errors::LedgerError as TransportError},
+    coins_ledger::{
+        common::APDUResponseCodes, errors::LedgerError as TransportError,
+        transports::native::NativeTransportError,
+    },
 };
 
 use crate::{
@@ -31,7 +34,9 @@ pub struct LedgerAccount {
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerAccountError {
     #[error(transparent)]
-    Device(#[from] LedgerError),
+    Device(LedgerError),
+    #[error("the Ledger is not ready; connect it, unlock it, and open its Ethereum app")]
+    NotReady,
     #[error("the Ledger did not sign")]
     Signing(#[from] alloy_signer::Error),
     #[error("rejected on the Ledger")]
@@ -51,7 +56,9 @@ impl LedgerAccount {
         profile_index: u32,
         address_index: u32,
     ) -> Result<Self, LedgerAccountError> {
-        let signer = LedgerSigner::new(standard_path(profile_index, address_index), None).await?;
+        let signer = LedgerSigner::new(standard_path(profile_index, address_index), None)
+            .await
+            .map_err(device_error)?;
         Ok(Self { signer })
     }
 
@@ -66,10 +73,10 @@ impl LedgerAccount {
         profile_index: u32,
         address_index: u32,
     ) -> Result<Address, LedgerAccountError> {
-        Ok(self
-            .signer
+        self.signer
             .get_address_with_path(&standard_path(profile_index, address_index))
-            .await?)
+            .await
+            .map_err(device_error)
     }
 
     /// [`crate::mnemonic::Mnemonic::scan_standard_eoas`], reading each address from the device.
@@ -165,6 +172,18 @@ fn signing_error(error: alloy_signer::Error) -> LedgerAccountError {
     }
 }
 
+/// A locked Ledger is not found, and with its Ethereum app closed the signer reports the error
+/// status as an empty response.
+fn device_error(error: LedgerError) -> LedgerAccountError {
+    match error {
+        LedgerError::UnexpectedNullResponse
+        | LedgerError::LedgerError(TransportError::NativeTransportError(
+            NativeTransportError::DeviceNotFound,
+        )) => LedgerAccountError::NotReady,
+        error => LedgerAccountError::Device(error),
+    }
+}
+
 fn standard_path(profile_index: u32, address_index: u32) -> HDPath {
     HDPath::Other(format!("m/44'/60'/{profile_index}'/0/{address_index}"))
 }
@@ -173,20 +192,36 @@ fn standard_path(profile_index: u32, address_index: u32) -> HDPath {
 mod tests {
     use super::*;
 
-    fn device_error(code: APDUResponseCodes) -> alloy_signer::Error {
+    fn device_status(code: APDUResponseCodes) -> alloy_signer::Error {
         alloy_signer::Error::other(LedgerError::LedgerError(TransportError::BadRetcode(code)))
     }
 
     #[test]
     fn a_denial_on_the_device_is_a_rejection() {
-        let error = signing_error(device_error(APDUResponseCodes::ConditionsNotSatisfied));
+        let error = signing_error(device_status(APDUResponseCodes::ConditionsNotSatisfied));
 
         assert!(matches!(error, LedgerAccountError::Rejected));
     }
 
     #[test]
+    fn a_closed_ethereum_app_is_not_ready() {
+        let error = device_error(LedgerError::UnexpectedNullResponse);
+
+        assert!(matches!(error, LedgerAccountError::NotReady));
+    }
+
+    #[test]
+    fn a_locked_or_missing_device_is_not_ready() {
+        let error = device_error(LedgerError::LedgerError(
+            TransportError::NativeTransportError(NativeTransportError::DeviceNotFound),
+        ));
+
+        assert!(matches!(error, LedgerAccountError::NotReady));
+    }
+
+    #[test]
     fn any_other_device_status_stays_a_signing_error() {
-        let error = signing_error(device_error(APDUResponseCodes::InvalidData));
+        let error = signing_error(device_status(APDUResponseCodes::InvalidData));
 
         assert!(matches!(error, LedgerAccountError::Signing(_)));
     }

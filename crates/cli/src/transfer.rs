@@ -24,8 +24,8 @@ use crate::{
     report::Report,
     spend::{
         Consent, ShieldedWithdrawal, account_at, account_by_address, choose_profile, confirm,
-        declined, ensure_paymaster, first_bundler, keep_fresh, measured, mnemonic, note_eth,
-        open_vault, parse_address, quote_shielded,
+        connect_ledger, declined, ensure_paymaster, first_bundler, keep_fresh, measured, mnemonic,
+        note_eth, open_vault, parse_address, quote_shielded,
     },
     unshield::{NoteLine, note_lines},
 };
@@ -293,8 +293,7 @@ async fn payer(plan: &Plan<'_>, from: &str) -> Result<(u32, Arc<dyn Signer>), an
                 ))
             })?
     };
-    eprintln!("Connecting to the Ledger...");
-    let account = ledger.connect(plan.profile.profile_index, index).await?;
+    let account = connect_ledger(&ledger, plan.profile.profile_index, index).await?;
     Ok((index, Arc::new(account)))
 }
 

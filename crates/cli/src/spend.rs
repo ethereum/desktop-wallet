@@ -8,11 +8,12 @@ use edw_core::{
     broadcast::submit_call,
     bundler::{BundlerList, Url},
     call::Call,
+    external_signer::ExternalSignerRecord,
     instance::{FreshAddress, Instance},
     mnemonic::Mnemonic,
     network::NetworkEndpoint,
     profile::ProfileRecord,
-    signer::{Signer, simple::SimpleSigner},
+    signer::{Signer, ledger::LedgerAccount, simple::SimpleSigner},
     vault::tornadocash::{
         Asset, IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest,
         QuotedWithdrawal, TornadoNote, TornadoVault, WithdrawalCost, format_eth, parse_amount,
@@ -94,6 +95,15 @@ pub async fn mnemonic(
 ) -> Result<Mnemonic, anyhow::Error> {
     let phrase: Zeroizing<String> = instance.recovery_phrase(profile).await?;
     Ok(Mnemonic::parse(phrase.as_str())?)
+}
+
+pub async fn connect_ledger(
+    ledger: &ExternalSignerRecord,
+    profile_index: u32,
+    address_index: u32,
+) -> Result<LedgerAccount, anyhow::Error> {
+    eprintln!("Connecting to the Ledger...");
+    Ok(ledger.connect(profile_index, address_index).await?)
 }
 
 pub fn account_at(
