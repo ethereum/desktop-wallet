@@ -21,7 +21,7 @@ RpcConfig             # a stored, named way to reach the network (one http URL t
 BundlerConfig         # ordered bundler URLs for this network; later URLs are fallbacks
 IndexerConfig         # the pool indexer URL and whether it is on
 NetworkEndpoint       # what an RPC config resolves into at runtime; must serve the network id before use
-Profile               # a user-named group of signers, executors and vaults at one index of a recovery phrase
+Profile               # a user-named group of signers, executors and vaults at one index of a recovery phrase or a hardware wallet
 Signer                # signs for one address: seed-derived, hardware, remote
 Executor              # sends transactions for one address: EOA, EIP-7702 delegate
 Vault                 # holds assets behind deposit/withdraw: EOA, stealth address, shielded pool

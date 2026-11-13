@@ -2739,6 +2739,7 @@ dependencies = [
  "alloy-provider",
  "alloy-rpc-types-eth",
  "alloy-signer",
+ "alloy-signer-ledger",
  "alloy-signer-local",
  "alloy-sol-types",
  "alloy-transport",

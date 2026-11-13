@@ -5,6 +5,7 @@ use super::{Instance, InstanceError, NETWORK_SCOPE};
 use crate::{
     asset::{self, Erc20Asset},
     database::scoped::ScopedDatabase,
+    external_signer::{ExternalSigner, ExternalSignerRecord},
     keyring::Keyring,
     mnemonic::{Mnemonic, MnemonicRecord, scan::EoaScan},
     network::NetworkEndpoint,
@@ -151,6 +152,39 @@ impl Instance {
             .create(mnemonic.index, Some(profile_index), candidate.name)
             .await?;
         Ok((mnemonic, profile))
+    }
+
+    /// Stores `signer` and creates exactly one profile on it, at `profile_index`.
+    ///
+    /// Checks the profile name and index first, so a profile that cannot be created stores no
+    /// signer.
+    pub async fn import_external_profile(
+        &self,
+        signer: ExternalSigner,
+        profile_index: u32,
+        name: Option<String>,
+    ) -> Result<(ExternalSignerRecord, ProfileRecord), InstanceError> {
+        let keyring = self.keyring();
+        let profiles = self.profile_index();
+        let candidate = ProfileRecord::new(keyring.next_index().await?, profile_index, name);
+        profiles.check_can_create(&candidate).await?;
+
+        let signer = keyring.add_external_signer(signer).await?;
+        let profile = profiles
+            .create(signer.index, Some(profile_index), candidate.name)
+            .await?;
+        Ok((signer, profile))
+    }
+
+    /// The external signer `profile` is on, or `None` when it is on a recovery phrase.
+    pub async fn external_signer(
+        &self,
+        profile: &ProfileRecord,
+    ) -> Result<Option<ExternalSignerRecord>, InstanceError> {
+        Ok(self
+            .keyring()
+            .external_signer(profile.mnemonic_index)
+            .await?)
     }
 
     /// Creates a profile on stored mnemonic `mnemonic_index`, at `profile_index` or else at
@@ -383,6 +417,32 @@ mod tests {
 
         let error = instance
             .import_profile(Zeroizing::new(SECOND_FIXTURE.to_string()), 0, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InstanceError::Profile(ProfileError::DuplicateName(_))
+        ));
+        assert!(matches!(
+            instance.add_profile(1, None, Some("probe".into())).await,
+            Err(InstanceError::Mnemonic(MnemonicError::Unresolved(1)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn external_import_with_a_taken_name_stores_no_signer() {
+        let instance = instance();
+        instance.generate_profile(false, 0, None).await.unwrap();
+
+        let error = instance
+            .import_external_profile(
+                ExternalSigner::Ledger {
+                    identity: Address::repeat_byte(1),
+                },
+                0,
+                None,
+            )
             .await
             .unwrap_err();
 

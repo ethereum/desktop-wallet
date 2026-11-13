@@ -26,61 +26,65 @@ impl Mnemonic {
         profile_index: u32,
         endpoint: &dyn NetworkEndpoint,
     ) -> Result<EoaScan, MnemonicError> {
-        self.scan_with(profile_index, |address| async move {
-            Ok(endpoint.has_activity(address).await?)
-        })
+        scan_with(
+            |address_index| async move { self.standard_address(address_index, profile_index) },
+            |address| async move { Ok(endpoint.has_activity(address).await?) },
+        )
         .await
     }
+}
 
-    async fn scan_with<F, Fut>(
-        &self,
-        profile_index: u32,
-        mut is_used: F,
-    ) -> Result<EoaScan, MnemonicError>
-    where
-        F: FnMut(Address) -> Fut,
-        Fut: Future<Output = Result<bool, MnemonicError>>,
-    {
-        let mut scanned = Vec::new();
-        let mut last_used = None;
-        let mut start = 0;
+/// [`Mnemonic::scan_standard_eoas`] over the addresses `address_at` returns.
+pub(crate) async fn scan_with<E, A, AFut, U, UFut>(
+    mut address_at: A,
+    mut is_used: U,
+) -> Result<EoaScan, E>
+where
+    E: From<MnemonicError>,
+    A: FnMut(u32) -> AFut,
+    AFut: Future<Output = Result<Address, E>>,
+    U: FnMut(Address) -> UFut,
+    UFut: Future<Output = Result<bool, E>>,
+{
+    let mut scanned = Vec::new();
+    let mut last_used = None;
+    let mut start = 0;
 
-        loop {
-            if start >= MAX_INDEX {
-                return Err(MnemonicError::ScanLimit(MAX_INDEX));
-            }
-
-            let mut batch_used = false;
-            for address_index in start..start.saturating_add(BATCH_SIZE) {
-                let address = self.standard_address(address_index, profile_index)?;
-                scanned.push((address_index, address));
-                if is_used(address).await? {
-                    last_used = Some(address_index);
-                    batch_used = true;
-                }
-            }
-
-            if !batch_used {
-                break;
-            }
-            start = start.saturating_add(BATCH_SIZE);
+    loop {
+        if start >= MAX_INDEX {
+            return Err(MnemonicError::ScanLimit(MAX_INDEX).into());
         }
 
-        let addresses = match last_used {
-            Some(last) => scanned
-                .into_iter()
-                .take((last as usize).saturating_add(1))
-                .collect(),
-            None => Vec::new(),
-        };
-        let next_unused = last_used.map_or(0, |index| index.saturating_add(1));
+        let mut batch_used = false;
+        for address_index in start..start.saturating_add(BATCH_SIZE) {
+            let address = address_at(address_index).await?;
+            scanned.push((address_index, address));
+            if is_used(address).await? {
+                last_used = Some(address_index);
+                batch_used = true;
+            }
+        }
 
-        Ok(EoaScan {
-            addresses,
-            last_used,
-            next_unused,
-        })
+        if !batch_used {
+            break;
+        }
+        start = start.saturating_add(BATCH_SIZE);
     }
+
+    let addresses = match last_used {
+        Some(last) => scanned
+            .into_iter()
+            .take((last as usize).saturating_add(1))
+            .collect(),
+        None => Vec::new(),
+    };
+    let next_unused = last_used.map_or(0, |index| index.saturating_add(1));
+
+    Ok(EoaScan {
+        addresses,
+        last_used,
+        next_unused,
+    })
 }
 
 #[cfg(test)]
@@ -110,8 +114,12 @@ mod tests {
             .collect();
         let used = Arc::new(used);
         let inspected = Arc::new(AtomicU32::new(0));
-        let scan = mnemonic
-            .scan_with(0, {
+        let scan = scan_with::<MnemonicError, _, _, _, _>(
+            |address_index| {
+                let address = mnemonic.standard_address(address_index, None);
+                async move { address }
+            },
+            {
                 let used = Arc::clone(&used);
                 let inspected = Arc::clone(&inspected);
                 move |address| {
@@ -122,9 +130,10 @@ mod tests {
                         Ok(used.contains(&address))
                     }
                 }
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         (scan, inspected.load(Ordering::SeqCst))
     }
 

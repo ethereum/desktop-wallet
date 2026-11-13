@@ -21,7 +21,7 @@ edw network indexer-config [--url <url>] [--enable | --disable] # shows the inde
 
 edw profile list # lists all configured profiles
 edw profile new # creates a new profile; on a new phrase, with an address vault for its first address, else like import
-edw profile import # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails), and scans the chain's Tornado pools (stops after 20 consecutive unused nonces)
+edw profile import # imports a profile from a mnemonic, with an address vault for each address up to the last used one (or the first, if none is used or the scan fails), and scans the chain's Tornado pools (stops after 20 consecutive unused nonces). With --ledger, from a connected Ledger instead: its addresses are read from the device without a prompt, and the Tornado pools are not scanned
 edw profile rescan [profile] # scans a profile's addresses again and adds an address vault for each one it is missing, and scans the chain's Tornado pools the same way
 edw profile clear-pending [profile] [--nonce N] # syncs tracked pools, then forgets unmined deposit reservations without reusing nonces
 edw profile reveal-phrase # shows a profile's recovery phrase, at a terminal only

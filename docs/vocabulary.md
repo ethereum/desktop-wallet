@@ -10,7 +10,7 @@ A BIP39 seed phrase.
 
 A user-facing collection of **signers**, **executors**, and **vaults**.
 Used to manage and group balances, transactions, history, and other related data.
-A profile points at a **mnemonic** and a profile index, the hardened BIP-44 account in `m/44'/60'/<profileIndex>'/…`, and never stores the phrase.
+A profile points at a **mnemonic**, or a hardware wallet holding one, and a profile index, the hardened BIP-44 account in `m/44'/60'/<profileIndex>'/…`, and never stores the phrase.
 
 Example:
 
