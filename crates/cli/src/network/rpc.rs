@@ -21,15 +21,16 @@ pub struct RpcConfigListArgs {}
 
 #[derive(Args, Debug)]
 pub struct RpcConfigAddArgs {
+    /// A name to select this RPC config by.
     name: String,
     /// http or https JSON-RPC URL.
     #[arg(long)]
     url: String,
     /// How many blocks one `eth_getLogs` request may cover.
-    #[arg(long, default_value_t = DEFAULT_EVENT_BLOCK_RANGE)]
+    #[arg(long, hide_short_help = true, default_value_t = DEFAULT_EVENT_BLOCK_RANGE)]
     blockrange: NonZeroU64,
     /// How long to wait after one call to this RPC before the next. `0ms` waits nothing.
-    #[arg(long, default_value = "0ms", value_parser = parse_interval)]
+    #[arg(long, hide_short_help = true, default_value = "0ms", value_parser = parse_interval)]
     interval: Duration,
     /// Make this the active RPC config.
     #[arg(long)]
@@ -38,6 +39,7 @@ pub struct RpcConfigAddArgs {
 
 #[derive(Args, Debug)]
 pub struct RpcConfigUseArgs {
+    /// The RPC config's name, as `list` shows it.
     name: String,
 }
 
@@ -97,7 +99,7 @@ impl fmt::Display for RpcConfigSummary {
 }
 
 impl Report for RpcConfigListReport {
-    const KIND: &'static str = "edw/network-rpc-config-list";
+    const KIND: &'static str = "edw/network-rpc-list";
     const VERSION: u32 = 2;
 }
 
@@ -106,7 +108,7 @@ impl fmt::Display for RpcConfigListReport {
         if self.rpc_configs.is_empty() {
             return write!(
                 f,
-                "No RPC configs. Add one with `edw network rpc-config add <name> --url <url>`."
+                "No RPC configs. Add one with `edw network rpc add <name> --url <url>`."
             );
         }
         let lines: Vec<String> = self
@@ -122,7 +124,7 @@ impl fmt::Display for RpcConfigListReport {
 }
 
 impl Report for RpcConfigAddReport {
-    const KIND: &'static str = "edw/network-rpc-config-add";
+    const KIND: &'static str = "edw/network-rpc-add";
     const VERSION: u32 = 2;
 }
 
@@ -133,7 +135,7 @@ impl fmt::Display for RpcConfigAddReport {
 }
 
 impl Report for RpcConfigUseReport {
-    const KIND: &'static str = "edw/network-rpc-config-use";
+    const KIND: &'static str = "edw/network-rpc-use";
     const VERSION: u32 = 1;
 }
 

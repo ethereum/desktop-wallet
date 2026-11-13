@@ -3,19 +3,15 @@ use std::fmt;
 use clap::Args;
 use serde::Serialize;
 
-use crate::{
-    GlobalArgs,
-    report::Report,
-    spend::{choose_profile, mnemonic},
-};
+use crate::{GlobalArgs, profile::ProfileArg, report::Report, spend::mnemonic};
 
 #[derive(Args, Debug)]
-pub struct NextFreshAddressArgs {
+pub struct ReceiveArgs {
     /// Print the next address without storing it.
     #[arg(long)]
     peek: bool,
-    #[arg(long)]
-    profile: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
 }
 
 #[derive(Serialize)]
@@ -27,7 +23,7 @@ struct FreshReport {
 }
 
 impl Report for FreshReport {
-    const KIND: &'static str = "edw/next-fresh-address";
+    const KIND: &'static str = "edw/receive";
     const VERSION: u32 = 1;
 }
 
@@ -42,10 +38,10 @@ impl fmt::Display for FreshReport {
     }
 }
 
-pub async fn run(global: &GlobalArgs, args: &NextFreshAddressArgs) -> Result<(), anyhow::Error> {
+pub async fn run(global: &GlobalArgs, args: &ReceiveArgs) -> Result<(), anyhow::Error> {
     let instance = global.open().await?;
     let input = global.input();
-    let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
+    let profile = args.profile.resolve(&instance, input).await?;
     let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
     let fresh = instance

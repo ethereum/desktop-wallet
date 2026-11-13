@@ -3,7 +3,7 @@ use std::sync::Arc;
 use alloy_primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::Context;
-use clap::Args;
+use clap::{ArgGroup, Args};
 use edw_core::{
     broadcast::submit_call,
     bundler::{BundlerList, Url},
@@ -15,13 +15,17 @@ use edw_core::{
     signer::{Signer, simple::SimpleSigner},
     vault::tornadocash::{
         Asset, IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest,
-        QuotedWithdrawal, TornadoNote, TornadoVault, WithdrawalCost, format_eth, parse_amount,
-        parse_wei, quote_paymaster_withdrawal,
+        QuotedWithdrawal, SUPPORTED_ASSETS, TornadoNote, TornadoVault, WithdrawalCost,
+        denominations, format_amount, format_eth, parse_amount, parse_wei,
+        quote_paymaster_withdrawal, resolve_asset, token_address,
     },
 };
 use zeroize::Zeroizing;
 
-use crate::{failure, input::Input};
+use crate::{
+    failure,
+    input::{Choice, Input},
+};
 
 pub struct Account {
     pub index: u32,
@@ -51,6 +55,18 @@ pub struct Consent {
     yes: bool,
 }
 
+#[derive(Args, Debug)]
+#[command(group = ArgGroup::new("amount_flags").args(["amount", "amount_raw"]))]
+pub struct AmountArgs {
+    /// Decimal amount of the asset, for example `1.1`. Must be a sum of this chain's Tornado
+    /// denominations.
+    #[arg(long)]
+    amount: Option<String>,
+    /// The amount in the asset's base units (wei for ETH), instead of `--amount`.
+    #[arg(long, hide_short_help = true)]
+    amount_raw: Option<String>,
+}
+
 impl Consent {
     pub fn ensure_possible(&self, input: Input) -> Result<(), anyhow::Error> {
         if self.yes || input == Input::Terminal {
@@ -63,27 +79,40 @@ impl Consent {
     }
 }
 
-pub async fn choose_profile(
-    instance: &Instance,
-    selector: Option<&str>,
-    input: Input,
-) -> Result<ProfileRecord, anyhow::Error> {
-    if let Some(selector) = selector {
-        return Ok(instance.profile(selector).await?);
+impl AmountArgs {
+    pub const fn given(&self) -> bool {
+        self.amount.is_some() || self.amount_raw.is_some()
     }
-    let mut profiles = instance.profiles().await?;
-    profiles.sort_by_key(ProfileRecord::key);
-    match profiles.as_slice() {
-        [] => {
-            anyhow::bail!("no profiles; create one with `edw profile new` or `edw profile import`")
-        }
-        [only] => Ok(only.clone()),
-        several => {
-            let labels: Vec<String> = several.iter().map(ProfileRecord::display_name).collect();
-            let choice = input
-                .choose("Select a profile:", &labels)?
-                .ok_or_else(|| failure::usage("pass --profile <profile>"))?;
-            Ok(several[choice].clone())
+
+    /// The amount in `asset`'s base units, prompted for at a terminal.
+    pub async fn resolve(
+        &self,
+        input: Input,
+        asset: &Asset,
+        chain_id: u64,
+        instance: &Instance,
+        profile: &ProfileRecord,
+    ) -> Result<U256, anyhow::Error> {
+        match (&self.amount, &self.amount_raw) {
+            (Some(value), _) => Ok(parse_amount(value, asset.decimals())?),
+            (None, Some(value)) => Ok(parse_wei(value)?),
+            (None, None) => {
+                let selection = instance.profile_pool_selection(profile).await?;
+                let sizes: Vec<String> = denominations(chain_id, asset, selection)
+                    .into_iter()
+                    .map(|size| format_amount(size, asset.decimals()))
+                    .collect();
+                let label = format!(
+                    "Amount ({}; a sum of {}): ",
+                    asset.symbol().to_uppercase(),
+                    sizes.join(", ")
+                );
+                let value = input
+                    .ask("--amount", &label)?
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| failure::usage("pass --amount"))?;
+                Ok(parse_amount(&value, asset.decimals())?)
+            }
         }
     }
 }
@@ -153,10 +182,7 @@ pub fn confirm(input: Input, consent: &Consent, summary: &str) -> Result<bool, a
         return Ok(true);
     }
     eprintln!("{summary}");
-    let answer = input
-        .line("Broadcast this transaction? [y/N] ")?
-        .unwrap_or_default();
-    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
+    input.confirm("Broadcast this transaction? [y/N] ")
 }
 
 pub fn declined() {
@@ -190,7 +216,7 @@ pub fn ensure_paymaster(notes: &[TornadoNote]) -> Result<(), anyhow::Error> {
 pub fn first_bundler(urls: &[Url]) -> Result<String, anyhow::Error> {
     urls.first()
         .map(ToString::to_string)
-        .context("no bundler configured; add one with `edw network bundler-config add --url <url>`")
+        .context("no bundler configured; add one with `edw network bundler add --url <url>`")
 }
 
 /// Proves `notes` into one paymaster user operation and submits it. The caller stores the fresh
@@ -255,25 +281,65 @@ pub async fn keep_fresh(instance: &Instance, profile: &ProfileRecord, fresh: &Fr
     }
 }
 
-/// Amount flags use the selected token's decimals; raw amounts are base units.
-pub fn token_amount(
-    formatted: Option<&str>,
-    raw: Option<&str>,
+/// The Tornado asset named by symbol or token address. Unnamed, it is the chain's only one, else
+/// picked at a terminal, else ETH.
+///
+/// # Errors
+///
+/// Fails when the named asset, or ETH by default, has no Tornado pools on `chain_id`.
+pub fn tornado_asset(
+    selector: Option<&str>,
+    chain_id: u64,
     input: Input,
-    asset: &Asset,
-) -> Result<U256, anyhow::Error> {
-    match (formatted, raw) {
-        (Some(_), Some(_)) => Err(failure::usage("pass only one amount flag")),
-        (Some(value), None) => Ok(parse_amount(value, asset.decimals())?),
-        (None, Some(value)) => Ok(parse_wei(value)?),
-        (None, None) => {
-            let value = input
-                .line(&format!("Amount ({}): ", asset.symbol().to_uppercase()))?
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| failure::usage("pass --amount-formatted or --amount-raw"))?;
-            Ok(parse_amount(&value, asset.decimals())?)
+) -> Result<Asset, anyhow::Error> {
+    let Some(selector) = selector else {
+        let assets = tornado_assets(chain_id);
+        let symbols: Vec<String> = assets
+            .iter()
+            .map(|asset| asset.symbol().to_uppercase())
+            .collect();
+        if let [only] = symbols.as_slice() {
+            input.imply("--asset", Some(only.clone()));
+            return Ok(assets[0].clone());
         }
+        let choices: Vec<Choice> = symbols
+            .iter()
+            .map(|symbol| Choice::new(symbol.clone(), "--asset", symbol.clone()))
+            .collect();
+        if !choices.is_empty()
+            && let Some(choice) = input.choose_or("Select an asset:", &choices, 0)?
+        {
+            return Ok(assets[choice].clone());
+        }
+        return resolve_asset("ETH", chain_id).map_err(failure::usage);
+    };
+    if shaped_like_address(selector) {
+        let address = parse_address(selector)?;
+        return tornado_assets(chain_id)
+            .into_iter()
+            .find(|asset| token_address(asset) == Some(address))
+            .ok_or_else(|| {
+                failure::usage(format!(
+                    "{address} is not a token with Tornado pools on this chain"
+                ))
+            });
     }
+    resolve_asset(selector, chain_id).map_err(failure::usage)
+}
+
+/// The assets `--asset` accepts on `chain_id`, ETH first.
+fn tornado_assets(chain_id: u64) -> Vec<Asset> {
+    SUPPORTED_ASSETS
+        .iter()
+        .filter_map(|symbol| resolve_asset(symbol, chain_id).ok())
+        .collect()
+}
+
+pub fn shaped_like_address(selector: &str) -> bool {
+    selector.len() == 42
+        && selector
+            .get(..2)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
 }
 
 /// Same TARGET:CALLDATA[:VALUE] grammar as kohaku-cli. Values are always wei.
@@ -338,19 +404,33 @@ mod tests {
     }
 
     #[test]
-    fn command_parser_defaults_to_eth_and_checks_tail_conflicts() {
+    fn an_unnamed_asset_without_a_terminal_is_eth_where_eth_has_pools() {
+        assert_eq!(
+            tornado_asset(None, 1, Input::Disabled).ok(),
+            Some(Asset::ETH)
+        );
+        assert!(tornado_asset(None, 137, Input::Disabled).is_err());
+    }
+
+    #[test]
+    fn a_token_address_names_only_a_tornado_asset_on_that_chain() {
+        let usdc = token_address(&Asset::ETHEREUM_USDC)
+            .expect("an ERC-20")
+            .to_string();
+        assert_eq!(
+            tornado_asset(Some(&usdc), 1, Input::Disabled).ok(),
+            Some(Asset::ETHEREUM_USDC)
+        );
+        assert!(tornado_asset(Some(&usdc), 11_155_111, Input::Disabled).is_err());
+    }
+
+    #[test]
+    fn command_parser_checks_amount_and_tail_conflicts() {
         use clap::Parser;
         for command in ["shield", "unshield"] {
             assert!(
-                crate::Cli::try_parse_from([
-                    "edw",
-                    command,
-                    "--amount-formatted",
-                    "100",
-                    "--token",
-                    "USDC"
-                ])
-                .is_ok()
+                crate::Cli::try_parse_from(["edw", command, "--amount", "100", "--asset", "USDC"])
+                    .is_ok()
             );
             assert!(
                 crate::Cli::try_parse_from([
@@ -358,7 +438,7 @@ mod tests {
                     command,
                     "--amount-raw",
                     "100",
-                    "--amount-formatted",
+                    "--amount",
                     "100"
                 ])
                 .is_err()

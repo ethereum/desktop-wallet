@@ -126,15 +126,6 @@ impl ProfileIndex {
         candidate.check_unique_name(&self.list().await?)
     }
 
-    pub async fn rename(
-        &self,
-        selector: &str,
-        name: Option<String>,
-    ) -> Result<ProfileRecord, ProfileError> {
-        let (mnemonic_index, profile_index) = self.find(selector).await?.key();
-        self.set_name(mnemonic_index, profile_index, name).await
-    }
-
     pub async fn set_name(
         &self,
         mnemonic_index: u32,

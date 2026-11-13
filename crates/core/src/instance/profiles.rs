@@ -9,6 +9,7 @@ use crate::{
     mnemonic::{Mnemonic, MnemonicRecord, scan::EoaScan},
     network::NetworkEndpoint,
     profile::{ProfileDb, ProfileError, ProfileIndex, ProfileRecord},
+    vault::tornadocash::PoolSelection,
 };
 
 impl Instance {
@@ -22,7 +23,7 @@ impl Instance {
         crate::vault::tornadocash::TornadoVault<alloy_signer_local::PrivateKeySigner>,
         InstanceError,
     > {
-        use crate::vault::tornadocash::{PoolSelection, TornadoVault};
+        use crate::vault::tornadocash::TornadoVault;
         let indexer = self.indexer_config().await?;
         let vault = TornadoVault::open(
             key,
@@ -30,11 +31,19 @@ impl Instance {
             endpoint,
             indexer.effective_url(),
         )?;
-        if self.profile_use_extended_pools(profile).await? {
-            Ok(vault)
+        Ok(vault.with_pool_selection(self.profile_pool_selection(profile).await?))
+    }
+
+    /// The pool selection [`Self::open_tornado_vault`] gives the profile's vault.
+    pub async fn profile_pool_selection(
+        &self,
+        profile: &ProfileRecord,
+    ) -> Result<PoolSelection, InstanceError> {
+        Ok(if self.profile_use_extended_pools(profile).await? {
+            PoolSelection::IncludeExtended
         } else {
-            Ok(vault.with_pool_selection(PoolSelection::Classic))
-        }
+            PoolSelection::Classic
+        })
     }
 
     /// The profile's Tornado pool policy. Profiles include extended pools unless explicitly opted out.
@@ -166,15 +175,6 @@ impl Instance {
             .profile_index()
             .create(mnemonic_index, profile_index, name)
             .await?)
-    }
-
-    /// Renames the profile `selector` names, as `mnemonic/profile` or a unique name.
-    pub async fn rename_profile(
-        &self,
-        selector: &str,
-        name: Option<String>,
-    ) -> Result<ProfileRecord, InstanceError> {
-        Ok(self.profile_index().rename(selector, name).await?)
     }
 
     pub async fn set_profile_name(

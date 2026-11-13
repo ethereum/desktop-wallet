@@ -19,14 +19,14 @@ use serde::Serialize;
 
 use crate::{
     GlobalArgs,
-    profile::{ProfileSummary, choose_profile},
+    profile::{ProfileArg, ProfileSummary},
     report::Report,
 };
 
 #[derive(Args, Debug)]
 pub struct BalanceArgs {
-    /// Profile as `mnemonic/profile` or a unique name. Prompted for when more than one exists.
-    selector: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
     /// Also list each vault's balance and each unspent Tornado note.
     #[arg(long)]
     detailed: bool,
@@ -158,13 +158,7 @@ impl Asset {
 impl BalanceArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
-        let profile = if let Some(selector) = &self.selector {
-            instance.profile(selector).await?
-        } else {
-            let mut profiles = instance.profiles().await?;
-            profiles.sort_by_key(ProfileRecord::key);
-            choose_profile(&profiles, global.input())?
-        };
+        let profile = self.profile.resolve(&instance, global.input()).await?;
 
         let erc20s = instance.profile_erc20s(&profile).await?;
         let assets: Vec<Asset> =
