@@ -1,10 +1,10 @@
 use std::fmt;
 
 use clap::Subcommand;
-use edw_core::instance::DataDir;
+use edw_core::instance::{DataDir, Instance};
 use serde::Serialize;
 
-use crate::{GlobalArgs, report::Report, session::SessionFile};
+use crate::{GlobalArgs, report::Report, session::SessionFile, unlock};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -66,7 +66,8 @@ impl fmt::Display for ConfigViewReport {
                 "session=(locked here; held for {} at {})",
                 session.network, session.data_dir
             )?,
-            (None, _) => writeln!(f, "session=(locked)")?,
+            (None, false) => writeln!(f, "session=(none; opened with EDW_DECRYPTION_PASSWORD)")?,
+            (None, true) => writeln!(f, "session=(locked)")?,
         }
         match &self.instance_dir {
             Some(dir) => write!(f, "instance_dir={dir}"),
@@ -82,14 +83,26 @@ impl Command {
                 data_dir: global.data_dir().path().display().to_string(),
             }
             .emit(global.mode()),
-            Command::View => view(&global.data_dir()).await?.emit(global.mode()),
+            Command::View => {
+                let password = unlock::env_password()?;
+                view(
+                    &global.data_dir(),
+                    &SessionFile::runtime(),
+                    password.as_deref().map(String::as_str),
+                )
+                .await?
+                .emit(global.mode())
+            }
         }
     }
 }
 
 /// Reads the configuration without prompting, so it works while the wallet is locked.
-async fn view(data_dir: &DataDir) -> Result<ConfigViewReport, anyhow::Error> {
-    let sessions = SessionFile::runtime();
+async fn view(
+    data_dir: &DataDir,
+    sessions: &SessionFile,
+    password: Option<&str>,
+) -> Result<ConfigViewReport, anyhow::Error> {
     let mut session = sessions.load_if_present().await;
     let mut instance = None;
     if let Some(held) = &session
@@ -99,6 +112,9 @@ async fn view(data_dir: &DataDir) -> Result<ConfigViewReport, anyhow::Error> {
         if instance.is_none() {
             session = None;
         }
+    }
+    if instance.is_none() {
+        instance = open_only_instance(data_dir, password).await?;
     }
     let instance_dir = instance.as_ref().map(|instance| {
         data_dir
@@ -120,4 +136,48 @@ async fn view(data_dir: &DataDir) -> Result<ConfigViewReport, anyhow::Error> {
         }),
         instance_dir,
     })
+}
+
+async fn open_only_instance(
+    data_dir: &DataDir,
+    password: Option<&str>,
+) -> Result<Option<Instance>, anyhow::Error> {
+    let instances = data_dir.instances();
+    let (Some(password), [network]) = (password, instances.as_slice()) else {
+        return Ok(None);
+    };
+    Ok(Some(
+        Instance::open(data_dir, *network, password.as_bytes()).await?,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use edw_core::network::NetworkId;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn without_a_session_the_password_finds_the_only_instance() {
+        let dir = std::env::temp_dir().join(format!("edw-config-{}", std::process::id()));
+        let data_dir = DataDir::new(&dir);
+        Instance::open_or_create(&data_dir, NetworkId(31_337), b"secret")
+            .await
+            .unwrap();
+
+        let report = view(&data_dir, &SessionFile::unavailable(), Some("secret"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.instance_dir,
+            Some(
+                data_dir
+                    .instance_dir(NetworkId(31_337))
+                    .display()
+                    .to_string()
+            )
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

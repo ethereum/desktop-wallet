@@ -235,13 +235,22 @@ pub fn replay() -> Option<String> {
     Some(command_line(given, &prompted.words))
 }
 
+/// Clap reads every word after `--` as a positional, so recorded flags go before it.
 fn command_line(given: impl Iterator<Item = String>, recorded: &[String]) -> String {
+    let given: Vec<String> = given.collect();
+    let end_of_options = given
+        .iter()
+        .position(|word| word == "--")
+        .unwrap_or(given.len());
+    let (options, positionals) = given.split_at(end_of_options);
     let words: Vec<String> = std::iter::once("edw".to_string())
         .chain(
-            given
-                .filter(|word| word != "--yes")
-                .chain(recorded.iter().cloned())
-                .map(|word| quote(&word)),
+            options
+                .iter()
+                .filter(|word| *word != "--yes")
+                .chain(recorded)
+                .chain(positionals)
+                .map(|word| quote(word)),
         )
         .collect();
     words.join(" ")
@@ -273,6 +282,8 @@ fn quote(word: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::*;
 
     #[test]
@@ -292,5 +303,14 @@ mod tests {
             command_line(given.into_iter(), &["--amount".into(), "1".into()]),
             "edw transfer --from 0 --amount 1"
         );
+    }
+
+    #[test]
+    fn a_command_line_after_an_end_of_options_separator_still_parses() {
+        let given = ["profile", "rename", "--", "-renamed"].map(String::from);
+        let line = command_line(given.into_iter(), &["--profile".into(), "0/0".into()]);
+
+        let words = line.split(' ');
+        assert!(crate::Cli::try_parse_from(words).is_ok(), "{line}");
     }
 }
