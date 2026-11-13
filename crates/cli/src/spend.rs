@@ -8,11 +8,12 @@ use edw_core::{
     broadcast::submit_call,
     bundler::{BundlerList, Url},
     call::Call,
+    external_signer::ExternalSignerRecord,
     instance::{FreshAddress, Instance},
     mnemonic::Mnemonic,
     network::NetworkEndpoint,
     profile::ProfileRecord,
-    signer::{Signer, simple::SimpleSigner},
+    signer::{Signer, ledger::LedgerAccount, simple::SimpleSigner},
     vault::tornadocash::{
         Asset, IncludedWithdrawal, PaymasterWithdrawal, PaymasterWithdrawalRequest,
         QuotedWithdrawal, SUPPORTED_ASSETS, TornadoNote, TornadoVault, WithdrawalCost,
@@ -26,6 +27,8 @@ use crate::{
     failure,
     input::{Choice, Input},
 };
+
+pub const NO_LEDGER_TORNADO: &str = "and Tornado does not work with a Ledger yet";
 
 pub struct Account {
     pub index: u32,
@@ -123,6 +126,31 @@ pub async fn mnemonic(
 ) -> Result<Mnemonic, anyhow::Error> {
     let phrase: Zeroizing<String> = instance.recovery_phrase(profile).await?;
     Ok(Mnemonic::parse(phrase.as_str())?)
+}
+
+/// Refuses `profile` when it is on a Ledger, for a command that needs a recovery phrase;
+/// `reason` completes "<profile> is on a Ledger, ".
+pub async fn ensure_phrase(
+    instance: &Instance,
+    profile: &ProfileRecord,
+    reason: &str,
+) -> Result<(), anyhow::Error> {
+    if instance.external_signer(profile).await?.is_some() {
+        return Err(failure::usage(format!(
+            "{} is on a Ledger, {reason}",
+            profile.display_name()
+        )));
+    }
+    Ok(())
+}
+
+pub async fn connect_ledger(
+    ledger: &ExternalSignerRecord,
+    profile_index: u32,
+    address_index: u32,
+) -> Result<LedgerAccount, anyhow::Error> {
+    eprintln!("Connecting to the Ledger...");
+    Ok(ledger.connect(profile_index, address_index).await?)
 }
 
 pub fn account_at(

@@ -1,6 +1,6 @@
 use std::{fmt, sync::Arc};
 
-use alloy_primitives::{Bytes, U256};
+use alloy_primitives::{Address, Bytes, U256};
 use clap::Args;
 use edw_core::{
     asset::{
@@ -9,12 +9,16 @@ use edw_core::{
     },
     broadcast::{PreparedTransaction, prepare_call, submit_prepared},
     call::Call,
+    external_signer::ExternalSignerRecord,
     instance::Instance,
     network::NetworkEndpoint,
     profile::ProfileRecord,
     recipient::{Recipient, RecipientError, ResolvedRecipient},
-    signer::{Signer, ledger::LEDGER_SIGNER_TAG},
-    vault::tornadocash::{TornadoNote, UserOpError, cover_notes, format_eth},
+    signer::Signer,
+    vault::{
+        address::db::DerivedAddress,
+        tornadocash::{TornadoNote, UserOpError, cover_notes, format_eth},
+    },
 };
 use serde::Serialize;
 
@@ -26,9 +30,9 @@ use crate::{
     profile::ProfileArg,
     report::Report,
     spend::{
-        Consent, ShieldedWithdrawal, account_at, account_by_address, confirm, declined,
-        ensure_paymaster, first_bundler, keep_fresh, measured, mnemonic, note_eth, open_vault,
-        parse_address, quote_shielded,
+        Consent, NO_LEDGER_TORNADO, ShieldedWithdrawal, account_at, account_by_address, confirm,
+        connect_ledger, declined, ensure_paymaster, ensure_phrase, first_bundler, keep_fresh,
+        measured, mnemonic, note_eth, open_vault, parse_address, quote_shielded,
     },
     unshield::{NoteLine, note_lines},
 };
@@ -96,6 +100,19 @@ struct UnsignedLines {
 enum Asset {
     Eth,
     Erc20(Erc20Asset),
+}
+
+/// The account a public transfer is sent from.
+struct Source {
+    index: u32,
+    address: Address,
+    payer: Payer,
+}
+
+enum Payer {
+    Key(Arc<dyn Signer>),
+    /// Connected only to sign, so that a dry run needs no device.
+    Ledger(ExternalSignerRecord),
 }
 
 struct Plan<'a> {
@@ -228,13 +245,17 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     }
     let instance = global.open().await?;
     let profile = args.profile.resolve(&instance, input).await?;
-    let from = required(
-        args.from.as_deref(),
-        input,
-        "--from",
-        "From (index, address, or tornado): ",
-    )?;
+    let ledger = instance.external_signer(&profile).await?;
+    let from_label = if ledger.is_some() {
+        "From (index or address): "
+    } else {
+        "From (index, address, or tornado): "
+    };
+    let from = required(args.from.as_deref(), input, "--from", from_label)?;
     let tornado = from.eq_ignore_ascii_case("tornado");
+    if tornado {
+        ensure_phrase(&instance, &profile, NO_LEDGER_TORNADO).await?;
+    }
     let asset = chosen_asset(&instance, &profile, args.asset.as_deref(), input, tornado).await?;
     if tornado && matches!(asset, Asset::Erc20(_)) {
         return Err(failure::usage(
@@ -275,39 +296,78 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     if tornado {
         return from_tornado(&plan).await;
     }
-    let (index, payer) = payer(&plan, &from).await?;
-    from_account(&plan, index, payer).await
+    let source = source(&plan, ledger, &from).await?;
+    from_account(&plan, source).await
 }
 
-async fn payer(plan: &Plan<'_>, from: &str) -> Result<(u32, Arc<dyn Signer>), anyhow::Error> {
-    let Some(ledger) = plan.instance.external_signer(plan.profile).await? else {
+async fn source(
+    plan: &Plan<'_>,
+    ledger: Option<ExternalSignerRecord>,
+    from: &str,
+) -> Result<Source, anyhow::Error> {
+    let profile_index = plan.profile.profile_index;
+    let Some(ledger) = ledger else {
         let phrase = mnemonic(plan.instance, plan.profile).await?;
         let account = if let Ok(index) = from.parse::<u32>() {
-            account_at(&phrase, plan.profile.profile_index, index)?
+            account_at(&phrase, profile_index, index)?
         } else {
-            account_by_address(&phrase, plan.profile.profile_index, from)?
+            account_by_address(&phrase, profile_index, from)?
         };
-        return Ok((account.index, account.signer));
+        return Ok(Source {
+            index: account.index,
+            address: account.address,
+            payer: Payer::Key(account.signer),
+        });
     };
-    let index = if let Ok(index) = from.parse::<u32>() {
-        index
+    let stored = plan.instance.stored_address_accounts(plan.profile).await?;
+    let (index, address) = if let Ok(index) = from.parse::<u32>() {
+        if let Some(stored) = stored.iter().find(|stored| stored.index == index) {
+            (index, stored.address)
+        } else {
+            let device = connect_ledger(&ledger, profile_index, index).await?;
+            (index, device.address())
+        }
     } else {
         let address = parse_address(from)?;
-        plan.instance
-            .stored_address_accounts(plan.profile)
-            .await?
-            .into_iter()
-            .find(|stored| stored.address == address)
-            .map(|stored| stored.index)
-            .ok_or_else(|| {
-                failure::usage(format!(
-                    "{address} is not one of this profile's addresses; pass its index"
-                ))
-            })?
+        if let Some(stored) = stored.iter().find(|stored| stored.address == address) {
+            (stored.index, address)
+        } else {
+            (
+                handed_out_index(plan, &ledger, &stored, address).await?,
+                address,
+            )
+        }
     };
-    eprintln!("Connecting to the Ledger...");
-    let account = ledger.connect(plan.profile.profile_index, index).await?;
-    Ok((index, Arc::new(account)))
+    Ok(Source {
+        index,
+        address,
+        payer: Payer::Ledger(ledger),
+    })
+}
+
+/// Finds `address` among the indices `receive` handed out, which have no address
+/// vault until a rescan finds them used.
+async fn handed_out_index(
+    plan: &Plan<'_>,
+    ledger: &ExternalSignerRecord,
+    stored: &[DerivedAddress],
+    address: Address,
+) -> Result<u32, anyhow::Error> {
+    let profile_index = plan.profile.profile_index;
+    let unstored: Vec<u32> = (0..plan.instance.next_fresh_index(plan.profile).await?)
+        .filter(|index| !stored.iter().any(|stored| stored.index == *index))
+        .collect();
+    if !unstored.is_empty() {
+        let device = connect_ledger(ledger, profile_index, 0).await?;
+        for index in unstored {
+            if device.standard_address(index, profile_index).await? == address {
+                return Ok(index);
+            }
+        }
+    }
+    Err(failure::usage(format!(
+        "{address} is not one of this profile's addresses; pass its index"
+    )))
 }
 
 async fn chosen_asset(
@@ -378,13 +438,13 @@ fn pick_asset(tracked: &[Erc20Asset], input: Input) -> Result<Asset, anyhow::Err
     })
 }
 
-async fn from_account(
-    plan: &Plan<'_>,
-    index: u32,
-    payer: Arc<dyn Signer>,
-) -> Result<(), anyhow::Error> {
+async fn from_account(plan: &Plan<'_>, source: Source) -> Result<(), anyhow::Error> {
     let endpoint = plan.endpoint.as_ref();
-    let address = payer.address();
+    let Source {
+        index,
+        address,
+        payer,
+    } = source;
     let call = match &plan.asset {
         Asset::Eth => Call::new(plan.to.address, Bytes::new(), plan.amount),
         Asset::Erc20(asset) => {
@@ -449,10 +509,22 @@ async fn from_account(
         declined();
         return Ok(());
     }
-    if payer.tag() == LEDGER_SIGNER_TAG {
-        eprintln!("Confirm the transaction on the Ledger.");
-    }
-    let included = submit_prepared(endpoint, payer, prepared).await?;
+    let signer: Arc<dyn Signer> = match payer {
+        Payer::Key(signer) => signer,
+        Payer::Ledger(ledger) => {
+            let device = connect_ledger(&ledger, plan.profile.profile_index, index).await?;
+            eprintln!("Confirm the transaction on the Ledger.");
+            Arc::new(device)
+        }
+    };
+    let included = match submit_prepared(endpoint, signer, prepared).await {
+        Ok(included) => included,
+        Err(error) if error.is_rejected() => {
+            declined();
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
     report.fee = Some(format_eth(included.fee));
     report.transaction = Some(included.hash.to_string());
     report.emit(plan.global.mode())

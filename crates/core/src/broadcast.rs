@@ -84,6 +84,23 @@ pub enum BroadcastError {
     },
 }
 
+impl BroadcastError {
+    /// Whether the signer declined to sign, so nothing was sent.
+    #[must_use]
+    pub fn is_rejected(&self) -> bool {
+        match self {
+            Self::Signer(SignerError::Rejected) => true,
+            Self::Builder(alloy_network::TransactionBuilderError::Signer(
+                alloy_signer::Error::Other(source),
+            )) => matches!(
+                source.downcast_ref::<SignerError>(),
+                Some(SignerError::Rejected)
+            ),
+            _ => false,
+        }
+    }
+}
+
 impl PreparedTransaction {
     #[must_use]
     pub fn gas_limit(&self) -> u64 {
@@ -368,11 +385,55 @@ fn apply_gas(operation: &mut UserOperation, gas: UserOperationGasEstimate) {
 
 #[cfg(test)]
 mod tests {
+    use alloy_consensus::SignableTransaction;
+    use alloy_dyn_abi::TypedData;
+    use alloy_eips::eip7702::Authorization;
+    use alloy_primitives::Signature;
     use alloy_signer::k256::ecdsa::SigningKey;
     use alloy_transport::mock::Asserter;
 
     use super::*;
-    use crate::{signer::simple::SimpleSigner, test_support::mocked_provider};
+    use crate::{
+        signer::{SignerId, simple::SimpleSigner},
+        test_support::mocked_provider,
+    };
+
+    /// Declines every signature.
+    struct DecliningSigner;
+
+    #[async_trait::async_trait]
+    impl Signer for DecliningSigner {
+        fn tag(&self) -> &'static str {
+            "declining"
+        }
+
+        fn id(&self) -> SignerId {
+            SignerId::Address(self.address())
+        }
+
+        fn address(&self) -> Address {
+            Address::repeat_byte(0x11)
+        }
+
+        async fn personal_sign(&self, _: &[u8]) -> Result<Signature, SignerError> {
+            Err(SignerError::Rejected)
+        }
+
+        async fn sign_typed_data(&self, _: &TypedData) -> Result<Signature, SignerError> {
+            Err(SignerError::Rejected)
+        }
+
+        async fn sign_transaction(
+            &self,
+            _: &mut dyn SignableTransaction<Signature>,
+        ) -> Result<Signature, SignerError> {
+            Err(SignerError::Rejected)
+        }
+
+        async fn sign_authorization(&self, _: &Authorization) -> Result<Signature, SignerError> {
+            Err(SignerError::Rejected)
+        }
+    }
 
     #[tokio::test]
     async fn a_transaction_is_not_signed_by_anyone_but_its_sender() {
@@ -387,5 +448,28 @@ mod tests {
         )
         .await;
         assert!(matches!(refused, Err(BroadcastError::WrongSigner { .. })));
+    }
+
+    #[tokio::test]
+    async fn a_transaction_the_signer_declines_is_a_rejection() {
+        let prepared = PreparedTransaction {
+            request: TransactionRequest::default()
+                .from(Address::repeat_byte(0x11))
+                .to(Address::repeat_byte(0x22))
+                .nonce(0)
+                .gas_limit(21_000)
+                .max_fee_per_gas(1)
+                .max_priority_fee_per_gas(1)
+                .with_chain_id(1),
+        };
+
+        let declined = submit_prepared(
+            mocked_provider(&Asserter::new()).as_ref(),
+            Arc::new(DecliningSigner),
+            prepared,
+        )
+        .await;
+
+        assert!(declined.is_err_and(|error| error.is_rejected()));
     }
 }

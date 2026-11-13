@@ -23,8 +23,11 @@ use crate::{
     report::Report,
     secret_file,
     session::SessionFile,
+    spend::{NO_LEDGER_TORNADO, connect_ledger, ensure_phrase},
     unlock,
 };
+
+const ON_DEVICE: &str = "which keeps its recovery phrase on the device";
 
 const PHRASE_MAX_BYTES: u64 = 4096;
 
@@ -96,7 +99,7 @@ pub struct ImportArgs {
     phrase_file: Option<PathBuf>,
     /// Create the profile on a connected Ledger instead of a recovery phrase. Unlock it and
     /// open its Ethereum app first.
-    #[arg(long, conflicts_with = "phrase_file")]
+    #[arg(long, conflicts_with_all = ["phrase_file", "tornado_gap_limit", "no_extended_pools"])]
     ledger: bool,
     /// Profile index to create. Defaults to 0.
     #[arg(long, hide_short_help = true, default_value_t = 0)]
@@ -169,7 +172,8 @@ struct ImportReport {
     profile: ProfileSummary,
     addresses: Vec<ScannedAddress>,
     next_unused: Option<u32>,
-    /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed.
+    /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed or
+    /// the profile is on a Ledger.
     tornado_notes: Option<u32>,
 }
 
@@ -177,7 +181,8 @@ struct ImportReport {
 struct RescanReport {
     profile: ProfileSummary,
     added: Vec<ScannedAddress>,
-    /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed.
+    /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed or
+    /// the profile is on a Ledger.
     tornado_notes: Option<u32>,
 }
 
@@ -363,9 +368,11 @@ impl NewArgs {
         let shared = if self.new_phrase {
             None
         } else if let Some(selector) = &self.phrase_of {
-            Some(instance.profile(selector).await?.mnemonic_index)
+            let profile = instance.profile(selector).await?;
+            ensure_phrase(&instance, &profile, ON_DEVICE).await?;
+            Some(profile.mnemonic_index)
         } else {
-            choose_phrase(&instance.profiles().await?, input)?
+            choose_phrase(&phrase_profiles(&instance).await?, input)?
         };
         if self.long_phrase && shared.is_some() {
             return Err(failure::usage(
@@ -405,8 +412,9 @@ impl NewArgs {
         } else {
             None
         };
+        let first = instance.standard_address(&profile, 0).await?;
         instance
-            .add_scanned_address_vaults(&profile, scan.as_ref())
+            .add_scanned_address_vaults(&profile, scan.as_ref(), first)
             .await?;
         // A brand-new phrase has no deposits to find. A stored phrase might.
         let tornado_notes = if shared.is_some() {
@@ -468,10 +476,15 @@ impl ImportArgs {
         eprintln!("Recovery phrase entered; importing profile...");
         let name = prompt_profile_name(self.name.clone(), input)?;
         let (_, profile) = instance.import_profile(phrase, self.index, name).await?;
-        self.apply_pool_preference(instance, &profile).await?;
+        if self.no_extended_pools {
+            instance
+                .set_profile_use_extended_pools(&profile, false)
+                .await?;
+        }
         let scan = scan(instance, &profile, None).await;
+        let first = instance.standard_address(&profile, 0).await?;
         instance
-            .add_scanned_address_vaults(&profile, scan.as_ref())
+            .add_scanned_address_vaults(&profile, scan.as_ref(), first)
             .await?;
         Ok((profile, scan))
     }
@@ -488,29 +501,11 @@ impl ImportArgs {
         let (_, profile) = instance
             .import_external_profile(ExternalSigner::Ledger { identity }, self.index, name)
             .await?;
-        self.apply_pool_preference(instance, &profile).await?;
         let scan = scan(instance, &profile, Some(&ledger)).await;
-        let addresses = match &scan {
-            Some(scan) if !scan.addresses.is_empty() => scan.addresses.clone(),
-            _ => vec![(0, ledger.address())],
-        };
-        for (index, address) in addresses {
-            instance.add_address_vault(&profile, index, address).await?;
-        }
+        instance
+            .add_scanned_address_vaults(&profile, scan.as_ref(), ledger.address())
+            .await?;
         Ok((profile, scan))
-    }
-
-    async fn apply_pool_preference(
-        &self,
-        instance: &Instance,
-        profile: &ProfileRecord,
-    ) -> Result<(), anyhow::Error> {
-        if self.no_extended_pools {
-            instance
-                .set_profile_use_extended_pools(profile, false)
-                .await?;
-        }
-        Ok(())
     }
 
     fn phrase(&self, input: Input) -> Result<Zeroizing<String>, anyhow::Error> {
@@ -543,10 +538,29 @@ impl RescanArgs {
         let instance = global.open().await?;
         let profile = self.profile.resolve(&instance, global.input()).await?;
 
+        if self.tornado_gap_limit.is_some() {
+            ensure_phrase(&instance, &profile, NO_LEDGER_TORNADO).await?;
+        }
         let endpoint = instance.rpc().await?;
-        let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
-        let added = instance.add_missing_address_vaults(&profile, &scan).await?;
-        let tornado_notes = recover_tornado(&instance, &profile, self.tornado_gap_limit).await;
+        let (added, tornado_notes) =
+            if let Some(ledger) = instance.external_signer(&profile).await? {
+                let ledger = connect_ledger(&ledger, profile.profile_index, 0).await?;
+                let scan = ledger
+                    .scan_standard_eoas(profile.profile_index, endpoint.as_ref())
+                    .await?;
+                let added = instance
+                    .add_scanned_address_vaults(&profile, Some(&scan), ledger.address())
+                    .await?;
+                (added, None)
+            } else {
+                let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
+                let first = instance.standard_address(&profile, 0).await?;
+                let added = instance
+                    .add_scanned_address_vaults(&profile, Some(&scan), first)
+                    .await?;
+                let notes = recover_tornado(&instance, &profile, self.tornado_gap_limit).await;
+                (added, notes)
+            };
         RescanReport {
             profile: ProfileSummary::load(&instance, &profile).await?,
             added: added
@@ -566,6 +580,7 @@ impl ClearPendingArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
         let profile = self.profile.resolve(&instance, global.input()).await?;
+        ensure_phrase(&instance, &profile, NO_LEDGER_TORNADO).await?;
         let phrase = crate::spend::mnemonic(&instance, &profile).await?;
         let endpoint = instance.rpc().await?;
         let vault = crate::spend::open_vault(&instance, &profile, &phrase, endpoint).await?;
@@ -634,7 +649,11 @@ impl RevealPhraseArgs {
             .ok_or_else(|| failure::locked("no decryption password"))?;
         let instance = Instance::open(&data_dir, network, password.as_bytes()).await?;
 
-        let profile = self.profile.resolve(&instance, input).await?;
+        let profile = self
+            .profile
+            .resolve_phrase_profile(&instance, input)
+            .await?;
+        ensure_phrase(&instance, &profile, ON_DEVICE).await?;
         let mut profiles = instance.profiles().await?;
         profiles.sort_by_key(ProfileRecord::key);
         let sharing: Vec<String> = profiles
@@ -671,7 +690,23 @@ impl ProfileArg {
         instance: &Instance,
         input: Input,
     ) -> Result<ProfileRecord, anyhow::Error> {
-        self.select(instance, input, selector_of).await
+        self.select(instance, input, instance.profiles().await?, selector_of)
+            .await
+    }
+
+    /// As [`Self::resolve`], offering only the profiles on a recovery phrase.
+    pub async fn resolve_phrase_profile(
+        &self,
+        instance: &Instance,
+        input: Input,
+    ) -> Result<ProfileRecord, anyhow::Error> {
+        self.select(
+            instance,
+            input,
+            phrase_profiles(instance).await?,
+            selector_of,
+        )
+        .await
     }
 
     /// As [`Self::resolve`], recording a pick by `mnemonic/profile`, which survives a rename.
@@ -680,20 +715,22 @@ impl ProfileArg {
         instance: &Instance,
         input: Input,
     ) -> Result<ProfileRecord, anyhow::Error> {
-        self.select(instance, input, |profile, _| key_of(profile))
-            .await
+        self.select(instance, input, instance.profiles().await?, |profile, _| {
+            key_of(profile)
+        })
+        .await
     }
 
     async fn select(
         &self,
         instance: &Instance,
         input: Input,
+        mut profiles: Vec<ProfileRecord>,
         recorded: impl Fn(&ProfileRecord, &[ProfileRecord]) -> String,
     ) -> Result<ProfileRecord, anyhow::Error> {
         if let Some(selector) = &self.selector {
             return Ok(instance.profile(selector).await?);
         }
-        let mut profiles = instance.profiles().await?;
         profiles.sort_by_key(ProfileRecord::key);
         match profiles.as_slice() {
             [] => anyhow::bail!(
@@ -823,6 +860,17 @@ fn prompt_profile_name(
     Ok(input
         .ask("--name", "Profile name: ")?
         .filter(|name| !name.is_empty()))
+}
+
+/// The profiles on a recovery phrase.
+async fn phrase_profiles(instance: &Instance) -> Result<Vec<ProfileRecord>, anyhow::Error> {
+    let mut profiles = Vec::new();
+    for profile in instance.profiles().await? {
+        if instance.external_signer(&profile).await?.is_none() {
+            profiles.push(profile);
+        }
+    }
+    Ok(profiles)
 }
 
 /// `None` for a new recovery phrase, else the stored phrase to create the profile on.

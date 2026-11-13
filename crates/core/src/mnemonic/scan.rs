@@ -98,7 +98,11 @@ mod tests {
         },
     };
 
+    use alloy_primitives::{Bytes, U64, U256, address};
+    use alloy_transport::mock::Asserter;
+
     use super::*;
+    use crate::test_support::mocked_provider;
 
     const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -155,5 +159,33 @@ mod tests {
         assert_eq!(scan.addresses.len(), 16);
         assert_eq!(scan.addresses[0].0, 0);
         assert_eq!(scan.addresses[15].0, 15);
+    }
+
+    #[tokio::test]
+    async fn a_phrase_scan_reads_the_standard_addresses() {
+        let mock = Asserter::new();
+        for index in 0..20 {
+            if index == 1 {
+                mock.push_success(&U64::from(1));
+            } else {
+                mock.push_success(&U64::ZERO);
+                mock.push_success(&Bytes::new());
+                mock.push_success(&U256::ZERO);
+            }
+        }
+
+        let scan = fixture()
+            .scan_standard_eoas(0, mocked_provider(&mock).as_ref())
+            .await
+            .unwrap();
+
+        // `cast wallet address --mnemonic <FIXTURE> --mnemonic-index <index>`
+        assert_eq!(
+            scan.addresses,
+            [
+                (0, address!("0x9858EfFD232B4033E47d90003D41EC34EcaEda94")),
+                (1, address!("0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0")),
+            ]
+        );
     }
 }

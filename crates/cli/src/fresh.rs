@@ -3,7 +3,12 @@ use std::fmt;
 use clap::Args;
 use serde::Serialize;
 
-use crate::{GlobalArgs, profile::ProfileArg, report::Report, spend::mnemonic};
+use crate::{
+    GlobalArgs,
+    profile::ProfileArg,
+    report::Report,
+    spend::{connect_ledger, mnemonic},
+};
 
 #[derive(Args, Debug)]
 pub struct ReceiveArgs {
@@ -42,11 +47,24 @@ pub async fn run(global: &GlobalArgs, args: &ReceiveArgs) -> Result<(), anyhow::
     let instance = global.open().await?;
     let input = global.input();
     let profile = args.profile.resolve(&instance, input).await?;
-    let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
-    let fresh = instance
-        .fresh_address(&profile, &phrase, endpoint.as_ref())
-        .await?;
+    let fresh = if let Some(ledger) = instance.external_signer(&profile).await? {
+        let ledger = &connect_ledger(&ledger, profile.profile_index, 0).await?;
+        instance
+            .fresh_address_with(&profile, endpoint.as_ref(), |index| async move {
+                Ok::<_, anyhow::Error>(
+                    ledger
+                        .standard_address(index, profile.profile_index)
+                        .await?,
+                )
+            })
+            .await?
+    } else {
+        let phrase = mnemonic(&instance, &profile).await?;
+        instance
+            .fresh_address(&profile, &phrase, endpoint.as_ref())
+            .await?
+    };
     let stored = if args.peek {
         false
     } else {

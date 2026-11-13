@@ -6,7 +6,10 @@ use alloy_primitives::{Address, Signature};
 use alloy_signer::Signer as AlloySigner;
 use alloy_signer_ledger::{
     HDPath, LedgerError, LedgerSigner,
-    coins_ledger::{common::APDUResponseCodes, errors::LedgerError as TransportError},
+    coins_ledger::{
+        common::APDUResponseCodes, errors::LedgerError as TransportError,
+        transports::native::NativeTransportError,
+    },
 };
 
 use crate::{
@@ -31,13 +34,17 @@ pub struct LedgerAccount {
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerAccountError {
     #[error(transparent)]
-    Device(#[from] LedgerError),
+    Device(LedgerError),
+    #[error("the Ledger is not ready; connect it, unlock it, and open its Ethereum app")]
+    NotReady,
     #[error("the Ledger did not sign")]
-    Signing(#[from] alloy_signer::Error),
+    Signing(alloy_signer::Error),
     #[error("rejected on the Ledger")]
     Rejected,
     #[error("the connected Ledger is not the one this profile was created from")]
     WrongDevice,
+    #[error("derivation index {0} is too large; it must be below 2^31")]
+    Index(u32),
     #[error("this Ledger signer cannot sign EIP-7702 authorizations")]
     AuthorizationUnsupported,
     #[error(transparent)]
@@ -51,7 +58,9 @@ impl LedgerAccount {
         profile_index: u32,
         address_index: u32,
     ) -> Result<Self, LedgerAccountError> {
-        let signer = LedgerSigner::new(standard_path(profile_index, address_index), None).await?;
+        let signer = LedgerSigner::new(standard_path(address_index, profile_index)?, None)
+            .await
+            .map_err(device_error)?;
         Ok(Self { signer })
     }
 
@@ -63,13 +72,13 @@ impl LedgerAccount {
     /// Reads a standard address from the device, without a prompt on it.
     pub async fn standard_address(
         &self,
-        profile_index: u32,
         address_index: u32,
+        profile_index: u32,
     ) -> Result<Address, LedgerAccountError> {
-        Ok(self
-            .signer
-            .get_address_with_path(&standard_path(profile_index, address_index))
-            .await?)
+        self.signer
+            .get_address_with_path(&standard_path(address_index, profile_index)?)
+            .await
+            .map_err(device_error)
     }
 
     /// [`crate::mnemonic::Mnemonic::scan_standard_eoas`], reading each address from the device.
@@ -79,7 +88,7 @@ impl LedgerAccount {
         endpoint: &dyn NetworkEndpoint,
     ) -> Result<EoaScan, LedgerAccountError> {
         scan_with(
-            |address_index| self.standard_address(profile_index, address_index),
+            |address_index| self.standard_address(address_index, profile_index),
             |address| async move {
                 Ok(endpoint
                     .has_activity(address)
@@ -143,50 +152,131 @@ impl Signer for LedgerAccount {
 
 impl From<LedgerAccountError> for SignerError {
     fn from(err: LedgerAccountError) -> Self {
-        SignerError::Other(Box::new(err))
+        match err {
+            LedgerAccountError::Rejected => SignerError::Rejected,
+            err => SignerError::Other(Box::new(err)),
+        }
     }
 }
 
 /// The Ethereum app answers a denial on the device with status `0x6985`.
 fn signing_error(error: alloy_signer::Error) -> LedgerAccountError {
-    let denied = matches!(
-        &error,
-        alloy_signer::Error::Other(source) if matches!(
-            source.downcast_ref::<LedgerError>(),
-            Some(LedgerError::LedgerError(TransportError::BadRetcode(
-                APDUResponseCodes::ConditionsNotSatisfied
-            )))
-        )
-    );
-    if denied {
-        LedgerAccountError::Rejected
-    } else {
-        LedgerAccountError::Signing(error)
+    let device = match &error {
+        alloy_signer::Error::Other(source) => source.downcast_ref::<LedgerError>(),
+        _ => None,
+    };
+    match device {
+        Some(LedgerError::LedgerError(TransportError::BadRetcode(
+            APDUResponseCodes::ConditionsNotSatisfied,
+        ))) => LedgerAccountError::Rejected,
+        Some(device) if is_not_ready(device) => LedgerAccountError::NotReady,
+        _ => LedgerAccountError::Signing(error),
     }
 }
 
-fn standard_path(profile_index: u32, address_index: u32) -> HDPath {
-    HDPath::Other(format!("m/44'/60'/{profile_index}'/0/{address_index}"))
+fn device_error(error: LedgerError) -> LedgerAccountError {
+    if is_not_ready(&error) {
+        LedgerAccountError::NotReady
+    } else {
+        LedgerAccountError::Device(error)
+    }
+}
+
+/// A locked Ledger is not found, and with no app open the signer reports the status as an empty
+/// response. The transport names `0x6804` a locked device, and `0x6D00` and `0x6E00` reject an
+/// instruction or class the open app does not know.
+fn is_not_ready(error: &LedgerError) -> bool {
+    matches!(
+        error,
+        LedgerError::UnexpectedNullResponse
+            | LedgerError::LedgerError(
+                TransportError::NativeTransportError(NativeTransportError::DeviceNotFound)
+                    | TransportError::BadRetcode(
+                        APDUResponseCodes::UnlockDeviceError
+                            | APDUResponseCodes::ClaNotSupported
+                            | APDUResponseCodes::InsNotSupported
+                    )
+            )
+    )
+}
+
+fn standard_path(address_index: u32, profile_index: u32) -> Result<HDPath, LedgerAccountError> {
+    for index in [address_index, profile_index] {
+        if index >= 1 << 31 {
+            return Err(LedgerAccountError::Index(index));
+        }
+    }
+    Ok(HDPath::Other(format!(
+        "m/44'/60'/{profile_index}'/0/{address_index}"
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn device_error(code: APDUResponseCodes) -> alloy_signer::Error {
+    fn device_status(code: APDUResponseCodes) -> alloy_signer::Error {
         alloy_signer::Error::other(LedgerError::LedgerError(TransportError::BadRetcode(code)))
     }
 
     #[test]
     fn a_denial_on_the_device_is_a_rejection() {
-        let error = signing_error(device_error(APDUResponseCodes::ConditionsNotSatisfied));
+        let error = SignerError::from(signing_error(device_status(
+            APDUResponseCodes::ConditionsNotSatisfied,
+        )));
 
-        assert!(matches!(error, LedgerAccountError::Rejected));
+        assert!(matches!(error, SignerError::Rejected));
+    }
+
+    #[test]
+    fn a_closed_ethereum_app_is_not_ready() {
+        let error = device_error(LedgerError::UnexpectedNullResponse);
+
+        assert!(matches!(error, LedgerAccountError::NotReady));
+    }
+
+    #[test]
+    fn a_locked_or_missing_device_is_not_ready() {
+        let error = device_error(LedgerError::LedgerError(
+            TransportError::NativeTransportError(NativeTransportError::DeviceNotFound),
+        ));
+
+        assert!(matches!(error, LedgerAccountError::NotReady));
+    }
+
+    #[test]
+    fn a_device_that_stops_answering_before_it_signs_is_not_ready() {
+        let error = signing_error(alloy_signer::Error::other(
+            LedgerError::UnexpectedNullResponse,
+        ));
+
+        assert!(matches!(error, LedgerAccountError::NotReady));
+    }
+
+    #[test]
+    fn another_app_open_is_not_ready() {
+        let error = device_error(LedgerError::LedgerError(TransportError::BadRetcode(
+            APDUResponseCodes::ClaNotSupported,
+        )));
+
+        assert!(matches!(error, LedgerAccountError::NotReady));
+    }
+
+    #[test]
+    fn the_standard_path_puts_the_profile_before_the_address() {
+        assert_eq!(standard_path(2, 1).unwrap().to_string(), "m/44'/60'/1'/0/2");
+    }
+
+    #[test]
+    fn a_hardened_address_index_is_refused() {
+        let error = standard_path(1 << 31, 0).unwrap_err();
+
+        assert!(matches!(error, LedgerAccountError::Index(index) if index == 1 << 31));
     }
 
     #[test]
     fn any_other_device_status_stays_a_signing_error() {
-        let error = signing_error(device_error(APDUResponseCodes::InvalidData));
+        let error = signing_error(device_status(APDUResponseCodes::InvalidData));
 
         assert!(matches!(error, LedgerAccountError::Signing(_)));
     }

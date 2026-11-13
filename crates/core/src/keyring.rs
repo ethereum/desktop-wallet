@@ -3,9 +3,12 @@ use std::sync::Arc;
 use zeroize::Zeroizing;
 
 use crate::{
-    database::{Database, scoped::ScopedDatabase},
+    database::{Database, DatabaseGuard, scoped::ScopedDatabase},
     external_signer::{ExternalSigner, ExternalSignerRecord, db::ExternalSignerDb},
-    mnemonic::{Mnemonic, MnemonicError, MnemonicRecord, db::MnemonicDb},
+    mnemonic::{
+        Mnemonic, MnemonicError, MnemonicRecord,
+        db::{MnemonicDatabaseError, MnemonicDb},
+    },
 };
 
 /// The secret material profiles derive from: recovery phrases and references to external
@@ -63,6 +66,7 @@ impl Keyring {
         &self,
         signer: ExternalSigner,
     ) -> Result<ExternalSignerRecord, MnemonicError> {
+        let _guard = self.lock().await?;
         let mut records = self.db.get_external_signers().await?;
         if let Some(existing) = records.iter().find(|record| record.signer == signer) {
             return Err(MnemonicError::DuplicateSigner {
@@ -84,6 +88,7 @@ impl Keyring {
         phrase: Zeroizing<String>,
     ) -> Result<MnemonicRecord, MnemonicError> {
         let normalized = Mnemonic::parse(&phrase)?.phrase();
+        let _guard = self.lock().await?;
         let mut records = self.mnemonics().await?;
         if let Some(existing) = records
             .iter()
@@ -100,6 +105,12 @@ impl Keyring {
         records.push(record.clone());
         self.db.put_mnemonics(&records).await?;
         Ok(record)
+    }
+
+    /// Phrases and signers are stored apart, so taking an index and storing an entry under it
+    /// must not interleave with another process doing the same.
+    async fn lock(&self) -> Result<DatabaseGuard, MnemonicError> {
+        Ok(self.db.lock().await.map_err(MnemonicDatabaseError::from)?)
     }
 }
 
@@ -150,6 +161,19 @@ mod tests {
             .add_mnemonic(Zeroizing::new(FIXTURE.to_string()))
             .await
             .unwrap();
+
+        assert_eq!(record.index, 1);
+    }
+
+    #[tokio::test]
+    async fn a_signer_stored_after_a_phrase_takes_the_next_index() {
+        let keyring = Keyring::new(Arc::new(MemoryDatabase::new()));
+        keyring
+            .add_mnemonic(Zeroizing::new(FIXTURE.to_string()))
+            .await
+            .unwrap();
+
+        let record = keyring.add_external_signer(LEDGER).await.unwrap();
 
         assert_eq!(record.index, 1);
     }

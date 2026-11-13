@@ -12,7 +12,8 @@ async fn main() -> ExitCode {
         .with_default_directive(cli.log_level().into())
         .from_env_lossy();
     // The Ledger crates log each device error they also return, which the CLI prints.
-    if cli.log_level() < LevelFilter::DEBUG {
+    let env_set = std::env::var_os("RUST_LOG").is_some_and(|value| !value.is_empty());
+    if !env_set && cli.log_level() < LevelFilter::DEBUG {
         for quiet in ["coins_ledger=off", "alloy_signer_ledger=off"] {
             if let Ok(directive) = quiet.parse() {
                 filter = filter.add_directive(directive);

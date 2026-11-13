@@ -236,8 +236,11 @@ impl Instance {
             .await?)
     }
 
-    /// `profile`'s standard address at `m/44'/60'/x'/0/index`.
-    pub(super) async fn standard_address(
+    /// `profile`'s standard address at `m/44'/60'/x'/0/index`, derived from its recovery phrase.
+    ///
+    /// # Errors
+    /// Returns [`crate::mnemonic::MnemonicError::NotAPhrase`] for a profile on an external signer.
+    pub async fn standard_address(
         &self,
         profile: &ProfileRecord,
         index: u32,
