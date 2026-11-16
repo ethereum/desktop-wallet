@@ -187,8 +187,8 @@ impl BalanceArgs {
             }
         }
 
-        let ledger = instance.external_signer(&profile).await?.is_some();
-        let tornado = if ledger {
+        let external = instance.external_signer(&profile).await?.is_some();
+        let tornado = if external {
             Ok(Vec::new())
         } else {
             read_tornado(&instance, &profile, endpoint).await
@@ -210,7 +210,7 @@ impl BalanceArgs {
             .collect();
         let mut totals = balance::totals(&read, assets.len());
         fold_tornado(&assets, &mut totals, &holdings);
-        let tornado_notes = (self.detailed && tornado_ok && !ledger)
+        let tornado_notes = (self.detailed && tornado_ok && !external)
             .then(|| note_rows(&holdings))
             .transpose()?;
 

@@ -36,7 +36,7 @@ An external signer keeps its keys: a Ledger is stored as its address at `m/44'/6
 ## Profiles
 
 A profile is a keyring entry `m` and a profile index `x`, the BIP-44 `account'` leaf.
-Profiles may share a phrase under different `x`. A Ledger holds one profile.
+Profiles may share a phrase under different `x`. An external signer holds one profile.
 
 A profile derives its keys at `x`:
 

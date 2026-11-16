@@ -30,8 +30,8 @@ use crate::{
     profile::ProfileArg,
     report::Report,
     spend::{
-        Consent, NO_LEDGER_TORNADO, ShieldedWithdrawal, account_at, account_by_address, confirm,
-        connect_ledger, declined, ensure_paymaster, ensure_phrase, first_bundler, keep_fresh,
+        Consent, NO_EXTERNAL_TORNADO, ShieldedWithdrawal, account_at, account_by_address, confirm,
+        connect_signer, declined, ensure_paymaster, ensure_phrase, first_bundler, keep_fresh,
         measured, mnemonic, note_eth, open_vault, parse_address, quote_shielded,
     },
     unshield::{NoteLine, note_lines},
@@ -102,7 +102,6 @@ enum Asset {
     Erc20(Erc20Asset),
 }
 
-/// The account a public transfer is sent from.
 struct Source {
     index: u32,
     address: Address,
@@ -112,7 +111,7 @@ struct Source {
 enum Payer {
     Key(Arc<dyn Signer>),
     /// Connected only to sign, so that a dry run needs no device.
-    Ledger(ExternalSignerRecord),
+    External(ExternalSignerRecord),
 }
 
 struct Plan<'a> {
@@ -245,8 +244,8 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     }
     let instance = global.open().await?;
     let profile = args.profile.resolve(&instance, input).await?;
-    let ledger = instance.external_signer(&profile).await?;
-    let from_label = if ledger.is_some() {
+    let external = instance.external_signer(&profile).await?;
+    let from_label = if external.is_some() {
         "From (index or address): "
     } else {
         "From (index, address, or tornado): "
@@ -254,7 +253,7 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     let from = required(args.from.as_deref(), input, "--from", from_label)?;
     let tornado = from.eq_ignore_ascii_case("tornado");
     if tornado {
-        ensure_phrase(&instance, &profile, NO_LEDGER_TORNADO).await?;
+        ensure_phrase(&instance, &profile, NO_EXTERNAL_TORNADO).await?;
     }
     let asset = chosen_asset(&instance, &profile, args.asset.as_deref(), input, tornado).await?;
     if tornado && matches!(asset, Asset::Erc20(_)) {
@@ -296,17 +295,17 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
     if tornado {
         return from_tornado(&plan).await;
     }
-    let source = source(&plan, ledger, &from).await?;
+    let source = source(&plan, external, &from).await?;
     from_account(&plan, source).await
 }
 
 async fn source(
     plan: &Plan<'_>,
-    ledger: Option<ExternalSignerRecord>,
+    external: Option<ExternalSignerRecord>,
     from: &str,
 ) -> Result<Source, anyhow::Error> {
     let profile_index = plan.profile.profile_index;
-    let Some(ledger) = ledger else {
+    let Some(external) = external else {
         let phrase = mnemonic(plan.instance, plan.profile).await?;
         let account = if let Ok(index) = from.parse::<u32>() {
             account_at(&phrase, profile_index, index)?
@@ -324,7 +323,7 @@ async fn source(
         if let Some(stored) = stored.iter().find(|stored| stored.index == index) {
             (index, stored.address)
         } else {
-            let device = connect_ledger(&ledger, profile_index, index).await?;
+            let device = connect_signer(&external, index, profile_index).await?;
             (index, device.address())
         }
     } else {
@@ -333,7 +332,7 @@ async fn source(
             (stored.index, address)
         } else {
             (
-                handed_out_index(plan, &ledger, &stored, address).await?,
+                handed_out_index(plan, &external, &stored, address).await?,
                 address,
             )
         }
@@ -341,15 +340,16 @@ async fn source(
     Ok(Source {
         index,
         address,
-        payer: Payer::Ledger(ledger),
+        payer: Payer::External(external),
     })
 }
 
-/// Finds `address` among the indices `receive` handed out, which have no address
-/// vault until a rescan finds them used.
+/// Finds `address` among the handed-out indices that have no address vault yet.
+///
+/// `receive` hands an index out, and only a rescan that finds it used stores its vault.
 async fn handed_out_index(
     plan: &Plan<'_>,
-    ledger: &ExternalSignerRecord,
+    external: &ExternalSignerRecord,
     stored: &[DerivedAddress],
     address: Address,
 ) -> Result<u32, anyhow::Error> {
@@ -358,7 +358,8 @@ async fn handed_out_index(
         .filter(|index| !stored.iter().any(|stored| stored.index == *index))
         .collect();
     if !unstored.is_empty() {
-        let device = connect_ledger(ledger, profile_index, 0).await?;
+        let device = connect_signer(external, 0, profile_index).await?;
+        eprintln!("Looking for this address on the hardware wallet...");
         for index in unstored {
             if device.standard_address(index, profile_index).await? == address {
                 return Ok(index);
@@ -511,17 +512,16 @@ async fn from_account(plan: &Plan<'_>, source: Source) -> Result<(), anyhow::Err
     }
     let signer: Arc<dyn Signer> = match payer {
         Payer::Key(signer) => signer,
-        Payer::Ledger(ledger) => {
-            let device = connect_ledger(&ledger, plan.profile.profile_index, index).await?;
-            eprintln!("Confirm the transaction on the Ledger.");
+        Payer::External(external) => {
+            let device = connect_signer(&external, index, plan.profile.profile_index).await?;
+            eprintln!("Confirm the transaction on the hardware wallet.");
             Arc::new(device)
         }
     };
     let included = match submit_prepared(endpoint, signer, prepared).await {
         Ok(included) => included,
         Err(error) if error.is_rejected() => {
-            declined();
-            return Ok(());
+            anyhow::bail!("rejected on the hardware wallet; nothing was broadcast")
         }
         Err(error) => return Err(error.into()),
     };

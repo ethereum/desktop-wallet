@@ -398,7 +398,6 @@ mod tests {
         test_support::mocked_provider,
     };
 
-    /// Declines every signature.
     struct DecliningSigner;
 
     #[async_trait::async_trait]

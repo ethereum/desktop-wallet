@@ -23,6 +23,8 @@ use crate::{
 
 pub const LEDGER_SIGNER_TAG: &str = "ledger-signer";
 
+const HARDENED: u32 = 1 << 31;
+
 /// A [`Signer`] for one standard address on a connected Ledger running the Ethereum app.
 ///
 /// Each signature waits for confirmation on the device. Not registered with the signer
@@ -38,7 +40,7 @@ pub enum LedgerAccountError {
     #[error("the Ledger is not ready; connect it, unlock it, and open its Ethereum app")]
     NotReady,
     #[error("the Ledger did not sign")]
-    Signing(alloy_signer::Error),
+    Signing(#[source] alloy_signer::Error),
     #[error("rejected on the Ledger")]
     Rejected,
     #[error("the connected Ledger is not the one this profile was created from")]
@@ -52,11 +54,17 @@ pub enum LedgerAccountError {
 }
 
 impl LedgerAccount {
-    /// Connects to the first Ledger found, for standard address `address_index` of
-    /// `profile_index`. The device must be unlocked with the Ethereum app open.
+    /// Connects to the first Ledger found, at address `address_index` of `profile_index`.
+    ///
+    /// The device must be unlocked with the Ethereum app open.
+    ///
+    /// # Errors
+    /// Returns [`LedgerAccountError::NotReady`] if no unlocked Ledger with the Ethereum app open
+    /// is found, [`LedgerAccountError::Index`] if an index is 2^31 or more, and
+    /// [`LedgerAccountError::Device`] for any other device failure.
     pub async fn connect(
-        profile_index: u32,
         address_index: u32,
+        profile_index: u32,
     ) -> Result<Self, LedgerAccountError> {
         let signer = LedgerSigner::new(standard_path(address_index, profile_index)?, None)
             .await
@@ -65,11 +73,19 @@ impl LedgerAccount {
     }
 
     /// The device's address at `m/44'/60'/0'/0/0`, which tells one seed from another.
+    ///
+    /// # Errors
+    /// As [`Self::standard_address`].
     pub async fn identity(&self) -> Result<Address, LedgerAccountError> {
         self.standard_address(0, 0).await
     }
 
     /// Reads a standard address from the device, without a prompt on it.
+    ///
+    /// # Errors
+    /// Returns [`LedgerAccountError::NotReady`] if the device is locked or its Ethereum app is
+    /// closed, [`LedgerAccountError::Index`] if an index is 2^31 or more, and
+    /// [`LedgerAccountError::Device`] for any other device failure.
     pub async fn standard_address(
         &self,
         address_index: u32,
@@ -82,6 +98,10 @@ impl LedgerAccount {
     }
 
     /// [`crate::mnemonic::Mnemonic::scan_standard_eoas`], reading each address from the device.
+    ///
+    /// # Errors
+    /// As [`Self::standard_address`], or [`LedgerAccountError::Scan`] if `endpoint` cannot report
+    /// an address's activity.
     pub async fn scan_standard_eoas(
         &self,
         profile_index: u32,
@@ -202,7 +222,7 @@ fn is_not_ready(error: &LedgerError) -> bool {
 
 fn standard_path(address_index: u32, profile_index: u32) -> Result<HDPath, LedgerAccountError> {
     for index in [address_index, profile_index] {
-        if index >= 1 << 31 {
+        if index >= HARDENED {
             return Err(LedgerAccountError::Index(index));
         }
     }
@@ -245,10 +265,8 @@ mod tests {
     }
 
     #[test]
-    fn a_device_that_stops_answering_before_it_signs_is_not_ready() {
-        let error = signing_error(alloy_signer::Error::other(
-            LedgerError::UnexpectedNullResponse,
-        ));
+    fn a_device_reporting_itself_locked_while_signing_is_not_ready() {
+        let error = signing_error(device_status(APDUResponseCodes::UnlockDeviceError));
 
         assert!(matches!(error, LedgerAccountError::NotReady));
     }
@@ -269,9 +287,9 @@ mod tests {
 
     #[test]
     fn a_hardened_address_index_is_refused() {
-        let error = standard_path(1 << 31, 0).unwrap_err();
+        let error = standard_path(HARDENED, 0).unwrap_err();
 
-        assert!(matches!(error, LedgerAccountError::Index(index) if index == 1 << 31));
+        assert!(matches!(error, LedgerAccountError::Index(index) if index == HARDENED));
     }
 
     #[test]

@@ -77,9 +77,10 @@ impl Instance {
         Ok(())
     }
 
-    /// Adds an address vault to `profile` for each address in `scan`, or for `first`, its address
-    /// 0, when `scan` found none or is `None`. Skips each index `profile` already has an address
-    /// vault for, and returns the addresses it added.
+    /// Adds an address vault for each address in `scan`, or else for `first`.
+    ///
+    /// `first` is `profile`'s address 0, used when `scan` found none or is `None`. Skips each
+    /// index `profile` already has an address vault for, and returns the addresses it added.
     pub async fn add_scanned_address_vaults(
         &self,
         profile: &ProfileRecord,

@@ -52,7 +52,6 @@ pub enum SignerId {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignerError {
-    /// The person holding the key declined to sign.
     #[error("declined on the signer")]
     Rejected,
     #[error(transparent)]

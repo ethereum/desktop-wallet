@@ -23,7 +23,7 @@ use crate::{
     profile::ProfileArg,
     report::Report,
     spend::{
-        Account, AmountArgs, Consent, NO_LEDGER_TORNADO, account_at, confirm, declined,
+        Account, AmountArgs, Consent, NO_EXTERNAL_TORNADO, account_at, confirm, declined,
         ensure_phrase, mnemonic, open_vault, send_one, tornado_asset,
     },
 };
@@ -141,7 +141,7 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
     }
     let instance = global.open().await?;
     let profile = args.profile.resolve(&instance, input).await?;
-    ensure_phrase(&instance, &profile, NO_LEDGER_TORNADO).await?;
+    ensure_phrase(&instance, &profile, NO_EXTERNAL_TORNADO).await?;
     let endpoint = instance.rpc().await?;
     let chain_id = endpoint.network_id().await?;
     let asset = tornado_asset(args.asset.as_deref(), chain_id, input)?;

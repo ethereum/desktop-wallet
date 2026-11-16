@@ -28,7 +28,7 @@ use crate::{
     input::{Choice, Input},
 };
 
-pub const NO_LEDGER_TORNADO: &str = "and Tornado does not work with a Ledger yet";
+pub const NO_EXTERNAL_TORNADO: &str = "and Tornado does not work with a hardware wallet yet";
 
 pub struct Account {
     pub index: u32,
@@ -128,8 +128,9 @@ pub async fn mnemonic(
     Ok(Mnemonic::parse(phrase.as_str())?)
 }
 
-/// Refuses `profile` when it is on a Ledger, for a command that needs a recovery phrase;
-/// `reason` completes "<profile> is on a Ledger, ".
+/// Refuses `profile` when it is on a hardware wallet.
+///
+/// `reason` completes "<profile> is on a hardware wallet, ".
 pub async fn ensure_phrase(
     instance: &Instance,
     profile: &ProfileRecord,
@@ -137,20 +138,20 @@ pub async fn ensure_phrase(
 ) -> Result<(), anyhow::Error> {
     if instance.external_signer(profile).await?.is_some() {
         return Err(failure::usage(format!(
-            "{} is on a Ledger, {reason}",
+            "{} is on a hardware wallet, {reason}",
             profile.display_name()
         )));
     }
     Ok(())
 }
 
-pub async fn connect_ledger(
-    ledger: &ExternalSignerRecord,
-    profile_index: u32,
+pub async fn connect_signer(
+    external: &ExternalSignerRecord,
     address_index: u32,
+    profile_index: u32,
 ) -> Result<LedgerAccount, anyhow::Error> {
-    eprintln!("Connecting to the Ledger...");
-    Ok(ledger.connect(profile_index, address_index).await?)
+    eprintln!("Connecting to the hardware wallet...");
+    Ok(external.connect(address_index, profile_index).await?)
 }
 
 pub fn account_at(

@@ -5,12 +5,14 @@ use std::{
     time::Duration,
 };
 
+use alloy_primitives::Address;
 use anyhow::Context;
 use clap::{ArgGroup, Args, Subcommand};
 use edw_core::{
     external_signer::ExternalSigner,
     instance::Instance,
     mnemonic::scan::EoaScan,
+    network::NetworkEndpoint,
     profile::ProfileRecord,
     signer::{Signer, ledger::LedgerAccount},
 };
@@ -23,13 +25,19 @@ use crate::{
     report::Report,
     secret_file,
     session::SessionFile,
-    spend::{NO_LEDGER_TORNADO, connect_ledger, ensure_phrase},
+    spend::{NO_EXTERNAL_TORNADO, connect_signer, ensure_phrase},
     unlock,
 };
 
 const ON_DEVICE: &str = "which keeps its recovery phrase on the device";
 
 const PHRASE_MAX_BYTES: u64 = 4096;
+
+struct Imported {
+    profile: ProfileRecord,
+    next_unused: Option<u32>,
+    added: Vec<(u32, Address)>,
+}
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -172,8 +180,7 @@ struct ImportReport {
     profile: ProfileSummary,
     addresses: Vec<ScannedAddress>,
     next_unused: Option<u32>,
-    /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed or
-    /// the profile is on a Ledger.
+    /// Unspent Tornado notes recovered, or `None` when the scan failed or did not run.
     tornado_notes: Option<u32>,
 }
 
@@ -181,8 +188,7 @@ struct ImportReport {
 struct RescanReport {
     profile: ProfileSummary,
     added: Vec<ScannedAddress>,
-    /// Unspent Tornado notes recovered from the chain's pools, or `None` when the scan failed or
-    /// the profile is on a Ledger.
+    /// Unspent Tornado notes recovered, or `None` when the scan failed or did not run.
     tornado_notes: Option<u32>,
 }
 
@@ -435,24 +441,22 @@ impl ImportArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
         let input = global.input();
-        let (profile, scan) = if self.ledger {
+        let Imported {
+            profile,
+            next_unused,
+            added,
+        } = if self.ledger {
             self.import_ledger(&instance, input).await?
         } else {
             self.import_phrase(&instance, input).await?
         };
-        let (addresses, next_unused) = match scan {
-            Some(scan) => (
-                scan.addresses
-                    .iter()
-                    .map(|(index, address)| ScannedAddress {
-                        index: *index,
-                        address: address.to_string(),
-                    })
-                    .collect(),
-                Some(scan.next_unused),
-            ),
-            None => (Vec::new(), None),
-        };
+        let addresses = added
+            .iter()
+            .map(|(index, address)| ScannedAddress {
+                index: *index,
+                address: address.to_string(),
+            })
+            .collect();
         let tornado_notes = if self.ledger {
             None
         } else {
@@ -471,7 +475,7 @@ impl ImportArgs {
         &self,
         instance: &Instance,
         input: Input,
-    ) -> Result<(ProfileRecord, Option<EoaScan>), anyhow::Error> {
+    ) -> Result<Imported, anyhow::Error> {
         let phrase = self.phrase(input)?;
         eprintln!("Recovery phrase entered; importing profile...");
         let name = prompt_profile_name(self.name.clone(), input)?;
@@ -483,29 +487,37 @@ impl ImportArgs {
         }
         let scan = scan(instance, &profile, None).await;
         let first = instance.standard_address(&profile, 0).await?;
-        instance
+        let added = instance
             .add_scanned_address_vaults(&profile, scan.as_ref(), first)
             .await?;
-        Ok((profile, scan))
+        Ok(Imported {
+            profile,
+            next_unused: scan.map(|scan| scan.next_unused),
+            added,
+        })
     }
 
     async fn import_ledger(
         &self,
         instance: &Instance,
         input: Input,
-    ) -> Result<(ProfileRecord, Option<EoaScan>), anyhow::Error> {
+    ) -> Result<Imported, anyhow::Error> {
         let name = prompt_profile_name(self.name.clone(), input)?;
         eprintln!("Connecting to the Ledger...");
-        let ledger = LedgerAccount::connect(self.index, 0).await?;
+        let ledger = LedgerAccount::connect(0, self.index).await?;
         let identity = ledger.identity().await?;
         let (_, profile) = instance
             .import_external_profile(ExternalSigner::Ledger { identity }, self.index, name)
             .await?;
         let scan = scan(instance, &profile, Some(&ledger)).await;
-        instance
+        let added = instance
             .add_scanned_address_vaults(&profile, scan.as_ref(), ledger.address())
             .await?;
-        Ok((profile, scan))
+        Ok(Imported {
+            profile,
+            next_unused: scan.map(|scan| scan.next_unused),
+            added,
+        })
     }
 
     fn phrase(&self, input: Input) -> Result<Zeroizing<String>, anyhow::Error> {
@@ -539,21 +551,19 @@ impl RescanArgs {
         let profile = self.profile.resolve(&instance, global.input()).await?;
 
         if self.tornado_gap_limit.is_some() {
-            ensure_phrase(&instance, &profile, NO_LEDGER_TORNADO).await?;
+            ensure_phrase(&instance, &profile, NO_EXTERNAL_TORNADO).await?;
         }
         let endpoint = instance.rpc().await?;
         let (added, tornado_notes) =
-            if let Some(ledger) = instance.external_signer(&profile).await? {
-                let ledger = connect_ledger(&ledger, profile.profile_index, 0).await?;
-                let scan = ledger
-                    .scan_standard_eoas(profile.profile_index, endpoint.as_ref())
-                    .await?;
+            if let Some(external) = instance.external_signer(&profile).await? {
+                let ledger = connect_signer(&external, 0, profile.profile_index).await?;
+                let scan = scan_on(&instance, &profile, Some(&ledger), endpoint.as_ref()).await?;
                 let added = instance
                     .add_scanned_address_vaults(&profile, Some(&scan), ledger.address())
                     .await?;
                 (added, None)
             } else {
-                let scan = instance.scan_profile(&profile, endpoint.as_ref()).await?;
+                let scan = scan_on(&instance, &profile, None, endpoint.as_ref()).await?;
                 let first = instance.standard_address(&profile, 0).await?;
                 let added = instance
                     .add_scanned_address_vaults(&profile, Some(&scan), first)
@@ -580,7 +590,7 @@ impl ClearPendingArgs {
     pub async fn run(&self, global: &GlobalArgs) -> Result<(), anyhow::Error> {
         let instance = global.open().await?;
         let profile = self.profile.resolve(&instance, global.input()).await?;
-        ensure_phrase(&instance, &profile, NO_LEDGER_TORNADO).await?;
+        ensure_phrase(&instance, &profile, NO_EXTERNAL_TORNADO).await?;
         let phrase = crate::spend::mnemonic(&instance, &profile).await?;
         let endpoint = instance.rpc().await?;
         let vault = crate::spend::open_vault(&instance, &profile, &phrase, endpoint).await?;
@@ -700,13 +710,14 @@ impl ProfileArg {
         instance: &Instance,
         input: Input,
     ) -> Result<ProfileRecord, anyhow::Error> {
-        self.select(
-            instance,
-            input,
-            phrase_profiles(instance).await?,
-            selector_of,
-        )
-        .await
+        let profiles = phrase_profiles(instance).await?;
+        if profiles.is_empty() && self.selector.is_none() && !instance.profiles().await?.is_empty()
+        {
+            return Err(failure::usage(format!(
+                "every profile is on a hardware wallet, {ON_DEVICE}"
+            )));
+        }
+        self.select(instance, input, profiles, selector_of).await
     }
 
     /// As [`Self::resolve`], recording a pick by `mnemonic/profile`, which survives a rename.
@@ -812,40 +823,48 @@ fn write_tornado_count(f: &mut fmt::Formatter<'_>, count: Option<u32>) -> fmt::R
     }
 }
 
-/// Scans `profile`'s addresses, read from `ledger` when given, or warns on stderr that only
-/// address 0 gets an address vault and returns `None` when the scan fails.
+/// Scans `profile`'s addresses, read from `ledger` when given, or `None` if the scan fails.
+///
+/// On failure, warns on stderr that only address 0 gets an address vault.
 async fn scan(
     instance: &Instance,
     profile: &ProfileRecord,
     ledger: Option<&LedgerAccount>,
 ) -> Option<EoaScan> {
-    eprintln!("Scanning standard addresses...");
     let scan = match instance.rpc().await.map_err(anyhow::Error::from) {
-        Ok(endpoint) => {
-            let scanning = async {
-                match ledger {
-                    Some(ledger) => Ok(ledger
-                        .scan_standard_eoas(profile.profile_index, endpoint.as_ref())
-                        .await?),
-                    None => Ok(instance.scan_profile(profile, endpoint.as_ref()).await?),
-                }
-            };
-            tokio::pin!(scanning);
-            let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
-            heartbeat.tick().await;
-            loop {
-                tokio::select! {
-                    result = &mut scanning => break result,
-                    _ = heartbeat.tick() => eprintln!("Still scanning standard addresses..."),
-                }
-            }
-        }
+        Ok(endpoint) => scan_on(instance, profile, ledger, endpoint.as_ref()).await,
         Err(error) => Err(error),
     };
     scan.map_err(|error| {
         eprintln!("The address scan failed, so only address 0 gets an address vault: {error:#}");
     })
     .ok()
+}
+
+async fn scan_on(
+    instance: &Instance,
+    profile: &ProfileRecord,
+    ledger: Option<&LedgerAccount>,
+    endpoint: &dyn NetworkEndpoint,
+) -> Result<EoaScan, anyhow::Error> {
+    eprintln!("Scanning standard addresses...");
+    let scanning = async {
+        match ledger {
+            Some(ledger) => Ok(ledger
+                .scan_standard_eoas(profile.profile_index, endpoint)
+                .await?),
+            None => Ok(instance.scan_profile(profile, endpoint).await?),
+        }
+    };
+    tokio::pin!(scanning);
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
+    heartbeat.tick().await;
+    loop {
+        tokio::select! {
+            result = &mut scanning => break result,
+            _ = heartbeat.tick() => eprintln!("Still scanning standard addresses..."),
+        }
+    }
 }
 
 /// `explicit` when given, else a name typed at an interactive terminal. Validation is the
@@ -862,7 +881,6 @@ fn prompt_profile_name(
         .filter(|name| !name.is_empty()))
 }
 
-/// The profiles on a recovery phrase.
 async fn phrase_profiles(instance: &Instance) -> Result<Vec<ProfileRecord>, anyhow::Error> {
     let mut profiles = Vec::new();
     for profile in instance.profiles().await? {

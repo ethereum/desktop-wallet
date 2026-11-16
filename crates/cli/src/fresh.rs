@@ -7,7 +7,7 @@ use crate::{
     GlobalArgs,
     profile::ProfileArg,
     report::Report,
-    spend::{connect_ledger, mnemonic},
+    spend::{connect_signer, mnemonic},
 };
 
 #[derive(Args, Debug)]
@@ -48,12 +48,13 @@ pub async fn run(global: &GlobalArgs, args: &ReceiveArgs) -> Result<(), anyhow::
     let input = global.input();
     let profile = args.profile.resolve(&instance, input).await?;
     let endpoint = instance.rpc().await?;
-    let fresh = if let Some(ledger) = instance.external_signer(&profile).await? {
-        let ledger = &connect_ledger(&ledger, profile.profile_index, 0).await?;
+    let fresh = if let Some(external) = instance.external_signer(&profile).await? {
+        let device = &connect_signer(&external, 0, profile.profile_index).await?;
+        eprintln!("Looking for a fresh address...");
         instance
             .fresh_address_with(&profile, endpoint.as_ref(), |index| async move {
                 Ok::<_, anyhow::Error>(
-                    ledger
+                    device
                         .standard_address(index, profile.profile_index)
                         .await?,
                 )
@@ -61,6 +62,7 @@ pub async fn run(global: &GlobalArgs, args: &ReceiveArgs) -> Result<(), anyhow::
             .await?
     } else {
         let phrase = mnemonic(&instance, &profile).await?;
+        eprintln!("Looking for a fresh address...");
         instance
             .fresh_address(&profile, &phrase, endpoint.as_ref())
             .await?
@@ -69,6 +71,9 @@ pub async fn run(global: &GlobalArgs, args: &ReceiveArgs) -> Result<(), anyhow::
         false
     } else {
         instance.commit_fresh_address(&profile, fresh.index).await?;
+        instance
+            .add_address_vault(&profile, fresh.index, fresh.address)
+            .await?;
         true
     };
     FreshReport {

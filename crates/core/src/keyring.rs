@@ -11,8 +11,9 @@ use crate::{
     },
 };
 
-/// The secret material profiles derive from: recovery phrases and references to external
-/// signers, numbered in one index space.
+/// The secret material profiles derive from: recovery phrases and external signers.
+///
+/// Both share one index space.
 pub struct Keyring {
     db: ScopedDatabase,
 }
@@ -107,8 +108,7 @@ impl Keyring {
         Ok(record)
     }
 
-    /// Phrases and signers are stored apart, so taking an index and storing an entry under it
-    /// must not interleave with another process doing the same.
+    /// Phrases and signers are stored apart, so no single write keeps their shared index unique.
     async fn lock(&self) -> Result<DatabaseGuard, MnemonicError> {
         Ok(self.db.lock().await.map_err(MnemonicDatabaseError::from)?)
     }
