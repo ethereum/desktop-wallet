@@ -2,7 +2,7 @@ use std::fmt;
 
 use alloy_primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
-use clap::{ArgGroup, Args};
+use clap::Args;
 use edw_core::{
     broadcast::submit_user_operation,
     bundler::Url,
@@ -10,8 +10,8 @@ use edw_core::{
     instance::Instance,
     network::NetworkEndpoint,
     vault::tornadocash::{
-        Asset, Pool, TornadoVault, format_amount, format_eth, parse_amount, resolve_asset,
-        token_address, token_balance,
+        Asset, Pool, TornadoVault, format_amount, format_eth, parse_amount, token_address,
+        token_balance,
     },
 };
 use futures::{StreamExt, TryStreamExt, stream};
@@ -20,36 +20,33 @@ use serde::Serialize;
 use crate::{
     GlobalArgs, failure,
     input::Input,
+    profile::ProfileArg,
     report::Report,
     spend::{
-        Account, Consent, account_at, choose_profile, confirm, declined, mnemonic, open_vault,
-        send_one, token_amount,
+        Account, AmountArgs, Consent, account_at, confirm, declined, mnemonic, open_vault,
+        send_one, tornado_asset,
     },
 };
 
 #[derive(Args, Debug)]
-#[command(group = ArgGroup::new("amount").args(["amount_formatted", "amount_raw"]))]
 pub struct ShieldArgs {
-    /// Decimal tokens to shield, for example `1.1`. Must be a sum of this chain's Tornado denominations.
+    #[command(flatten)]
+    amount: AmountArgs,
+    /// ETH, or a token with Tornado pools on this chain, by symbol or address. Omitted, it is the
+    /// chain's only one, else picked at a terminal, else ETH.
     #[arg(long)]
-    amount_formatted: Option<String>,
-    /// Base units to shield. Must be a sum of this chain's Tornado denominations.
-    #[arg(long)]
-    amount_raw: Option<String>,
-    /// Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC.
-    #[arg(long, default_value = "ETH")]
-    token: String,
-    /// Exact pool sizes in the selected token, separated by commas.
-    #[arg(long)]
+    asset: Option<String>,
+    /// Exact pool sizes in the selected asset, separated by commas.
+    #[arg(long, hide_short_help = true)]
     denominations: Option<String>,
     /// Reserve notes and return deposit calls without checking balances or broadcasting.
-    #[arg(long, conflicts_with = "from")]
+    #[arg(long, hide_short_help = true, conflicts_with = "from")]
     prepare: bool,
-    /// Standard-address index that pays. Defaults to 0.
+    /// Standard-address index that pays. Picked from the funded ones at a terminal, else 0.
     #[arg(long)]
     from: Option<u32>,
-    #[arg(long)]
-    profile: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
     #[command(flatten)]
     consent: Consent,
 }
@@ -143,14 +140,15 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
         args.consent.ensure_possible(input)?;
     }
     let instance = global.open().await?;
-    let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
+    let profile = args.profile.resolve(&instance, input).await?;
     let endpoint = instance.rpc().await?;
     let chain_id = endpoint.network_id().await?;
-    let asset = resolve_asset(&args.token, chain_id).map_err(failure::usage)?;
+    let asset = tornado_asset(args.asset.as_deref(), chain_id, input)?;
     let symbol = asset.symbol().to_uppercase();
     let phrase = mnemonic(&instance, &profile).await?;
     let vault = open_vault(&instance, &profile, &phrase, endpoint.clone()).await?;
-    let (pools, amount) = plan_pools(args, input, &asset, &vault).await?;
+    let (pools, amount) =
+        plan_pools(args, input, &asset, chain_id, &instance, &profile, &vault).await?;
     if args.prepare {
         let deposits = vault.prepare_deposits(&pools).await?;
         return prepared_report(deposits)?.emit(global.mode());
@@ -169,7 +167,7 @@ pub async fn run(global: &GlobalArgs, args: &ShieldArgs) -> Result<(), anyhow::E
             .await?
         }
         None => input
-            .line("Pay from address index [0]: ")?
+            .ask("--from", "Pay from address index [0]: ")?
             .filter(|line| !line.is_empty())
             .map(|line| {
                 line.parse::<u32>()
@@ -225,6 +223,9 @@ async fn plan_pools(
     args: &ShieldArgs,
     input: Input,
     asset: &Asset,
+    chain_id: u64,
+    instance: &Instance,
+    profile: &edw_core::profile::ProfileRecord,
     vault: &TornadoVault<PrivateKeySigner>,
 ) -> Result<(Vec<Pool>, U256), anyhow::Error> {
     let denominations = args
@@ -232,16 +233,12 @@ async fn plan_pools(
         .as_deref()
         .map(|raw| parse_denominations(raw, asset))
         .transpose()?;
-    let requested = if denominations.is_none()
-        || args.amount_formatted.is_some()
-        || args.amount_raw.is_some()
-    {
-        Some(token_amount(
-            args.amount_formatted.as_deref(),
-            args.amount_raw.as_deref(),
-            input,
-            asset,
-        )?)
+    let requested = if denominations.is_none() || args.amount.given() {
+        Some(
+            args.amount
+                .resolve(input, asset, chain_id, instance, profile)
+                .await?,
+        )
     } else {
         None
     };
@@ -330,7 +327,7 @@ async fn choose_funded_payer(
 ) -> Result<u32, anyhow::Error> {
     let token = token_address(asset);
     let addresses = instance.stored_address_accounts(profile).await?;
-    let balances: Vec<(u32, U256, U256)> = stream::iter(addresses)
+    let balances: Vec<(u32, Address, U256, U256)> = stream::iter(addresses)
         .map(|account| async move {
             let eth = endpoint.balance(account.address).await?;
             let held = if let Some(token) = token {
@@ -338,45 +335,46 @@ async fn choose_funded_payer(
             } else {
                 eth
             };
-            Ok::<_, anyhow::Error>((account.index, eth, held))
+            Ok::<_, anyhow::Error>((account.index, account.address, eth, held))
         })
         .buffered(8)
         .try_collect()
         .await?;
-    let mut funded: Vec<u32> = balances
+    let mut funded: Vec<(u32, Address)> = balances
         .into_iter()
-        .filter_map(|(index, eth, held)| {
+        .filter_map(|(index, address, eth, held)| {
             (eth > if token.is_some() { U256::ZERO } else { amount } && held >= amount)
-                .then_some(index)
+                .then_some((index, address))
         })
         .collect();
     funded.sort_unstable();
     funded.dedup();
-    let Some(&default) = funded.first() else {
+    let Some((default, _)) = funded.first() else {
         anyhow::bail!(
             "no stored address has enough {} and ETH for gas; fund an address or pass --from <index>",
             asset.symbol().to_uppercase()
         );
     };
-    let listed = funded
-        .iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    let entered = input
-        .line(&format!(
-            "Pay from address index [{listed}] (default {default}): "
-        ))?
-        .unwrap_or_default();
-    if entered.is_empty() {
-        return Ok(default);
+    if let [(only, _)] = funded.as_slice() {
+        input.imply("--from", Some(only.to_string()));
+        return Ok(*only);
     }
+    for (index, address) in &funded {
+        eprintln!("  index {index}: {address}");
+    }
+    let entered = input
+        .ask_or(
+            "--from",
+            &format!("Pay from address index (default {default}): "),
+            &default.to_string(),
+        )?
+        .ok_or_else(|| failure::usage("pass --from <index>"))?;
     let index = entered
         .parse::<u32>()
         .map_err(|_| failure::usage(format!("`{entered}` is not an address index")))?;
-    if !funded.contains(&index) {
+    if !funded.iter().any(|(funded, _)| *funded == index) {
         return Err(failure::usage(format!(
-            "address index {index} is not among the funded choices [{listed}]"
+            "address index {index} is not among the funded addresses"
         )));
     }
     Ok(index)
@@ -517,7 +515,7 @@ mod tests {
             crate::Cli::try_parse_from([
                 "edw",
                 "shield",
-                "--token",
+                "--asset",
                 "USDC",
                 "--denominations",
                 "100,1000",
@@ -533,9 +531,9 @@ mod tests {
             "edw",
             "shield",
             "--prepare",
-            "--token",
+            "--asset",
             "USDC",
-            "--amount-formatted",
+            "--amount",
             "100",
             "--non-interactive",
         ])

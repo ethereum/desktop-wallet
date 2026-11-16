@@ -41,6 +41,12 @@ impl SessionFile {
         })))
     }
 
+    /// A store with no runtime directory, as where `XDG_RUNTIME_DIR` is unset.
+    #[cfg(test)]
+    pub const fn unavailable() -> Self {
+        Self(None)
+    }
+
     fn opened(&self) -> Result<Option<&FileDatabase>, anyhow::Error> {
         match &self.0 {
             None => Ok(None),

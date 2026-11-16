@@ -1,52 +1,55 @@
 use std::fmt;
 
 use alloy_primitives::{Address, U256};
-use clap::{ArgGroup, Args};
+use clap::Args;
 use edw_core::{
     instance::FreshAddress,
-    vault::tornadocash::{Asset, TornadoNote, format_amount, resolve_asset, withdrawal_notes},
+    vault::tornadocash::{Asset, TornadoNote, format_amount, withdrawal_notes},
 };
 use serde::Serialize;
 
 use crate::{
     GlobalArgs, failure,
+    profile::ProfileArg,
     report::Report,
     spend::{
-        Consent, ShieldedWithdrawal, choose_profile, confirm, declined, ensure_paymaster,
+        AmountArgs, Consent, ShieldedWithdrawal, confirm, declined, ensure_paymaster,
         first_bundler, keep_fresh, mnemonic, open_vault, parse_tail_calls, quote_shielded,
-        recipient_address, submit_shielded, token_amount,
+        recipient_address, submit_shielded, tornado_asset,
     },
 };
 
 #[derive(Args, Debug)]
-#[command(group = ArgGroup::new("amount").args(["amount_formatted", "amount_raw"]))]
 pub struct UnshieldArgs {
-    /// Decimal tokens to unshield, for example `1.1`. Must be a sum of this chain's Tornado denominations.
+    #[command(flatten)]
+    amount: AmountArgs,
+    /// ETH, or a token with Tornado pools on this chain, by symbol or address. Omitted, it is the
+    /// chain's only one, else picked at a terminal, else ETH.
     #[arg(long)]
-    amount_formatted: Option<String>,
-    /// Base units to unshield. Must be a sum of this chain's Tornado denominations.
-    #[arg(long)]
-    amount_raw: Option<String>,
-    /// Asset symbol: ETH (default), USDC, USDT, DAI, or WBTC.
-    #[arg(long, default_value = "ETH")]
-    token: String,
-    /// Calls after withdrawal, from the fresh account: TARGET:CALLDATA[:WEI],...
-    #[arg(long, conflicts_with = "to", value_parser = validate_tail_calls)]
-    tail_calls: Option<String>,
-    /// Quote the sponsor fee without signing, sending, or reserving the fresh address.
-    #[arg(long)]
-    quote: bool,
-    /// Send ETH left after custom calls and the quoted fee to this address in the same `UserOp`.
-    #[arg(long, requires = "tail_calls", conflicts_with = "to")]
-    sweep_to: Option<String>,
-    /// Where the selected asset is forwarded. Omitted, it stays on the fresh address.
+    asset: Option<String>,
+    /// Where the withdrawn asset is forwarded. Empty, or omitted without a terminal, it stays on
+    /// the fresh address.
     #[arg(long)]
     to: Option<String>,
+    /// Quote the sponsor fee, then stop without signing, sending, or storing the fresh address.
+    #[arg(long)]
+    dry_run: bool,
+    /// Calls after withdrawal, from the fresh account: TARGET:CALLDATA[:WEI],...
+    #[arg(long, hide_short_help = true, conflicts_with = "to", value_parser = validate_tail_calls)]
+    tail_calls: Option<String>,
+    /// Send ETH left after custom calls and the quoted fee to this address in the same `UserOp`.
+    #[arg(
+        long,
+        hide_short_help = true,
+        requires = "tail_calls",
+        conflicts_with = "to"
+    )]
+    sweep_to: Option<String>,
     /// Abort if the next fresh account differs from this address.
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     expected_fresh_address: Option<Address>,
-    #[arg(long)]
-    profile: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
     #[command(flatten)]
     consent: Consent,
 }
@@ -89,7 +92,7 @@ struct UnshieldQuoteReport {
 }
 
 impl Report for UnshieldQuoteReport {
-    const KIND: &'static str = "edw/unshield-quote";
+    const KIND: &'static str = "edw/unshield-dry-run";
     const VERSION: u32 = 1;
 }
 
@@ -126,21 +129,19 @@ impl fmt::Display for UnshieldReport {
 
 pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow::Error> {
     let input = global.input();
-    if !args.quote {
+    if !args.dry_run {
         args.consent.ensure_possible(input)?;
     }
     let instance = global.open().await?;
-    let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
+    let profile = args.profile.resolve(&instance, input).await?;
     let endpoint = instance.rpc().await?;
     let chain_id = endpoint.network_id().await?;
-    let asset = resolve_asset(&args.token, chain_id).map_err(failure::usage)?;
+    let asset = tornado_asset(args.asset.as_deref(), chain_id, input)?;
     let tails = custom_calls(args, &asset)?;
-    let amount = token_amount(
-        args.amount_formatted.as_deref(),
-        args.amount_raw.as_deref(),
-        input,
-        &asset,
-    )?;
+    let amount = args
+        .amount
+        .resolve(input, &asset, chain_id, &instance, &profile)
+        .await?;
     let to = if let Some(sweep) = &args.sweep_to {
         if asset != edw_core::vault::tornadocash::Asset::ETH {
             return Err(failure::usage(
@@ -178,7 +179,7 @@ pub async fn run(global: &GlobalArgs, args: &UnshieldArgs) -> Result<(), anyhow:
         minimum_forward: None,
         bundler_urls: &bundler_urls,
     };
-    if args.quote {
+    if args.dry_run {
         return emit_quote(
             global,
             withdrawal,
@@ -329,13 +330,19 @@ fn destination(
     given: Option<&str>,
     input: crate::input::Input,
 ) -> Result<Option<Address>, anyhow::Error> {
-    let text = match given {
-        Some(value) => Some(value.to_string()),
-        None => input.line("Forward to (empty leaves it on the fresh address): ")?,
-    };
-    match text.as_deref() {
-        None | Some("") => Ok(None),
-        Some(value) => Ok(Some(recipient_address(value)?)),
+    if let Some(value) = given {
+        return if value.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(recipient_address(value)?))
+        };
+    }
+    match input.ask(
+        "--to",
+        "Forward to (empty leaves it on the fresh address): ",
+    )? {
+        Some(value) if !value.is_empty() => Ok(Some(recipient_address(&value)?)),
+        _ => Ok(None),
     }
 }
 
@@ -366,13 +373,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quote_and_sweep_parse_without_broadcast_consent() {
+    fn dry_run_and_sweep_parse_without_broadcast_consent() {
         let tail = "0x1111111111111111111111111111111111111111:0x:1";
         assert!(
             crate::Cli::try_parse_from([
                 "edw",
                 "unshield",
-                "--quote",
+                "--dry-run",
                 "--tail-calls",
                 tail,
                 "--non-interactive"

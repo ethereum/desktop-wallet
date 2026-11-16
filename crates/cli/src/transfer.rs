@@ -19,13 +19,16 @@ use edw_core::{
 use serde::Serialize;
 
 use crate::{
-    GlobalArgs, failure,
-    input::Input,
+    GlobalArgs,
+    asset::address_of,
+    failure,
+    input::{Choice, Input},
+    profile::ProfileArg,
     report::Report,
     spend::{
-        Account, Consent, ShieldedWithdrawal, account_at, account_by_address, choose_profile,
-        confirm, declined, ensure_paymaster, first_bundler, keep_fresh, measured, mnemonic,
-        note_eth, open_vault, parse_address, quote_shielded,
+        Account, Consent, ShieldedWithdrawal, account_at, account_by_address, confirm, declined,
+        ensure_paymaster, first_bundler, keep_fresh, measured, mnemonic, note_eth, open_vault,
+        quote_shielded,
     },
     unshield::{NoteLine, note_lines},
 };
@@ -34,7 +37,8 @@ const NOTE_ATTEMPTS: usize = 3;
 
 #[derive(Args, Debug)]
 pub struct TransferArgs {
-    /// An index, a `0x` address of one, or `tornado`.
+    /// An index, a `0x` address of one, or `tornado` to send exactly `--amount` of ETH from
+    /// Tornado notes.
     #[arg(long)]
     from: Option<String>,
     /// An address, or an ENS name.
@@ -43,11 +47,12 @@ pub struct TransferArgs {
     /// In the asset's own units, for example `1.5`.
     #[arg(long)]
     amount: Option<String>,
-    /// A tracked ERC-20, by symbol or address. Omitted, the transfer sends ETH.
+    /// ETH, or a tracked ERC-20 by symbol or address. Picked at a terminal unless `--from` is
+    /// `tornado`, else ETH.
     #[arg(long)]
     asset: Option<String>,
-    #[arg(long)]
-    profile: Option<String>,
+    #[command(flatten)]
+    profile: ProfileArg,
     /// Print the transaction and its fee estimate, then stop without signing.
     #[arg(long)]
     dry_run: bool,
@@ -223,31 +228,38 @@ pub async fn run(global: &GlobalArgs, args: &TransferArgs) -> Result<(), anyhow:
         args.consent.ensure_possible(input)?;
     }
     let instance = global.open().await?;
-    let profile = choose_profile(&instance, args.profile.as_deref(), input).await?;
+    let profile = args.profile.resolve(&instance, input).await?;
     let from = required(
         args.from.as_deref(),
         input,
+        "--from",
         "From (index, address, or tornado): ",
     )?;
-    let asset = chosen_asset(&instance, &profile, args.asset.as_deref()).await?;
+    let tornado = from.eq_ignore_ascii_case("tornado");
+    let asset = chosen_asset(&instance, &profile, args.asset.as_deref(), input, tornado).await?;
+    if tornado && matches!(asset, Asset::Erc20(_)) {
+        return Err(failure::usage(
+            "Tornado holds only ETH; send an ERC-20 from an account index or address",
+        ));
+    }
     let amount = required(
         args.amount.as_deref(),
         input,
+        "--amount",
         &format!("Amount ({}): ", asset.symbol()),
     )?;
     let amount = parse_amount(&amount, asset.decimals())?;
     if amount.is_zero() {
         return Err(failure::usage("amount must be greater than zero"));
     }
-    let to: Recipient = required(args.to.as_deref(), input, "To (address or ENS name): ")?
-        .parse()
-        .map_err(|error: RecipientError| failure::usage(error.to_string()))?;
-    let tornado = from.eq_ignore_ascii_case("tornado");
-    if tornado && matches!(asset, Asset::Erc20(_)) {
-        return Err(failure::usage(
-            "Tornado holds only ETH; send an ERC-20 from an account index or address",
-        ));
-    }
+    let to: Recipient = required(
+        args.to.as_deref(),
+        input,
+        "--to",
+        "To (address or ENS name): ",
+    )?
+    .parse()
+    .map_err(|error: RecipientError| failure::usage(error.to_string()))?;
     let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
     let to = to.resolve(endpoint.as_ref()).await?;
@@ -278,44 +290,68 @@ async fn chosen_asset(
     instance: &Instance,
     profile: &ProfileRecord,
     selector: Option<&str>,
+    input: Input,
+    tornado: bool,
 ) -> Result<Asset, anyhow::Error> {
-    let Some(selector) = selector.filter(|selector| !selector.eq_ignore_ascii_case("eth")) else {
+    let Some(selector) = selector else {
+        if tornado || input != Input::Terminal {
+            return Ok(Asset::Eth);
+        }
+        return pick_asset(&instance.profile_erc20s(profile).await?, input);
+    };
+    if selector.eq_ignore_ascii_case("eth") {
         return Ok(Asset::Eth);
-    };
-    let tracked = instance.profile_erc20s(profile).await?;
-    let matches: Vec<&Erc20Asset> = if shaped_like_address(selector) {
-        let address = parse_address(selector)?;
-        tracked
-            .iter()
-            .filter(|asset| asset.address == address)
-            .collect()
-    } else {
-        tracked
-            .iter()
-            .filter(|asset| asset.symbol.eq_ignore_ascii_case(selector))
-            .collect()
-    };
-    match matches.as_slice() {
-        [only] => Ok(Asset::Erc20((*only).clone())),
-        [] => anyhow::bail!(
-            "{selector} is not an ERC-20 this profile tracks; see `edw asset list`, or track it with `edw asset opt-in <address>`"
-        ),
-        several => anyhow::bail!(
-            "several tracked ERC-20s are called {selector}; pass one address: {}",
-            several
-                .iter()
-                .map(|asset| asset.address.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+    }
+    named_asset(selector, &instance.profile_erc20s(profile).await?)
+}
+
+fn named_asset(selector: &str, tracked: &[Erc20Asset]) -> Result<Asset, anyhow::Error> {
+    if selector.eq_ignore_ascii_case("eth") {
+        return Ok(Asset::Eth);
+    }
+    let address = address_of(selector, tracked)?;
+    tracked
+        .iter()
+        .find(|asset| Some(asset.address) == address)
+        .map(|asset| Asset::Erc20(asset.clone()))
+        .ok_or_else(|| {
+            failure::usage(format!(
+                "{selector} is not an ERC-20 this profile tracks; see `edw asset list`, or track it with `edw asset add <address>`"
+            ))
+        })
+}
+
+/// The `--asset` value that names `asset` again: its symbol, unless that names something else.
+fn asset_selector(asset: &Erc20Asset, tracked: &[Erc20Asset]) -> String {
+    match named_asset(&asset.symbol, tracked) {
+        Ok(Asset::Erc20(named)) if named.address == asset.address => asset.symbol.clone(),
+        _ => asset.address.to_string(),
     }
 }
 
-fn shaped_like_address(selector: &str) -> bool {
-    selector.len() == 42
-        && selector
-            .get(..2)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
+fn pick_asset(tracked: &[Erc20Asset], input: Input) -> Result<Asset, anyhow::Error> {
+    if tracked.is_empty() {
+        input.imply("--asset", Some("ETH".to_string()));
+        return Ok(Asset::Eth);
+    }
+    let choices: Vec<Choice> = std::iter::once(Choice::new("ETH", "--asset", "ETH"))
+        .chain(tracked.iter().map(|asset| {
+            let selector = asset_selector(asset, tracked);
+            let label = if selector == asset.symbol {
+                selector.clone()
+            } else {
+                format!("{} ({})", asset.symbol, asset.address)
+            };
+            Choice::new(label, "--asset", selector)
+        }))
+        .collect();
+    let Some(choice) = input.choose_or("Select an asset:", &choices, 0)? else {
+        return Ok(Asset::Eth);
+    };
+    Ok(match choice.checked_sub(1) {
+        Some(index) => Asset::Erc20(tracked[index].clone()),
+        None => Asset::Eth,
+    })
 }
 
 async fn from_account(plan: &Plan<'_>, payer: Account) -> Result<(), anyhow::Error> {
@@ -506,12 +542,51 @@ fn unsigned(call: &Call, prepared: &PreparedTransaction) -> UnsignedLines {
     }
 }
 
-fn required(given: Option<&str>, input: Input, label: &str) -> Result<String, anyhow::Error> {
-    match given {
-        Some(value) => Ok(value.to_string()),
-        None => input
-            .line(label)?
-            .filter(|line| !line.is_empty())
-            .ok_or_else(|| failure::usage(format!("pass {label}"))),
+fn required(
+    given: Option<&str>,
+    input: Input,
+    flag: &'static str,
+    label: &str,
+) -> Result<String, anyhow::Error> {
+    if let Some(value) = given {
+        return Ok(value.to_string());
+    }
+    input
+        .ask(flag, label)?
+        .filter(|line| !line.is_empty())
+        .ok_or_else(|| failure::usage(format!("pass {flag}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::Address;
+
+    use super::*;
+
+    fn token(byte: u8, symbol: &str) -> Erc20Asset {
+        Erc20Asset {
+            address: Address::repeat_byte(byte),
+            symbol: symbol.to_string(),
+            decimals: 18,
+        }
+    }
+
+    #[test]
+    fn a_picked_token_is_named_again_by_its_recorded_selector() {
+        let shaped = Address::repeat_byte(9).to_string();
+        let tracked = [
+            token(1, "DAI"),
+            token(2, "eth"),
+            token(3, "FOO"),
+            token(4, "FOO"),
+            token(5, &shaped),
+        ];
+        for asset in &tracked {
+            let Ok(Asset::Erc20(named)) = named_asset(&asset_selector(asset, &tracked), &tracked)
+            else {
+                panic!("{} names no tracked token", asset.symbol)
+            };
+            assert_eq!(named.address, asset.address);
+        }
     }
 }

@@ -11,7 +11,6 @@ use crate::{
 mod asset;
 mod balance;
 mod config;
-mod database;
 mod failure;
 mod fresh;
 mod global_args;
@@ -45,13 +44,10 @@ enum Command {
     /// Manages wallet profiles.
     #[command(subcommand)]
     Profile(profile::Command),
-    /// Manages profile databases.
-    #[command(subcommand)]
-    Database(database::Command),
     /// Configures the unlocked network instance.
     #[command(subcommand)]
     Network(network::Command),
-    /// Lists and opts a profile into or out of ERC-20s.
+    /// Lists the ERC-20s a profile tracks, and adds or removes them.
     #[command(subcommand)]
     Asset(asset::Command),
     /// Shows a profile's balance of each asset across its vaults.
@@ -60,11 +56,11 @@ enum Command {
     Unlock(unlock::UnlockArgs),
     /// Locks the wallet.
     Lock,
-    /// Prints the next unused standard address, and stores it unless `--peek` is set.
-    NextFreshAddress(fresh::NextFreshAddressArgs),
+    /// Prints an address to receive funds on: the next unused one, stored unless `--peek` is set.
+    Receive(fresh::ReceiveArgs),
     /// Deposits ETH or supported ERC-20 tokens into Tornado Cash.
     Shield(shield::ShieldArgs),
-    /// Withdraws ETH or supported ERC-20 tokens from Tornado Cash.
+    /// Withdraws whole Tornado Cash notes of ETH or a supported ERC-20 to a fresh address.
     Unshield(unshield::UnshieldArgs),
     /// Sends ETH or a tracked ERC-20 from an account, or ETH from Tornado Cash.
     Transfer(transfer::TransferArgs),
@@ -89,17 +85,26 @@ impl Cli {
         ExitCode::from(report.class().exit_code())
     }
 
+    /// Runs the command, then, if it prompted for anything, prints the command line that carries
+    /// each answer as a flag.
     pub async fn run(&self) -> Result<(), anyhow::Error> {
+        self.dispatch().await?;
+        if let Some(command) = input::replay() {
+            eprintln!("With your answers as flags: {command}");
+        }
+        Ok(())
+    }
+
+    async fn dispatch(&self) -> Result<(), anyhow::Error> {
         match &self.command {
             Command::Config(args) => args.run(&self.global).await,
             Command::Profile(args) => args.run(&self.global).await,
-            Command::Database(args) => args.run(&self.global).await,
             Command::Network(args) => args.run(&self.global).await,
             Command::Asset(args) => args.run(&self.global).await,
             Command::Balance(args) => args.run(&self.global).await,
             Command::Unlock(args) => args.run(&self.global).await,
             Command::Lock => unlock::run_lock(&self.global).await,
-            Command::NextFreshAddress(args) => fresh::run(&self.global, args).await,
+            Command::Receive(args) => fresh::run(&self.global, args).await,
             Command::Shield(args) => shield::run(&self.global, args).await,
             Command::Unshield(args) => unshield::run(&self.global, args).await,
             Command::Transfer(args) => transfer::run(&self.global, args).await,

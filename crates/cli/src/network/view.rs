@@ -4,7 +4,7 @@ use clap::Args;
 use edw_core::network::RpcConfigKind;
 use serde::Serialize;
 
-use super::rpc_config::interval_label;
+use super::rpc::interval_label;
 use crate::{GlobalArgs, report::Report};
 
 #[derive(Args, Debug)]
@@ -48,7 +48,7 @@ impl fmt::Display for NetworkViewReport {
         {
             writeln!(
                 f,
-                "no active RPC config; add one with `edw network rpc-config add <name> --url <url>`"
+                "no active RPC config; add one with `edw network rpc add <name> --url <url>`"
             )?;
         }
         for (index, endpoint) in self.endpoints.iter().enumerate() {

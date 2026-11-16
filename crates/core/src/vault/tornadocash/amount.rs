@@ -6,6 +6,9 @@ use kohaku_tornadocash::{Asset, Pool};
 
 use crate::vault::tornadocash::TornadoNote;
 
+/// The symbols [`resolve_asset`] accepts, ETH first.
+pub const SUPPORTED_ASSETS: [&str; 5] = ["ETH", "USDC", "USDT", "DAI", "WBTC"];
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PoolSelection {
     Classic,
@@ -252,6 +255,16 @@ pub fn format_amount(amount: U256, decimals: u8) -> String {
     }
 }
 
+/// The pool sizes `selection` allows for `asset` on `chain_id`, smallest first.
+#[must_use]
+pub fn denominations(chain_id: u64, asset: &Asset, selection: PoolSelection) -> Vec<U256> {
+    asset_pools(chain_id, asset, selection)
+        .iter()
+        .rev()
+        .map(|pool| U256::from(pool.amount_wei))
+        .collect()
+}
+
 fn asset_pools(chain_id: u64, asset: &Asset, selection: PoolSelection) -> Vec<Pool> {
     let mut pools: Vec<Pool> = Pool::POOLS
         .iter()
@@ -371,7 +384,7 @@ fn u64_from(value: U256) -> u64 {
 
 /// Resolves only the supported symbols, using the chain-specific pool catalog.
 pub fn resolve_asset(symbol: &str, chain_id: u64) -> Result<Asset, String> {
-    if !["ETH", "USDC", "USDT", "DAI", "WBTC"]
+    if !SUPPORTED_ASSETS
         .iter()
         .any(|s| symbol.eq_ignore_ascii_case(s))
     {
