@@ -26,61 +26,65 @@ impl Mnemonic {
         profile_index: u32,
         endpoint: &dyn NetworkEndpoint,
     ) -> Result<EoaScan, MnemonicError> {
-        self.scan_with(profile_index, |address| async move {
-            Ok(endpoint.has_activity(address).await?)
-        })
+        scan_with(
+            |address_index| async move { self.standard_address(address_index, profile_index) },
+            |address| async move { Ok(endpoint.has_activity(address).await?) },
+        )
         .await
     }
+}
 
-    async fn scan_with<F, Fut>(
-        &self,
-        profile_index: u32,
-        mut is_used: F,
-    ) -> Result<EoaScan, MnemonicError>
-    where
-        F: FnMut(Address) -> Fut,
-        Fut: Future<Output = Result<bool, MnemonicError>>,
-    {
-        let mut scanned = Vec::new();
-        let mut last_used = None;
-        let mut start = 0;
+/// [`Mnemonic::scan_standard_eoas`] over the addresses `address_at` returns.
+pub(crate) async fn scan_with<E, A, AFut, U, UFut>(
+    mut address_at: A,
+    mut is_used: U,
+) -> Result<EoaScan, E>
+where
+    E: From<MnemonicError>,
+    A: FnMut(u32) -> AFut,
+    AFut: Future<Output = Result<Address, E>>,
+    U: FnMut(Address) -> UFut,
+    UFut: Future<Output = Result<bool, E>>,
+{
+    let mut scanned = Vec::new();
+    let mut last_used = None;
+    let mut start = 0;
 
-        loop {
-            if start >= MAX_INDEX {
-                return Err(MnemonicError::ScanLimit(MAX_INDEX));
-            }
-
-            let mut batch_used = false;
-            for address_index in start..start.saturating_add(BATCH_SIZE) {
-                let address = self.standard_address(address_index, profile_index)?;
-                scanned.push((address_index, address));
-                if is_used(address).await? {
-                    last_used = Some(address_index);
-                    batch_used = true;
-                }
-            }
-
-            if !batch_used {
-                break;
-            }
-            start = start.saturating_add(BATCH_SIZE);
+    loop {
+        if start >= MAX_INDEX {
+            return Err(MnemonicError::ScanLimit(MAX_INDEX).into());
         }
 
-        let addresses = match last_used {
-            Some(last) => scanned
-                .into_iter()
-                .take((last as usize).saturating_add(1))
-                .collect(),
-            None => Vec::new(),
-        };
-        let next_unused = last_used.map_or(0, |index| index.saturating_add(1));
+        let mut batch_used = false;
+        for address_index in start..start.saturating_add(BATCH_SIZE) {
+            let address = address_at(address_index).await?;
+            scanned.push((address_index, address));
+            if is_used(address).await? {
+                last_used = Some(address_index);
+                batch_used = true;
+            }
+        }
 
-        Ok(EoaScan {
-            addresses,
-            last_used,
-            next_unused,
-        })
+        if !batch_used {
+            break;
+        }
+        start = start.saturating_add(BATCH_SIZE);
     }
+
+    let addresses = match last_used {
+        Some(last) => scanned
+            .into_iter()
+            .take((last as usize).saturating_add(1))
+            .collect(),
+        None => Vec::new(),
+    };
+    let next_unused = last_used.map_or(0, |index| index.saturating_add(1));
+
+    Ok(EoaScan {
+        addresses,
+        last_used,
+        next_unused,
+    })
 }
 
 #[cfg(test)]
@@ -94,7 +98,11 @@ mod tests {
         },
     };
 
+    use alloy_primitives::{Bytes, U64, U256, address};
+    use alloy_transport::mock::Asserter;
+
     use super::*;
+    use crate::test_support::mocked_provider;
 
     const FIXTURE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -110,8 +118,12 @@ mod tests {
             .collect();
         let used = Arc::new(used);
         let inspected = Arc::new(AtomicU32::new(0));
-        let scan = mnemonic
-            .scan_with(0, {
+        let scan = scan_with::<MnemonicError, _, _, _, _>(
+            |address_index| {
+                let address = mnemonic.standard_address(address_index, None);
+                async move { address }
+            },
+            {
                 let used = Arc::clone(&used);
                 let inspected = Arc::clone(&inspected);
                 move |address| {
@@ -122,9 +134,10 @@ mod tests {
                         Ok(used.contains(&address))
                     }
                 }
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         (scan, inspected.load(Ordering::SeqCst))
     }
 
@@ -146,5 +159,33 @@ mod tests {
         assert_eq!(scan.addresses.len(), 16);
         assert_eq!(scan.addresses[0].0, 0);
         assert_eq!(scan.addresses[15].0, 15);
+    }
+
+    #[tokio::test]
+    async fn a_phrase_scan_reads_the_standard_addresses() {
+        let mock = Asserter::new();
+        for index in 0..20 {
+            if index == 1 {
+                mock.push_success(&U64::from(1));
+            } else {
+                mock.push_success(&U64::ZERO);
+                mock.push_success(&Bytes::new());
+                mock.push_success(&U256::ZERO);
+            }
+        }
+
+        let scan = fixture()
+            .scan_standard_eoas(0, mocked_provider(&mock).as_ref())
+            .await
+            .unwrap();
+
+        // `cast wallet address --mnemonic <FIXTURE> --mnemonic-index <index>`
+        assert_eq!(
+            scan.addresses,
+            [
+                (0, address!("0x9858EfFD232B4033E47d90003D41EC34EcaEda94")),
+                (1, address!("0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0")),
+            ]
+        );
     }
 }

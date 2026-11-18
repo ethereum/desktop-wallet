@@ -44,10 +44,16 @@ pub enum MnemonicError {
     Unresolved(u32),
     #[error("this recovery phrase is already stored")]
     DuplicatePhrase { index: u32 },
+    #[error("this signer is already stored")]
+    DuplicateSigner { index: u32 },
+    #[error("keyring entry {0} is an external signer, not a recovery phrase")]
+    NotAPhrase(u32),
     #[error("EOA scan exceeded {0} addresses without an unused gap")]
     ScanLimit(u32),
     #[error(transparent)]
     Database(#[from] MnemonicDatabaseError),
+    #[error(transparent)]
+    ExternalSignerDatabase(#[from] crate::external_signer::db::ExternalSignerDatabaseError),
     #[error("network error: {0}")]
     Network(#[from] crate::network::endpoint::NetworkEndpointError),
 }

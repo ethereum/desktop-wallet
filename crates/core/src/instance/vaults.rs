@@ -77,27 +77,20 @@ impl Instance {
         Ok(())
     }
 
-    /// Adds an address vault to `profile` for each address in `scan`, or for its address 0 when
-    /// `scan` found none or is `None`.
+    /// Adds an address vault for each address in `scan`, or else for `first`.
     ///
-    /// Does not check for vaults `profile` already has for the same addresses.
+    /// `first` is `profile`'s address 0, used when `scan` found none or is `None`. Skips each
+    /// index `profile` already has an address vault for, and returns the addresses it added.
     pub async fn add_scanned_address_vaults(
         &self,
         profile: &ProfileRecord,
         scan: Option<&EoaScan>,
-    ) -> Result<(), InstanceError> {
-        let addresses = self.addresses_to_add(profile, scan).await?;
-        self.add_address_vaults(profile, &addresses).await
-    }
-
-    /// Like [`Self::add_scanned_address_vaults`], but skips each index `profile` already has an
-    /// address vault for. Returns the addresses it added.
-    pub async fn add_missing_address_vaults(
-        &self,
-        profile: &ProfileRecord,
-        scan: &EoaScan,
+        first: Address,
     ) -> Result<Vec<(u32, Address)>, InstanceError> {
-        let addresses = self.addresses_to_add(profile, Some(scan)).await?;
+        let addresses = match scan {
+            Some(scan) if !scan.addresses.is_empty() => scan.addresses.clone(),
+            _ => vec![(0, first)],
+        };
         let missing = self.not_yet_stored(profile, addresses).await?;
         self.add_address_vaults(profile, &missing).await?;
         Ok(missing)
@@ -169,17 +162,6 @@ impl Instance {
             .into_iter()
             .filter(|(index, _)| !stored.contains(index))
             .collect())
-    }
-
-    async fn addresses_to_add(
-        &self,
-        profile: &ProfileRecord,
-        scan: Option<&EoaScan>,
-    ) -> Result<Vec<(u32, Address)>, InstanceError> {
-        Ok(match scan {
-            Some(scan) if !scan.addresses.is_empty() => scan.addresses.clone(),
-            _ => vec![(0, self.standard_address(profile, 0).await?)],
-        })
     }
 
     fn vault_db(&self, profile: &ProfileRecord, record: &VaultRecord) -> Arc<dyn Database> {
@@ -401,7 +383,7 @@ mod tests {
         };
 
         instance
-            .add_scanned_address_vaults(&profile, Some(&scan))
+            .add_scanned_address_vaults(&profile, Some(&scan), Address::repeat_byte(0xa0))
             .await
             .unwrap();
 
@@ -467,14 +449,17 @@ mod tests {
             last_used: None,
             next_unused: 0,
         };
+        let first = Address::repeat_byte(0xa0);
         for scan in [Some(&no_used), None] {
             let instance = instance();
-            let profile = imported(&instance).await;
 
-            let first = instance.standard_address(&profile, 0).await.unwrap();
+            instance
+                .add_scanned_address_vaults(&profile(0), scan, first)
+                .await
+                .unwrap();
 
             assert_eq!(
-                instance.addresses_to_add(&profile, scan).await.unwrap(),
+                derived_addresses(&instance, &profile(0)).await,
                 [(0, first)]
             );
         }

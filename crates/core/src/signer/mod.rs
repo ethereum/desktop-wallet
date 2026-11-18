@@ -5,6 +5,7 @@ use alloy_network::TxSigner;
 use alloy_primitives::{Address, Signature};
 use serde::{Deserialize, Serialize};
 
+pub mod ledger;
 pub mod simple;
 
 /// A trait representing a key that can sign messages.
@@ -51,6 +52,8 @@ pub enum SignerId {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignerError {
+    #[error("declined on the signer")]
+    Rejected,
     #[error(transparent)]
     Other(Box<dyn std::error::Error + Send + Sync>),
 }

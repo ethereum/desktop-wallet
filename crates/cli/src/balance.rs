@@ -187,7 +187,12 @@ impl BalanceArgs {
             }
         }
 
-        let tornado = read_tornado(&instance, &profile, endpoint).await;
+        let external = instance.external_signer(&profile).await?.is_some();
+        let tornado = if external {
+            Ok(Vec::new())
+        } else {
+            read_tornado(&instance, &profile, endpoint).await
+        };
         let (holdings, tornado_ok) = match tornado {
             Ok(holdings) => (holdings, true),
             Err(error) => {
@@ -205,7 +210,7 @@ impl BalanceArgs {
             .collect();
         let mut totals = balance::totals(&read, assets.len());
         fold_tornado(&assets, &mut totals, &holdings);
-        let tornado_notes = (self.detailed && tornado_ok)
+        let tornado_notes = (self.detailed && tornado_ok && !external)
             .then(|| note_rows(&holdings))
             .transpose()?;
 

@@ -3,7 +3,12 @@ use std::fmt;
 use clap::Args;
 use serde::Serialize;
 
-use crate::{GlobalArgs, profile::ProfileArg, report::Report, spend::mnemonic};
+use crate::{
+    GlobalArgs,
+    profile::ProfileArg,
+    report::Report,
+    spend::{connect_signer, mnemonic},
+};
 
 #[derive(Args, Debug)]
 pub struct ReceiveArgs {
@@ -42,15 +47,33 @@ pub async fn run(global: &GlobalArgs, args: &ReceiveArgs) -> Result<(), anyhow::
     let instance = global.open().await?;
     let input = global.input();
     let profile = args.profile.resolve(&instance, input).await?;
-    let phrase = mnemonic(&instance, &profile).await?;
     let endpoint = instance.rpc().await?;
-    let fresh = instance
-        .fresh_address(&profile, &phrase, endpoint.as_ref())
-        .await?;
+    let fresh = if let Some(external) = instance.external_signer(&profile).await? {
+        let device = &connect_signer(&external, 0, profile.profile_index).await?;
+        eprintln!("Looking for a fresh address...");
+        instance
+            .fresh_address_with(&profile, endpoint.as_ref(), |index| async move {
+                Ok::<_, anyhow::Error>(
+                    device
+                        .standard_address(index, profile.profile_index)
+                        .await?,
+                )
+            })
+            .await?
+    } else {
+        let phrase = mnemonic(&instance, &profile).await?;
+        eprintln!("Looking for a fresh address...");
+        instance
+            .fresh_address(&profile, &phrase, endpoint.as_ref())
+            .await?
+    };
     let stored = if args.peek {
         false
     } else {
         instance.commit_fresh_address(&profile, fresh.index).await?;
+        instance
+            .add_address_vault(&profile, fresh.index, fresh.address)
+            .await?;
         true
     };
     FreshReport {
